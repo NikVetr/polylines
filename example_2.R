@@ -6,10 +6,11 @@ source("~/repos/polylines/R/functions.R")
 #### more elaborate examples ####
 npts <- 200
 
+svg(file = "~/repos/polylines/images/polylines_example_2.svg", width = 16, height = 10, pointsize = 20)
+
 #initialize plot
 plot.new()
 plot.window(xlim = c(0, 10), ylim = c(0, 10))
-# plot.window(xlim = c(1, 3), ylim = c(4,6))
 
 #arrow
 x <- seq(0, 2 * pi, length.out = npts)
@@ -40,5 +41,9 @@ lwd <- (rescale01(max(y) - y) * 0.1 + 0.05) * plogis(1:npts/2 - 5) * plogis(npts
 polylines(x, y, lwd = lwd, complex = T, xpd= NA, 
           col = adjustcolor(1, 0.2))
 
-
 #DNA molecule
+draw_DNA(target_center = c(8,4.25), box_dim = c(4,12), strand_thickness = 0.099, rot = 0, 
+         extend_straight = "b", chirality_prop = 0.2, amplitude = 1.25, col = 1, 
+         dh_bounds = c(-pi/2, 3 * pi / 2), extend_straight_by = pi)
+
+dev.off()
