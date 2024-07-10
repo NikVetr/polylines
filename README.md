@@ -57,9 +57,9 @@ There's really just one function, `polylines()`. You'd use it as you would the b
 
 The only new arguments are:
 
-¥ `complex`: bool, {T, F}, when set to T it draws the polygon as is, when set to F it performs the conversion to a simple polygon
+- `complex`: bool, {T, F}, when set to T it draws the polygon as is, when set to F it performs the conversion to a simple polygon
 
-¥ `draw_indiv`: bool, {T, F}, when set to T we draw all those quadrilaterals individually, when set to F we only draw a single polygon
+- `draw_indiv`: bool, {T, F}, when set to T we draw all those quadrilaterals individually, when set to F we only draw a single polygon
 
 ### Examples
 
