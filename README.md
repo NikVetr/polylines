@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Base R doesn't have a function to draw `lines()` or `segments()` with variable line width, and instead only accept scalar input for the `lwd =` argument. I thought one would be useful and so implemented it on top of `polygon()`. Thus, calling it `polylines()`.
+Base R doesn't have a function to draw `lines()` or `segments()` with variable line width, and instead only accepts scalar input for their `lwd =` argument. I thought one would be useful and so implemented it on top of `polygon()`. Thus, calling it `polylines()`.
 
 It took me a hot second to figure out, requiring a bit of geometry and wrestling with R graphics, visually symbolized by the production of this intermediate figure:
 
@@ -31,11 +31,11 @@ Hence, this repo.
 
 ## How It Works
 
-The basic idea was to take a line, which is described by a set of vertices, usually in two dimensions and represented by vectors `x` and `y`, both of length n. I then expand some distance out from the line by the widths given in the input vector `lwd` (note, that unlike in base-R, `lwd` here represents lengths in visual units of the horizontal axis. Might change it to be more consistent with broader `lwd` behavior later). This expansion is done perpendicular to the line, and must take into account variable dimensions of the plotting window and user coordinates. 
+The basic idea was to take a line, which is described by a set of vertices. For our purposes, it's usually in two dimensions and represented by vectors `x` and `y`, both of length n. I then expand some distance out from the line by the widths given in the input vector `lwd` (note, that unlike in base-R, `lwd` here represents lengths in visual units of the horizontal axis. Might change it to be more consistent with broader `lwd` behavior later). This expansion is done perpendicular to the line, and must take into account variable dimensions of the plotting window and user coordinates. 
 
 After deciding on sidedness, these then form the vertices of a polygon, which we can then draw in the usual way.
 
-If the line intersects itself, or if the expansion causes the polygon to intersect itself, terrifying things may occur, and the polygon is complex. We can make it simple by taking the union of all the constituent quadrilaterals that comprise it.
+If the line intersects itself, or if the expansion causes the polygon to intersect itself, terrifying things may occur, as the polygon is complex. We can make it simple by taking the union of all the constituent quadrilaterals that it's made up of.
 
 ## Getting Started
 
