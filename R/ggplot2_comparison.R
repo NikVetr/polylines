@@ -28,8 +28,8 @@ p <- ggplot(data, aes(x = x, y = y)) +
   scale_linewidth_continuous(range = c(0.5, 3)) + 
   theme_minimal()+
   theme(
-    panel.background = element_rect(fill = "blue", color = NA),
-    plot.background = element_rect(fill = "blue", color = NA)
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)
   ) +
   labs(title = "Line with Variable Thickness (ggplot2)",
        x = "X-axis",
