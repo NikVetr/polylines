@@ -26,7 +26,11 @@ line_color <- adjustcolor("black", alpha.f = 0.2)
 p <- ggplot(data, aes(x = x, y = y)) +
   geom_path(aes(linewidth = thickness), lineend = "round", color = line_color) +
   scale_linewidth_continuous(range = c(0.5, 3)) + 
-  theme_minimal() +
+  theme_minimal()+
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)
+  ) +
   labs(title = "Line with Variable Thickness (ggplot2)",
        x = "X-axis",
        y = "Y-axis",
