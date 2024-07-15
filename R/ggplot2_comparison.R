@@ -38,3 +38,4 @@ p <- ggplot(data, aes(x = x, y = y)) +
 
 # Save the plot as an SVG file
 ggsave("~/repos/polylines/images/ggplot_example.svg", plot = p,  width = 5, height = 2, device = "svg")
+ggsave("~/repos/polylines/images/ggplot_example.png", plot = p,  width = 5, height = 2, device = "png")

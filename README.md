@@ -23,7 +23,7 @@ This is dissatisfying for a few reasons:
 
 3. it cannot handle transparency (because the overlapping regions render to a different color):
 
-![ggplot output transparent](images/ggplot_example.svg)
+![ggplot output transparent](images/ggplot_example.png)
 
 4. it does not work as well for certain applications that require individual, continuous shapes (in my case, lasercutters)
 
