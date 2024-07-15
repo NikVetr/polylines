@@ -4,185 +4,6 @@ xyrat <- function(){
   prop[1] / prop[2]
 }
 
-polylines <- function(x, y = NULL, lwd, col = 1, border = NULL, complex = F, 
-                      draw_indiv = F, eps = 1E-9, xpd = NA, ...){
-  
-  if(is.null(y)){
-    y <- x[,2]
-    x <- x[,1]
-  }
-  
-  # if(any(lwd <= 0))
-  npts <- length(x)
-  
-  #adjust x and y coords if any are identical (messes with later calculations)
-  dx <- diff(x)
-  if(any(dx==0)){dx[dx==0] <- rep(eps, sum(dx==0))}
-  xf <- min(abs(dx)[abs(dx) != 0]) / 1E3
-  x <- cumsum(c(x[1], dx + xf))
-  
-  dy <- diff(y)
-  if(any(dy==0)){dy[dy==0] <- rep(eps, sum(dy==0))}
-  yf <- min(abs(dy)[abs(dy) != 0]) / 1E3
-  y <- cumsum(c(y[1], dy + yf))
-  
-  # Calculate the current aspect ratio
-  xyr <- xyrat()
-  
-  # calculate slopes of lines
-  m <- diff(y) / diff(x)
-  m <- c(m, m[length(m)])
-  
-  # fudge 0 slopes
-  # m[m==0] <- min(abs(m[m!=0])) / 1E3
-  # don't do this bc it is already handled
-  
-  #adjust for visual distortion
-  mv <- m * xyr^2
-  
-  #calculate perpendicular slope
-  mvi <- -1/mv
-  
-  #find length of vectors
-  npts <- length(x)
-  pts <- 1:length(x)
-  
-  #calculate endpoints of vertices
-  endpts <- cbind(x0 = x - lwd / 2, 
-                  x1 = x + lwd / 2, 
-                  y0 = y - lwd / 2 * mvi, 
-                  y1 = y + lwd / 2 * mvi)
-  actual_lens <- sqrt((endpts[,"y1"] - endpts[,"y0"])^2 * xyr^2 + 
-                        (endpts[,"x1"] - endpts[,"x0"])^2)
-  
-  #avoid dividing by 0 by adding a smidge
-  smallest_nz_len <- min(actual_lens[actual_lens>0])
-  actual_lens <- actual_lens + smallest_nz_len/1E3
-  
-  #calculate adjusted lengths to use
-  lwds <- lwd^2 / actual_lens
-  
-  #identify if we are shifting slope on line horizontally or vertically
-  # slope_scale <- exp(mean(log(abs(m))))
-  # m_big <- abs(m) > slope_scale
-  # swap_x <- sign(mvi)
-  # swap_x[m_big] <- 1
-  # swap_y <- sign(mvi)
-  # swap_y[!m_big] <- 1
-  
-  #determine direction of curvature
-  # rlex <- rle(sign(diff(x)))
-  # rley <- rle(sign(diff(y)))
-  # dxi <- data.frame(i1 = cumsum(rlex$lengths[-length(rlex$lengths)]),
-  #              i2 = cumsum(rlex$lengths[-length(rlex$lengths)]) + 1,
-  #              dir = rlex$values[-1])
-  # dyi <- data.frame(i1 = cumsum(rley$lengths[-length(rley$lengths)]),
-  #              i2 = cumsum(rley$lengths[-length(rley$lengths)]) + 1,
-  #              dir = rley$values[-1])
-  # 
-  # #hm, only need to compensate when x or y goes from + to -
-  # # points(x[dxi$i1], y[dxi$i1], col = 2)
-  # # points(x[dyi$i1], y[dyi$i1], col = 3)
-  # 
-  # 
-  # #get from the direction of x and y (if incr or decr)
-  # if(nrow(dxi) == 0){
-  #   sxi <- rep(1, rlex$values)
-  # } else {
-  #   sxi <- unlist(sapply(1:(nrow(dxi)+1), function(i){
-  #     if(i == 1){
-  #       return(rep(-dxi$dir[i], dxi$i1[i]))
-  #     } else if (i == (nrow(dxi)+1)){
-  #       return(rep(-dxi$dir[nrow(dxi)], length(x) - dxi$i2[nrow(dxi)] + 1))
-  #     } else {
-  #       return(rep(-dxi$dir[i-1], dxi$i1[i] - dxi$i2[i-1] + 1))
-  #     }
-  #   }))  
-  # }
-  # 
-  # if(nrow(dyi) == 0){
-  #   syi <- rep(1, rley$values)
-  # } else {
-  #   syi <- unlist(sapply(1:(nrow(dyi)+1), function(i){
-  #     if(i == 1){
-  #       return(rep(-dyi$dir[i], dyi$i1[i]))
-  #     } else if (i == (nrow(dyi)+1)){
-  #       return(rep(-dyi$dir[nrow(dyi)], length(x) - dyi$i2[nrow(dyi)] + 1))
-  #     } else {
-  #       return(rep(-dyi$dir[i-1], dyi$i1[i] - dyi$i2[i-1] + 1))
-  #     }
-  #   }))  
-  # }
-  
-  # swap_x <- sign(m) * sxi
-  # swap_y <- sign(m) * sxi
-  
-  # ...hmm, ok, easier than anticipated, just needed to write down table
-  dxi <- sign(diff(x))
-  dxi <- c(dxi[1], dxi)
-  dyi <- sign(diff(y))
-  dyi <- c(dyi[1], dyi)
-  
-  #worked
-  swap_x <- -dyi
-  swap_y <- dxi
-  
-  
-  #multiply these to always point slope for *_0 inds to the left of direction of travel
-  poly_pts <- data.frame(x0 = x + lwds / 2 * swap_x,
-                         x1 = x - lwds / 2 * swap_x,
-                         y0 = y + lwds / 2 * abs(mvi) * swap_y,
-                         y1 = y - lwds / 2 * abs(mvi) * swap_y
-                         )
-  
-  if(draw_indiv || length(col) == (length(x)-1)){
-    for(i in 2:npts){
-      poly_coords <- data.frame(x = c(poly_pts$x0[i-1], poly_pts$x0[i], 
-                                      poly_pts$x1[i], poly_pts$x1[i-1]),
-                                y = c(poly_pts$y0[i-1], poly_pts$y0[i], 
-                                      poly_pts$y1[i], poly_pts$y1[i-1]))
-      polygon(poly_coords$x, poly_coords$y, 
-              border = border, 
-              col = ifelse(length(col)==(length(x)-1), col[i-1], col), xpd = NA, ...)
-    }
-    return()
-  }
-  
-  #this can be a complex polygon, so we should make it simple
-  #by finding the union of the component quadrilaterals 
-  if(complex){
-    poly_coords <- data.frame(x = c(poly_pts$x0, rev(poly_pts$x1), poly_pts$x0[1]),
-                              y = c(poly_pts$y0, rev(poly_pts$y1), poly_pts$y0[1]))
-    polygon(poly_coords$x, poly_coords$y, 
-            border = border, col = col, xpd = NA, ...)
-    
-  } else {
-    
-    quads_sf <- lapply(1:(npts-1), function(quad) {
-      quad_pts <- poly_pts[quad:(quad+1),]
-      quad_pts_big <- cbind(c(quad_pts$x0, rev(quad_pts$x1), quad_pts$x0[1]), 
-                            c(quad_pts$y0, rev(quad_pts$y1), quad_pts$y0[1]))
-      
-      #convert to the st format
-      return(sf::st_polygon(list(quad_pts_big))  
-      )
-    })
-    
-    #unite and buffer the resulting polygons
-    multipolygon <- sf::st_sfc(quads_sf)
-    multipolygon <- sf::st_make_valid(multipolygon)
-    multipolygon <- sf::st_buffer(multipolygon, dist = 1E-6) #some artefacting from floating point arithmetic
-    simple_polygon <- sf::st_union(multipolygon)
-    poly_coords_simple <- as.data.frame(as.matrix(simple_polygon[[1]]))
-    colnames(poly_coords_simple) <- c("x", "y")
-    
-    #plot
-    polygon(poly_coords_simple$x, poly_coords_simple$y, 
-            border = border, col = col, xpd = NA, ...)
-    
-  }
-}
-
 rescale01 <- function(x) {(x - min(x)) / diff(range(x))}
 
 taper_ends <- function(n, p = 0.2, k = 10, ends = "both"){
@@ -428,9 +249,9 @@ draw_DNA <- function(
   strand_df$seen_2[!strand_df$seen & strand_df$on_top_1] <- F
   
   #rotate if requested
-  center <- c(x = mean(c(strand_df$x1, strand_df$x2)), 
-              y = mean(c(strand_df$y1, strand_df$y2)), 
-              z = mean(c(strand_df$z1, strand_df$z2)))
+  center <- c(x = mean(range(c(strand_df$x1, strand_df$x2))), 
+              y = mean(range(c(strand_df$y1, strand_df$y2))), 
+              z = mean(range(c(strand_df$z1, strand_df$z2))))
   rotmat <- rotmat_00(rot)
   strand_df[,c("x1", "y1")] <- t(t(as.matrix(t(t(strand_df[,c("x1", "y1")]) - 
                                                  center[c("x", "y")])) %*% rotmat) + target_center)
@@ -460,9 +281,9 @@ draw_DNA <- function(
   bdf_pts <- t(t(bdf_pts * rescale_factor))
   
   #recenter these
-  center <- c(x = mean(sdf_pts[,c("x1", "x2")]), 
-              y = mean(sdf_pts[,c("y1", "y2")]), 
-              z = mean(sdf_pts[,c("z1", "z2")]))
+  center <- c(x = mean(range(sdf_pts[,c("x1", "x2")])), 
+              y = mean(range(sdf_pts[,c("y1", "y2")])), 
+              z = mean(range(sdf_pts[,c("z1", "z2")])))
   sdf_pts[,c("x1", "y1", "x2", "y2")] <- t(t(sdf_pts[,c("x1", "y1", "x2", "y2")]) - center[c("x", "y", "x", "y")] + 
                                              c(target_center, target_center))
   bdf_pts[,c("x0", "y0", "x1", "y1")] <- t(t(bdf_pts[,c("x0", "y0", "x1", "y1")]) - center[c("x", "y", "x", "y")] + 
@@ -512,4 +333,243 @@ draw_DNA <- function(
     polylines(x = xbp, y = ybp, lwd = lwd, col = col, ...)
   }
   
+}
+
+
+
+polylines <- function(x, y = NULL, lwd, col = 1, border = 1, complex = F, simple_via_quads = F,
+                      draw_indiv = F, eps = 1E-9, xpd = NA, draw_overlap = T, ...){
+  
+  if(is.null(y)){
+    y <- x[,2]
+    x <- x[,1]
+  }
+  
+  # if(any(lwd <= 0))
+  npts <- length(x)
+  
+  #adjust x and y coords if any are identical (messes with later calculations)
+  dx <- diff(x)
+  if(any(dx==0)){dx[dx==0] <- rep(eps, sum(dx==0))}
+  xf <- min(abs(dx)[abs(dx) != 0]) / 1E3
+  x <- cumsum(c(x[1], dx + xf))
+  
+  dy <- diff(y)
+  if(any(dy==0)){dy[dy==0] <- rep(eps, sum(dy==0))}
+  yf <- min(abs(dy)[abs(dy) != 0]) / 1E3
+  y <- cumsum(c(y[1], dy + yf))
+  
+  # Calculate the current aspect ratio
+  xyr <- xyrat()
+  
+  # calculate slopes of lines
+  m <- diff(y) / diff(x)
+  m <- c(m, m[length(m)])
+  
+  # fudge 0 slopes
+  # m[m==0] <- min(abs(m[m!=0])) / 1E3
+  # don't do this bc it is already handled
+  
+  #adjust for visual distortion
+  mv <- m * xyr^2
+  
+  #calculate perpendicular slope
+  mvi <- -1/mv
+  
+  #find length of vectors
+  npts <- length(x)
+  pts <- 1:length(x)
+  
+  #calculate endpoints of vertices
+  endpts <- cbind(x0 = x - lwd / 2, 
+                  x1 = x + lwd / 2, 
+                  y0 = y - lwd / 2 * mvi, 
+                  y1 = y + lwd / 2 * mvi)
+  actual_lens <- sqrt((endpts[,"y1"] - endpts[,"y0"])^2 * xyr^2 + 
+                        (endpts[,"x1"] - endpts[,"x0"])^2)
+  
+  #avoid dividing by 0 by adding a smidge
+  smallest_nz_len <- min(actual_lens[actual_lens>0])
+  actual_lens <- actual_lens + smallest_nz_len/1E3
+  
+  #calculate adjusted lengths to use
+  lwds <- lwd^2 / actual_lens
+  
+  # ...hmm, ok, easier than anticipated, just needed to write down table
+  dxi <- sign(diff(x))
+  dxi <- c(dxi[1], dxi)
+  dyi <- sign(diff(y))
+  dyi <- c(dyi[1], dyi)
+  
+  #worked
+  swap_x <- -dyi
+  swap_y <- dxi
+  
+  #multiply these to always point slope for *_0 inds to the left of direction of travel
+  poly_pts <- data.frame(x0 = x + lwds / 2 * swap_x,
+                         x1 = x - lwds / 2 * swap_x,
+                         y0 = y + lwds / 2 * abs(mvi) * swap_y,
+                         y1 = y - lwds / 2 * abs(mvi) * swap_y
+  )
+  
+  if(draw_indiv || length(col) == (length(x)-1)){
+    for(i in 2:npts){
+      poly_coords <- data.frame(x = c(poly_pts$x0[i-1], poly_pts$x0[i], 
+                                      poly_pts$x1[i], poly_pts$x1[i-1]),
+                                y = c(poly_pts$y0[i-1], poly_pts$y0[i], 
+                                      poly_pts$y1[i], poly_pts$y1[i-1]))
+      polygon(poly_coords$x, poly_coords$y, 
+              border = border, 
+              col = ifelse(length(col)==(length(x)-1), col[i-1], col), xpd = xpd, ...)
+    }
+    return()
+  }
+  
+  #this can be a complex polygon, so we may want to make it simple
+  poly_coords <- data.frame(x = c(poly_pts$x0, rev(poly_pts$x1), poly_pts$x0[1]),
+                            y = c(poly_pts$y0, rev(poly_pts$y1), poly_pts$y0[1]))
+  
+  if(complex){
+    polygon(poly_coords$x, poly_coords$y, 
+            border = border, col = col, xpd = xpd, ...)
+    
+  } else {
+    
+    #by finding the union of the component quadrilaterals?
+    if(simple_via_quads){
+      quads_sf <- lapply(1:(npts-1), function(quad) {
+        quad_pts <- poly_pts[quad:(quad+1),]
+        quad_pts_big <- cbind(c(quad_pts$x0, rev(quad_pts$x1), quad_pts$x0[1]), 
+                              c(quad_pts$y0, rev(quad_pts$y1), quad_pts$y0[1]))
+        
+        #convert to the st format
+        return(sf::st_polygon(list(quad_pts_big))  
+        )
+      })
+      
+      #unite and buffer the resulting polygons
+      multipolygon <- sf::st_sfc(quads_sf)
+      multipolygon <- sf::st_make_valid(multipolygon)
+      multipolygon <- sf::st_buffer(multipolygon, dist = 1E-6) #some artefacting from floating point arithmetic
+      simple_polygon <- sf::st_union(multipolygon)
+      poly_coords_simple <- as.data.frame(as.matrix(simple_polygon[[1]]))
+      colnames(poly_coords_simple) <- c("x", "y")
+      
+      #plot
+      polygon(poly_coords_simple$x, poly_coords_simple$y, 
+              border = border, col = col, xpd = xpd, ...)
+      
+    } else {
+      
+      #or just calling the simple function on all the coords together  
+      complex_polygon <- st_polygon(list(as.matrix(poly_coords)))
+      simple_polygon <- sf::st_make_valid(complex_polygon)
+      
+      #plot
+      polygon(poly_coords$x, poly_coords$y, 
+              border = NA, col = col, xpd = xpd, ...)
+      
+      for(i in 1:length(simple_polygon)){
+        poly_coords_simple <-  as.data.frame(as.matrix(simple_polygon[[i]]))
+        colnames(poly_coords_simple) <- c("x", "y")
+        polygon(poly_coords_simple$x, poly_coords_simple$y, 
+                border = border, col = NA, xpd = xpd, ...)
+      }
+      
+    }
+    
+    if(draw_overlap){
+      
+      # Convert the coords to a linestring
+      linestring <- st_linestring(as.matrix(poly_coords))
+       #and intersect with a non-overlapping polygon if it is complex
+      if(!st_is_simple(linestring)){
+        outer_poly <- st_polygon(list(cbind(c(max(poly_coords$x) + c(1,2,3,1)), c(max(poly_coords$y) + c(1,4,4,1)))))
+        linesegs <- lapply(st_difference(linestring, outer_poly), identity)
+        nlinesegs <- length(linesegs)
+        
+        # for(i in 1:nlinesegs){
+        #   lseg <- linesegs[[i]]
+        #   lenseg <- nrow(lseg)
+        #   lines(lseg, col = i, xpd = NA)
+        #   text(linesegs[[i]][ceiling(lenseg / 2), 1], linesegs[[i]][ceiling(lenseg / 2), 2], labels = i, col = 1, xpd = NA)
+        # }
+        
+        internal_linesegs <- linesegs[seq(2, nlinesegs, by = 2)]
+        nverts <- length(internal_linesegs)
+        
+        # for(i in 1:nverts){
+        #   lseg <- internal_linesegs[[i]]
+        #   lenseg <- nrow(lseg)
+        #   lines(lseg, col = i, xpd = NA)
+        #   text(lseg[ceiling(lenseg / 2), 1], lseg[ceiling(lenseg / 2), 2], labels = i, col = 1, xpd = NA)
+        # }
+        
+        
+        
+        starts <- do.call(rbind, lapply(internal_linesegs, head, 1))
+        ends <- do.call(rbind, lapply(internal_linesegs, tail, 1))
+        endstarts <- as.matrix(dist(rbind(starts, ends)))[(nverts+1):(2*nverts), 1:nverts] < 1E-9
+        adjgraph <- igraph::graph_from_adjacency_matrix(endstarts, mode = "directed")
+        V(adjgraph)$name <- V(adjgraph)
+        verts <- V(adjgraph)
+        paths <- lapply(verts, function(vert) all_simple_paths(adjgraph, from = vert)) #finds all paths in adjacency graph
+        
+        #finds paths that form cycles
+        closed_paths <- lapply(setNames(1:nverts, 1:nverts), function(vi){
+          vpaths <- paths[[vi]]
+          npaths <- length(vpaths)
+          vends <- sapply(vpaths, tail, 1)
+          vpaths_continuations <- lapply(vends, function(vie){
+            vepaths <- paths[[vie]]
+            vepath_ends <- sapply(vepaths, tail, 1)
+            vepaths[[which(vepath_ends == vi)]][-1]
+          })
+          full_paths <- lapply(1:npaths, function(i){
+            as.numeric(c(vpaths[[i]], vpaths_continuations[[i]]))
+          })
+          
+          return(unique(full_paths))
+        })
+        
+        #finds the first occurrences of these cycles / closed paths
+        #these correspond to the internally bounded polygons from polygon self-intersects
+        sorted_cpaths <- lapply(closed_paths, function(cpaths){
+          lapply(cpaths, function(cpath) sort(cpath[-1]))
+        })
+        first_cpath_inds <- which(!duplicated(sorted_cpaths))
+        cpaths <- closed_paths[first_cpath_inds]
+        ncpaths <- length(cpaths)
+        
+        #these lines correspond to earlier overlaps on top
+        early_lines <- lapply(1:length(cpaths), function(cpi){
+          seg_inds <- cpaths[[cpi]][[1]]
+          trunc_seg_inds <- seg_inds[-length(seg_inds)]
+          target_seg_inds <- trunc_seg_inds[seq(1, length(trunc_seg_inds), by = 2)]
+          return(internal_linesegs[target_seg_inds])
+        })
+        
+        #these lines correspond to later occurring overlaps on top
+        late_lines <- lapply(1:length(cpaths), function(cpi){
+          seg_inds <- cpaths[[cpi]][[1]]
+          trunc_seg_inds <- seg_inds[-length(seg_inds)]
+          target_seg_inds <- trunc_seg_inds[seq(2, length(trunc_seg_inds), by = 2)]
+          return(internal_linesegs[target_seg_inds])
+        })
+        
+        
+        for(ipoly in 1:length(early_lines)){
+          poly_i <- early_lines[[ipoly]]
+          for(iseg in 1:length(poly_i)){
+            seg_i <- poly_i[[iseg]]
+            lines(seg_i, col = border)
+          }
+        }
+        
+      }
+      
+      
+    }
+    
+  }
 }

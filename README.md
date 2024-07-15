@@ -31,19 +31,19 @@ Hence, this repo.
 
 ## How It Works
 
-The basic idea was to take a line, which is described by a set of vertices. For our purposes, it's usually in two dimensions and represented by vectors `x` and `y`, both of length n. I then expand some distance out from the line by the widths given in the input vector `lwd` (note, that unlike in base-R, `lwd` here represents lengths in visual units of the horizontal axis. Might change it to be more consistent with broader `lwd` behavior later). This expansion is done perpendicular to the line, and must take into account variable dimensions of the plotting window and user coordinates. 
+The basic idea was to take a line, which is described by a set of vertices. For our purposes, it's usually in two dimensions and represented by vectors `x` and `y`, both of length `n`. I then expand some distance out from the line by the widths given in the input vector `lwd` (note, that unlike in base-R, `lwd` here represents lengths in units of the horizontal axis. Might change it to be more consistent with broader `lwd` behavior later). This expansion is done perpendicular to the line, and must take into account variable dimensions of the plotting window and user coordinates. 
 
 After deciding on sidedness, these then form the vertices of a polygon, which we can then draw in the usual way.
 
-If the line intersects itself, or if the expansion causes the polygon to intersect itself, terrifying things may occur, as the polygon is complex. We can make it simple by taking the union of all the constituent quadrilaterals that it's made up of.
+If the line intersects itself, or if the expansion causes the polygon to intersect itself, terrifying things may occur, as the polygon is complex. We can make it simple with some convenient functions from the `sf` package, and optionally leverage a bit of graph theory to find which polygons overlap which other polygons and draw a few extra lines to mimic "depth" (see `example_2.R` below).
 
 ## Getting Started
 
 ### Prerequisites
 
-Before you begin, ensure you have R installed on your machine (version 3.6 or later recommended). You will also need to install the R packages `sf`, which I use for a few polygon manipulation tools like `st_polygon`, `st_make_valid`, and `st_buffer`.
+Before you begin, ensure you have R installed on your machine (version 3.6 or later recommended). You will also need to install the R packages `sf` and `igraph`, which I use for a few polygon manipulation operations like `st_polygon`, `st_make_valid`, and `st_buffer`, and for some graph operations like `all_simple_paths` to handle self-intersections.
 
-> install.packages("sf")
+> install.packages(c("sf", "igraph"))
 
 ### Installation
 
@@ -58,7 +58,8 @@ There's really just one function, `polylines()`. You'd use it as you would the b
 The only new arguments are:
 
 - `complex`: bool, {T, F}, when set to T it draws the polygon as is, when set to F it performs the conversion to a simple polygon
-
+- `draw_overlap`: bool, {T, F}, when set to T it draws additional lines over the simple polygon to simulate depth during self-intersection, when set to F it does not
+- `simple_via_quads`: bool, {T, F}, when set to T it merges quadrilaterals to obtain the simple polygon
 - `draw_indiv`: bool, {T, F}, when set to T we draw all those quadrilaterals individually, when set to F we only draw a single polygon
 
 ### Examples
@@ -94,7 +95,7 @@ Namely, an arrow, a spiral, some curly hair because I realized that together the
 
 ## Future Work
 
-There are a couple things I still have to do here, mostly involving how overlaps are handled: I'd like an optional argument that allows for opaque shapes or transparent shapes to visually overlap one another, with a sense of depth. Since that's not how polygons work, I need to fake it by finding the overlapping polygon regions and colors those in independently, but that requires a bit of extension to the base function, so I have not gotten there yet.
+There are a couple things I still want to do here, like incorporate color gradients, simulate an alpha channel for overlaps, and allow for arbitrary specification of which parts of the polygon overlap which other parts.
 
 ## Contributing
 

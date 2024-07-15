@@ -27,10 +27,10 @@ y <- rescale01(cos(seq(0, 8 * pi, length.out = npts)) * 1:npts) * 5 + 3
 lwd <- (rescale01(sin(seq(0, 12 * pi, length.out = npts))) * 0.2 + 0.1) * 
   plogis(1:npts/10 - 5) * plogis(npts:1/2 - 5)
 
-polylines(x, y, lwd = lwd, complex = F, xpd= NA, draw_indiv = F, 
-          col = adjustcolor(1, 0.2))
+polylines(x, y, lwd = lwd, complex = F, xpd = NA, draw_indiv = F, 
+          col = adjustcolor(1, 0.2), border = 1)
           # col = colorRampPalette(c(1,2))(npts-1))
-polylines(-x+7, y, lwd = lwd, col = adjustcolor(1, 0.2), complex = F, xpd= NA)
+polylines(-x+7, y, lwd = lwd, col = adjustcolor(1, 0.2), complex = F, xpd= NA, border = 1)
 
 #overlapping squiggle
 x <- rescale01(sin(seq(0, 8 * pi, length.out = npts))) * 2 * xyrat() +
@@ -38,7 +38,7 @@ x <- rescale01(sin(seq(0, 8 * pi, length.out = npts))) * 2 * xyrat() +
 y <- rescale01(cos(seq(0, 8 * pi, length.out = npts))) * 1.5 + 9
 lwd <- (rescale01(max(y) - y) * 0.1 + 0.05) * plogis(1:npts/2 - 5) * plogis(npts:1/2 - 5)
 
-polylines(x, y, lwd = lwd, complex = T, xpd= NA, 
+polylines(x, y, lwd = lwd, complex = F, xpd= NA, 
           col = adjustcolor(1, 0.2))
 
 #DNA molecule
