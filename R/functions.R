@@ -308,14 +308,14 @@ draw_DNA <- function(
   for(i in seq_along(seen_sets_1)){
     seen_set <- seen_sets_1[[i]]
     sdf <- strand_df[seen_set,]
-    polylines(sdf$x1, sdf$y1, lwd = sdf$lwd1, col = col, ...)
+    polylines(x = sdf$x1, y = sdf$y1, lwd = sdf$lwd1, col = col, complex = T, ...)
   }
   
   #strand 2
   for(i in seq_along(seen_sets_2)){
     seen_set <- seen_sets_2[[i]]
     sdf <- strand_df[seen_set,]
-    polylines(sdf$x2, sdf$y2, lwd = sdf$lwd2, col = col, ...)
+    polylines(sdf$x2, sdf$y2, lwd = sdf$lwd2, col = col, complex = T, ...)
   }
   
   nbp <- n_strand / nrow(bp_df) 
@@ -330,7 +330,7 @@ draw_DNA <- function(
                length.out = nbp)
     lwd <- rescale01(lwd)^2 * diff(range(lwd)) + min(lwd)
     lwd <- lwd * bp_thickness
-    polylines(x = xbp, y = ybp, lwd = lwd, col = col, ...)
+    polylines(x = xbp, y = ybp, lwd = lwd, col = col, complex = T, ...)
   }
   
 }
