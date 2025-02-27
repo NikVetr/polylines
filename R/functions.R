@@ -125,15 +125,27 @@ draw_DNA <- function(
     strand_thickness = 0.1,
     extend_straight = "n",
     extend_straight_by = pi * 2,
+    center_with_extension = F,
     rot = 0,
     target_center = c(0,0),
-    box_dim = c(10,10),
+    box_dim = NULL,
     col = 1,
+    adjust_xyr = T,
+    topleft_xy = NULL,
+    forced_box = NULL,
+    box_DNA = T,
+    straight_extension_real_units = F,
     ...
 ) {
   
+  #if we should adjust the relative sizes by the current plotting region proportions  
+  if(adjust_xyr){
+    xyr <- xyrat()  
+  } else {
+    xyr <- 1
+  }
+  
   # initializing the main data frame
-  xyr <- xyrat()
   t <- seq(dh_bounds[1], dh_bounds[2], length.out = n_strand)   # Position along the strand for a single twist
   
   strand_df <- data.frame(
@@ -159,8 +171,8 @@ draw_DNA <- function(
                          y2 = straight_y,
                          x1 = rep(strand_df$x1[n_strand], nstraight),
                          x2 = rep(strand_df$x2[n_strand], nstraight),
-                         z1 = rep(strand_df$z1[n_strand], nstraight),
-                         z2 = rep(strand_df$z2[n_strand], nstraight)
+                         z1 = seq(strand_df$z1[n_strand], min(strand_df$z1), length.out = nstraight),
+                         z2 = seq(strand_df$z2[n_strand], min(strand_df$z2), length.out = nstraight)
                        ))
   }
   
@@ -262,8 +274,7 @@ draw_DNA <- function(
   bp_df[,c("x1", "y1")] <- t(t(as.matrix(t(t(bp_df[,c("x1", "y1")]) - 
                                              center[c("x", "y")])) %*% rotmat) + target_center)
   
-  
-  #rescale to size of bounding box
+  #rescale to specified size
   min_pts <- c(x = min(c(strand_df$x1, strand_df$x2)), 
                y = min(c(strand_df$y1, strand_df$y2)), 
                z = min(c(strand_df$z1, strand_df$z2)))
@@ -272,28 +283,74 @@ draw_DNA <- function(
   
   sdf_pts <- t(t(sdf_pts) - c(min_pts, min_pts))
   bdf_pts <- t(t(bdf_pts) - c(min_pts[c("x", "y")], min_pts[c("x", "y")]))
-  max_pts <- apply(sdf_pts, 2, max)
+  if(box_DNA){
+    max_pts <- apply(sdf_pts[1:n_strand,], 2, max)
+  } else {
+    max_pts <- apply(sdf_pts, 2, max)
+  }
+  
   max_pts <- c(x = max(max_pts[c("x1", "x2")]), 
                y = max(max_pts[c("y1", "y2")]), 
                z = max(max_pts[c("z1", "z2")]))
-  rescale_factor <- min(box_dim / max_pts[c("x", "y")])
-  sdf_pts <- t(t(sdf_pts * rescale_factor))
-  bdf_pts <- t(t(bdf_pts * rescale_factor))
+  
+  #to the size of the bounding box?
+  if(!is.null(box_dim)){
+    rescale_factor <- min(box_dim / max_pts[c("x", "y")])
+    sdf_pts <- t(t(sdf_pts * rescale_factor))
+    bdf_pts <- t(t(bdf_pts * rescale_factor))  
+  }
+  
+  #or rescale the unextended DNA strand to forced_h and forced_w
+  if(!is.null(forced_box)){
+    rescale_factors <- forced_box / max_pts[c("x", "y")]
+    sdf_pts[,c("x1", "x2")] <- t(t(sdf_pts[,c("x1", "x2")] * rescale_factors[1]))
+    sdf_pts[,c("y1", "y2")] <- t(t(sdf_pts[,c("y1", "y2")] * rescale_factors[2]))
+    bdf_pts[,c("x0", "x1")] <- t(t(bdf_pts[,c("x0", "x1")] * rescale_factors[1]))
+    bdf_pts[,c("y0", "y1")] <- t(t(bdf_pts[,c("y0", "y1")] * rescale_factors[2]))
+  }
   
   #recenter these
-  center <- c(x = mean(range(sdf_pts[,c("x1", "x2")])), 
-              y = mean(range(sdf_pts[,c("y1", "y2")])), 
-              z = mean(range(sdf_pts[,c("z1", "z2")])))
+  if(center_with_extension){
+    center <- c(x = mean(range(sdf_pts[,c("x1", "x2")])), 
+                y = mean(range(sdf_pts[,c("y1", "y2")])), 
+                z = mean(range(sdf_pts[,c("z1", "z2")])))
+  } else {
+    center <- c(x = mean(range(sdf_pts[1:n_strand, c("x1", "x2")])), 
+                y = mean(range(sdf_pts[1:n_strand, c("y1", "y2")])), 
+                z = mean(range(sdf_pts[1:n_strand, c("z1", "z2")])))  
+  }
+  
   sdf_pts[,c("x1", "y1", "x2", "y2")] <- t(t(sdf_pts[,c("x1", "y1", "x2", "y2")]) - center[c("x", "y", "x", "y")] + 
                                              c(target_center, target_center))
   bdf_pts[,c("x0", "y0", "x1", "y1")] <- t(t(bdf_pts[,c("x0", "y0", "x1", "y1")]) - center[c("x", "y", "x", "y")] + 
                                              c(target_center, target_center))
   
+  #alternatively, specify location using top-left corner
+  if(!is.null(topleft_xy)){
+    tl_xy <- c(x = min(sdf_pts[,c("x1", "x2")]), 
+               y = max(sdf_pts[,c("y1", "y2")]))
+    
+    sdf_pts[,c("x1", "y1", "x2", "y2")] <- t(t(sdf_pts[,c("x1", "y1", "x2", "y2")]) - tl_xy[c("x", "y", "x", "y")] + 
+                                               c(topleft_xy, topleft_xy))
+    bdf_pts[,c("x0", "y0", "x1", "y1")] <- t(t(bdf_pts[,c("x0", "y0", "x1", "y1")]) - tl_xy[c("x", "y", "x", "y")] + 
+                                               c(topleft_xy, topleft_xy))
+  }
+  
+  #maybe we want the straight part of the DNA to be extended by a real amount?
+  if(straight_extension_real_units){
+    str_ext <- sdf_pts[strinds, paste0(c("x", "y"), extend_straight)]
+    len_straight <- sqrt(sum((head(str_ext, 1) - tail(str_ext, 1))^2))
+    len_straight_scale <- len_straight / extend_straight_by
+    str_ext_diff <- apply(str_ext, 2, diff)
+    new_str_ext <- apply(rbind(str_ext[1,], 
+                               str_ext_diff / len_straight_scale), 
+                         2, cumsum)
+    sdf_pts[strinds, paste0(c("x", "y"), extend_straight)] <- new_str_ext
+  }
   
   #and reassign
   strand_df[,c("x1", "y1", "z1", "x2", "y2", "z2")] <- sdf_pts
   bp_df[,c("x0", "y0", "x1", "y1")] <- bdf_pts
-  
   
   #find where the strands go underneath each other
   seen_sets_1 <- split(which(strand_df$seen_1), cumsum(!strand_df$seen_1)[strand_df$seen_1])
@@ -462,7 +519,7 @@ polylines <- function(x, y = NULL, lwd, col = 1, border = 1, complex = F, simple
     } else {
       
       #or just calling the simple function on all the coords together  
-      complex_polygon <- st_polygon(list(as.matrix(poly_coords)))
+      complex_polygon <- sf::st_polygon(list(as.matrix(poly_coords)))
       simple_polygon <- sf::st_make_valid(complex_polygon)
       
       #plot
@@ -484,7 +541,7 @@ polylines <- function(x, y = NULL, lwd, col = 1, border = 1, complex = F, simple
       linestring <- st_linestring(as.matrix(poly_coords))
        #and intersect with a non-overlapping polygon if it is complex
       if(!st_is_simple(linestring)){
-        outer_poly <- st_polygon(list(cbind(c(max(poly_coords$x) + c(1,2,3,1)), c(max(poly_coords$y) + c(1,4,4,1)))))
+        outer_poly <- sf::st_polygon(list(cbind(c(max(poly_coords$x) + c(1,2,3,1)), c(max(poly_coords$y) + c(1,4,4,1)))))
         linesegs <- lapply(st_difference(linestring, outer_poly), identity)
         nlinesegs <- length(linesegs)
         
@@ -504,8 +561,6 @@ polylines <- function(x, y = NULL, lwd, col = 1, border = 1, complex = F, simple
         #   lines(lseg, col = i, xpd = NA)
         #   text(lseg[ceiling(lenseg / 2), 1], lseg[ceiling(lenseg / 2), 2], labels = i, col = 1, xpd = NA)
         # }
-        
-        
         
         starts <- do.call(rbind, lapply(internal_linesegs, head, 1))
         ends <- do.call(rbind, lapply(internal_linesegs, tail, 1))
