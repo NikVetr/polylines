@@ -1,7 +1,7 @@
 library(sf)
 
 #functions
-source("~/repos/polylines/R/functions.R")
+source("R/functions.R")
 
 #### demonstration! ####
 
@@ -24,7 +24,7 @@ polylines(x, y, lwd = lwd, col = adjustcolor(1, 0.2), complex = F)
 #           border = NA)
 
 #save to svg
-svg(file = "~/repos/polylines/images/polylines_example_1.svg", width = 10, height = 8, pointsize = 20)
+svg(file = "images/polylines_example_1.svg", width = 10, height = 8, pointsize = 20)
 
 plot(x, y, type = "l",
      xlim = range(x) + diff(range(x)) / 10 * c(-1, 1),
@@ -33,4 +33,3 @@ plot(x, y, type = "l",
 polylines(x, y, lwd = lwd, col = adjustcolor(1, 0.2), complex = F)
 
 dev.off()
-

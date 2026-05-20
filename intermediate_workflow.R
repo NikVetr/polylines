@@ -1,7 +1,7 @@
 library(sf)
 
 #functions
-source("~/repos/polylines/R/functions.R")
+source("R/functions.R")
 
 #simple demonstration of drawing a perpendicular line
 plot(0,0, ylim = c(-100,100))

@@ -113,7 +113,7 @@ Useful plotting arguments include:
 - `raster_fill`: rasterizes only the fill layer before overlaying labels and borders, which keeps large gradient figures lighter to render.
 - `add`: when `TRUE`, draw into the existing plot region; when `FALSE`, create a blank plot window without axes.
 
-The file `R/sankey.R` generates this example:
+The third example is contained in `example_3.R` and generates this Sankey ribbon figure:
 
 ![Sankey ribbon example](images/sankey_example.png)
 

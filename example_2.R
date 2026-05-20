@@ -1,12 +1,12 @@
 library(sf)
 
 #functions
-source("~/repos/polylines/R/functions.R")
+source("R/functions.R")
 
 #### more elaborate examples ####
 npts <- 200
 
-svg(file = "~/repos/polylines/images/polylines_example_2.svg", width = 16, height = 10, pointsize = 20)
+svg(file = "images/polylines_example_2.svg", width = 16, height = 10, pointsize = 20)
 
 #initialize plot
 plot.new()
