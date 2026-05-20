@@ -45,6 +45,10 @@ Before you begin, ensure you have R installed on your machine (version 3.6 or la
 
 > install.packages(c("sf", "igraph"))
 
+Rasterized Sankey gradient fills additionally use the `png` package.
+
+> install.packages("png")
+
 ### Installation
 
 Either clone the repository to your local machine, or copy the function out of `R/functions.R`:
@@ -93,9 +97,29 @@ The second is contained in `example_2.R` and make a few more complex shapes to g
 
 Namely, an arrow, a spiral, some curly hair because I realized that together these made a face, and then a little DNA molecular because the face looked a bit frazzled and thus represents the frazzle lurking deep within my own self.
 
+### Sankey Ribbons
+
+The repository also includes Sankey-style ribbons built from the same polygon expansion ideas. First build the geometry with `sankey_ribbons()`, then draw it with `plot_sankey_ribbons()`.
+
+`thic` can be either a single matrix or a list of matrices. For one matrix, rows are source nodes and columns are target nodes. For a list, each matrix represents one transition between successive node sets, and adjacent dimensions must match. `loc` is a matrix with four columns: node set index, node index within that set, x location, and y location.
+
+Useful plotting arguments include:
+
+- `col`: strand colors; accepts a scalar, a positive-flow vector, a matrix matching `thic`, or a list matching a list-valued `thic`.
+- `node_col`: optional node colors. When `NULL`, node colors are inferred as weighted averages of adjacent strand colors.
+- `merge_col`: optional colors for the merged trunk sections near nodes. When `NULL`, these follow `node_col` if supplied, otherwise the inferred node colors.
+- `mid_col`: optional strand midpoint colors for three-way gradients. `NA` entries use a direct endpoint-to-endpoint gradient.
+- `gradient_slices`: number of polygon slices used to approximate gradients.
+- `raster_fill`: rasterizes only the fill layer before overlaying labels and borders, which keeps large gradient figures lighter to render.
+- `add`: when `TRUE`, draw into the existing plot region; when `FALSE`, create a blank plot window without axes.
+
+The file `R/sankey.R` generates this example:
+
+![Sankey ribbon example](images/sankey_example.png)
+
 ## Future Work
 
-There are a couple things I still want to do here, like incorporate color gradients, simulate an alpha channel for overlaps, and allow for arbitrary specification of which parts of the polygon overlap which other parts.
+There are a couple things I still want to do here, like support more general overlap-order controls, add formal tests, and decide whether the Sankey helpers should be promoted into a fuller R package interface.
 
 ## Contributing
 
