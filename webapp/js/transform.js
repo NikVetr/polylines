@@ -97,7 +97,11 @@
     }
     const text = info.filter((c) => !c.numeric);
     const numeric = info.filter((c) => c.numeric);
-    if (info.length >= 3 && !info[0].numeric && numeric.length === info.length - 1) {
+    // Crosstabs have one row per category; a long column of unique ids is a wide table instead.
+    const first = info[0];
+    const firstIdLike = ID_RE.test(first.name) || table.rows.length > 30;
+    if (info.length >= 3 && !first.numeric && numeric.length === info.length - 1 &&
+        first.distinct === table.rows.length && !firstIdLike) {
       return { format: 'crosstab' };
     }
     const weightCandidates = numeric.filter((c) => !STAGE_RE.test(c.name));
@@ -107,6 +111,14 @@
     const idLike = (c) => ID_RE.test(c.name) || (!c.numeric && c.distinct > Math.max(12, table.rows.length / 2));
     const columns = info.filter((c) => c.name !== weight && !idLike(c) && (!c.numeric || c.distinct <= 12)).map((c) => c.name);
     return { format: 'wide', columns, weight };
+  }
+
+  // True when column names mark a data table (link list, long table, a named weight column or a
+  // leading id column) rather than a numeric flow matrix with a header.
+  function looksLikeDataTable(table) {
+    const g = guess(table);
+    if (g.format === 'links' || g.format === 'long') return true;
+    return g.format === 'wide' && ((!!g.weight && WEIGHT_RE.test(g.weight)) || ID_RE.test(table.columns[0]));
   }
 
   function colIndex(table, name, role) {
@@ -337,6 +349,9 @@
   function postProcess(result, options) {
     const opts = options || {};
     if (result.mode === 'graph') {
+      if (opts.minShare > 0 || opts.topN > 0) {
+        fail('Grouping small nodes into "Other" needs layered stages, but these links skip layers and form a graph.');
+      }
       if (opts.order === 'alphabetical' || opts.order === 'size') {
         const m = result.matrices[0];
         const totals = result.nodes.map((_, i) => Math.max(m[i].reduce((a, b) => a + b, 0), m.reduce((a, r) => a + r[i], 0)));
@@ -424,6 +439,6 @@
     return result;
   }
 
-  SK.transform = { FORMATS, MISSING, parseTable, columnInfo, guess, build, postProcess };
+  SK.transform = { FORMATS, MISSING, parseTable, columnInfo, guess, looksLikeDataTable, build, postProcess };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -70,6 +70,7 @@
       stageParams: [],
       style: Object.assign({}, DEFAULT_STYLE),
       valueScale: 1,
+      trustedNames: false,
       view: null
     };
   }
@@ -81,6 +82,8 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const fmtValue = (v) => (Math.abs(v) >= 100 ? v.toFixed(1) : Number(v.toPrecision(4)).toString());
   const isDefaultName = (name) => !name || /^V?\d+$/.test(name);
+  // Matrix dimnames like V1 or 1 are R defaults, but names from an imported table are real categories.
+  const usableName = (name) => !!name && (state.trustedNames || !isDefaultName(name));
 
   function download(name, content, type) {
     const blob = content instanceof Blob ? content : new Blob([content], { type: type || 'text/plain' });
@@ -652,18 +655,33 @@
     if (/\.json$/i.test(file.name)) return 'project';
     if (looksLikeLoc(file.text)) return 'loc';
     if (/(^|[^a-z])loc([^a-z]|$)/i.test(file.name)) return 'loc';
-    const numeric = (() => {
-      try { CSV.parseMatrix(file.text, 'number', file.name); return true; } catch (e) { return false; }
+    const T = window.SK.transform;
+    const table = (() => {
+      try { return T.parseTable(file.text); } catch (e) { return null; }
     })();
-    if (numeric) return 'stages';
+    // Named roles (source/target, id/stage, a count column) mark a data table even when all numeric.
+    if (table && T.looksLikeDataTable(table)) return 'table';
+    let numericError = null;
+    try {
+      CSV.parseMatrix(file.text, 'number', file.name);
+      return 'stages';
+    } catch (err) {
+      numericError = err;
+    }
     const colorsOk = (() => {
       try { CSV.parseMatrix(file.text, 'color', file.name); return true; } catch (e) { return false; }
     })();
     if (colorsOk) return /mid/i.test(file.name) ? 'mids' : 'colors';
-    const isTable = (() => {
-      try { window.SK.transform.parseTable(file.text); return true; } catch (e) { return false; }
-    })();
-    if (isTable) return 'table';
+    // A mostly numeric file is a flow matrix with a typo: report that, not a table import.
+    const isNumber = (c) => c.trim() !== '' && Number.isFinite(Number(c));
+    let body = CSV.parse(file.text);
+    if (body.length && !body[0].every(isNumber)) body = body.slice(1);
+    if (body.length && body.every((r) => !isNumber(r[0]))) body = body.map((r) => r.slice(1));
+    const cells = body.flat();
+    if (cells.length && cells.filter(isNumber).length / cells.length >= 0.75) {
+      throw new L.SankeyError(`${file.name}: ${numericError.message}`);
+    }
+    if (table) return 'table';
     throw new L.SankeyError(`${file.name}: not recognised as a flow matrix, loc table, color matrix, data table or project file.`);
   }
 
@@ -726,6 +744,9 @@
       state.dimnames = stages.map((m) => ({ rows: m.rowNames, cols: m.colNames }));
       clearKeyedEdits();
       state.stageParams = [];
+      // New flow matrices are R thickness values, unrelated to an earlier table's scale.
+      state.valueScale = 1;
+      state.trustedNames = false;
     }
     if (loc) {
       state.loc = loc;
@@ -848,7 +869,7 @@
       sets = [];
       for (let i = 0; i < n; i++) {
         const total = Math.max(m[i].reduce((s, v) => s + v, 0), m.reduce((s, r) => s + r[i], 0));
-        (sets[depth[i]] = sets[depth[i]] || []).push({ height: total, label: names && !isDefaultName(names[i]) ? names[i] : '', id: i });
+        (sets[depth[i]] = sets[depth[i]] || []).push({ height: total, label: names && usableName(names[i]) ? names[i] : '', id: i });
       }
       sets = sets.filter(Boolean);
     } else {
@@ -857,7 +878,7 @@
         const incoming = s > 0 ? mats[s - 1].reduce((sum, r) => sum + r[k], 0) : 0;
         const outgoing = s < mats.length ? mats[s][k].reduce((sum, v) => sum + v, 0) : 0;
         const names = s > 0 ? state.dimnames[s - 1] && state.dimnames[s - 1].cols : state.dimnames[0] && state.dimnames[0].rows;
-        return { height: Math.max(incoming, outgoing), label: names && !isDefaultName(names[k]) ? names[k] : '' };
+        return { height: Math.max(incoming, outgoing), label: names && usableName(names[k]) ? names[k] : '' };
       }));
     }
     return sets;
@@ -924,6 +945,7 @@
     state.matrices = result.matrices;
     state.dimnames = result.dimnames;
     state.stageNames = result.stageNames;
+    state.trustedNames = true;
     state.valueScale = autoValueScale();
     autoLocate({ labels: opts.labels });
     Object.assign(state.params, opts.params || {});
@@ -954,7 +976,7 @@
     } else {
       name = dn[n.set - 2] && dn[n.set - 2].cols && dn[n.set - 2].cols[n.node - 1];
     }
-    return !isDefaultName(name) ? name : `Set ${n.set} · node ${n.node}`;
+    return usableName(name) ? name : `Set ${n.set} · node ${n.node}`;
   }
 
   function targetOf(event) {
@@ -1483,9 +1505,31 @@
     }
     plotArgs.push('label_nodes = FALSE', 'add = TRUE');
     lines.push(`plot_sankey_ribbons(\n  sankey,\n  ${plotArgs.join(',\n  ')}\n)`);
-    if (style.labels && state.loc.some((r) => r.label)) {
-      lines.push('labeled <- sankey$nodes[sankey$nodes$has_label, ]',
-        `text(labeled$x, labeled$y, labeled$label, cex = labeled$cex, font = labeled$font, col = ${rString(C.toHex(C.parse(style.labelColor)))})`);
+    const labeled = style.labels ? layout.nodes.filter((n) => n.hasLabel) : [];
+    if (labeled.length) {
+      // Same placement as the webapp: centred in node bodies, else left of sources (pos 2),
+      // right of sinks (pos 4) and centred above flow-through bundles (pos 0 = centred).
+      const rows = labeled.map((n) => {
+        const role = S.nodeRole(n);
+        if (n.widthPx > 0 || role === 'isolated') return [n.x, n.y, n, 0];
+        if (role === 'source') return [n.x, n.y, n, 2];
+        if (role === 'sink') return [n.x, n.y, n, 4];
+        const above = n.Y + Math.max(n.inPx, n.outPx) / 2 + 0.8 * style.fontSize * n.cex;
+        return [n.x, layout.tf.y(above), n, 0];
+      });
+      const col = (f) => rows.map(f).join(', ');
+      lines.push(`labels <- data.frame(\n  x = c(${col((r) => rValue(r[0]))}),\n  y = c(${col((r) => rValue(r[1]))}),\n` +
+        `  label = c(${col((r) => rString(r[2].label))}),\n  cex = c(${col((r) => rValue(r[2].cex))}),\n` +
+        `  font = c(${col((r) => r[2].font)}),\n  pos = c(${col((r) => r[3])}),\n  stringsAsFactors = FALSE\n)`,
+      'centred <- labels$pos == 0',
+      `label_col <- ${rString(C.toHex(C.parse(style.labelColor)))}`);
+      // text() rejects zero-length labels, so only emit the calls that have rows.
+      if (rows.some((r) => r[3] === 0)) {
+        lines.push('text(labels$x[centred], labels$y[centred], labels$label[centred], cex = labels$cex[centred], font = labels$font[centred], col = label_col)');
+      }
+      if (rows.some((r) => r[3] !== 0)) {
+        lines.push('text(labels$x[!centred], labels$y[!centred], labels$label[!centred], pos = labels$pos[!centred], cex = labels$cex[!centred], font = labels$font[!centred], col = label_col)');
+      }
     }
     if (style.showPoints) lines.push('points(sankey$nodes$x, sankey$nodes$y, pch = 21, bg = "white", lwd = 2)');
     lines.push('dev.off()');

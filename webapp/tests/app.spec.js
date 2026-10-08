@@ -149,8 +149,13 @@ test('exports an SVG without interaction layers and an R bundle', async ({ page 
   expect(svgText).toContain('<svg');
   expect(svgText).not.toContain('layer-hits');
 
-  const files = await page.evaluate(() => window.SankeyApp.bundleFiles().map((f) => f.name));
+  const bundle = await page.evaluate(() => window.SankeyApp.bundleFiles());
+  const files = bundle.map((f) => f.name);
   expect(files).toEqual(expect.arrayContaining(['stage_1.csv', 'stage_2.csv', 'colors_1.csv', 'loc.csv', 'sankey.R', 'project.json']));
+  // Every label here sits inside its node body, so R gets no (zero-length) positioned text() call.
+  const code = bundle.find((f) => f.name === 'sankey.R').text;
+  expect(code).toContain('labels$label[centred]');
+  expect(code).not.toContain('labels$label[!centred]');
   await page.locator('#export-btn').click();
   const [zip] = await Promise.all([page.waitForEvent('download'), page.locator('[data-export="bundle"]').click()]);
   expect(zip.suggestedFilename()).toBe('sankey_r_bundle.zip');
@@ -276,6 +281,42 @@ test('opening a long table file starts the importer, which flags bad mappings', 
   await page.locator('#imp-category').selectOption('status');
   await page.locator('#import-apply').click();
   await expect(page.locator('#plot .ribbon')).toHaveCount(3);
+});
+
+test('all-numeric link tables open the importer and matrix typos report the bad cell', async ({ page }, testInfo) => {
+  const links = testInfo.outputPath('links.csv');
+  fs.writeFileSync(links, 'source,target,value\n1,2,10\n1,3,5\n2,4,7\n3,4,5\n');
+  await page.setInputFiles('#file-input', links);
+  await expect(page.locator('#import-dialog')).toBeVisible();
+  await expect(page.locator('#import-format')).toHaveValue('links');
+  await page.locator('#import-dialog button[value="cancel"]').click();
+
+  const typo = testInfo.outputPath('stage_1.csv');
+  fs.writeFileSync(typo, '"V1","V2"\n0.1,0.2\n0.3,O.4\n');
+  await page.setInputFiles('#file-input', typo);
+  await expect(page.locator('#import-dialog')).toBeHidden();
+  await expect(page.locator('#banner')).toContainText('"O.4" is not a number');
+});
+
+test('imports keep numeric category names and later matrices reset the value scale', async ({ page }, testInfo) => {
+  await page.evaluate(() => {
+    const T = window.SK.transform;
+    const table = T.parseTable('before,after,n\n1,2,30\n1,3,10\n2,3,20\n');
+    window.SankeyApp.applyImport(T.build(table, { format: 'wide', columns: ['before', 'after'], weight: 'n' }), { labels: 'beside' });
+  });
+  let s = await state(page);
+  expect(s.loc.map((r) => r.label)).toEqual(['1', '2', '2', '3']);
+  expect(s.valueScale).not.toBe(1);
+  const code = await page.evaluate(() => window.SankeyApp.bundleFiles().find((f) => f.name === 'sankey.R').text);
+  expect(code).toContain('pos = c(2, 2, 4, 4)');
+
+  const m1 = testInfo.outputPath('m_1.csv');
+  fs.writeFileSync(m1, '0.1\n0.05\n0.02\n');
+  await page.setInputFiles('#file-input', m1);
+  await expect(page.locator('#notice')).toContainText('Generated node locations');
+  s = await state(page);
+  expect(s.valueScale).toBe(1);
+  expect(s.loc.every((r) => !r.label)).toBe(true);
 });
 
 test('works when opened directly from disk', async ({ browser }) => {

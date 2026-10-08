@@ -314,9 +314,10 @@
     return flows;
   }
 
-  function checkBalance(nodes, p, warnings) {
+  // Tolerance applies to scaled values, as R compares the thickness matrix it receives.
+  function checkBalance(nodes, p, warnings, scale) {
     const bad = nodes.filter((n) => n.inValue > 0 && n.outValue > 0 &&
-      Math.abs(n.outValue - n.inValue) > p.balance_tol);
+      Math.abs(n.outValue - n.inValue) * scale > p.balance_tol);
     if (!bad.length || p.balance === 'allow') return;
     const msg = `Flow-through nodes with unequal incoming and outgoing totals: ${bad.map(nodeName).join(', ')}.`;
     if (p.balance === 'error') fail(msg);
@@ -702,7 +703,7 @@
     if (!(Number.isFinite(scale) && scale > 0)) fail('The value scale must be a positive number.');
     const nodes = buildNodes(model.loc, p, tf, measure);
     const flows = buildFlows(Object.assign({}, model, { mode }), nodes, tf, scale);
-    if (mode === 'graph') checkBalance(nodes, p, warnings);
+    if (mode === 'graph') checkBalance(nodes, p, warnings, scale);
     if (p.adjust_loc) adjustLocations(nodes, p, tf);
     adjustNodeHeights(nodes, p, tf, measure);
     setFaces(nodes, flows, p, mode);

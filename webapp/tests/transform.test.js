@@ -95,4 +95,21 @@ test('guesses the table layout from column names and types', () => {
   const rows = Array.from({ length: 20 }, (_, i) => `u${i},${i % 2 ? 'a' : 'b'},${i % 3 ? 'x' : 'y'},${2000 + (i % 2)}`);
   assert.deepStrictEqual(T.guess(table(`user,before,after,year\n${rows.join('\n')}\n`)),
     { format: 'wide', columns: ['before', 'after', 'year'], weight: null });
+  // An id column followed by numeric codes is a wide table, not a crosstab.
+  const coded = Array.from({ length: 40 }, (_, i) => `P${i},${i % 3},${(i + 1) % 3},${i % 2}`);
+  assert.deepStrictEqual(T.guess(table(`patient,t1,t2,t3\n${coded.join('\n')}\n`)),
+    { format: 'wide', columns: ['t1', 't2', 't3'], weight: null });
+  assert.strictEqual(T.guess(table('id,before,after\na,1,2\nb,2,2\nc,1,1\n')).format, 'wide');
+});
+
+test('named data tables are recognised even when every cell is a number', () => {
+  assert.strictEqual(T.looksLikeDataTable(table('source,target,value\n1,2,10\n1,3,5\n2,4,7\n')), true);
+  assert.strictEqual(T.looksLikeDataTable(table('q1,q2,count\n1,2,4\n2,2,3\n')), true);
+  assert.strictEqual(T.looksLikeDataTable(table('"","V1","V2"\n"1",0.1,0.2\n"2",0.3,0.4\n')), false);
+});
+
+test('grouping into Other is rejected for graph-shaped links', () => {
+  const t = table('source,target,value\nA,B,2\nB,C,2\nA,C,1\n');
+  assert.throws(() => T.build(t, { format: 'links', source: 'source', target: 'target', value: 'value' }, { topN: 1 }),
+    /needs layered stages/);
 });
