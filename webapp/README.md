@@ -22,6 +22,27 @@ npm run serve        # python3 -m http.server 4173, then open http://127.0.0.1:4
 
 Drop files anywhere or use **Open files…**. Roles are inferred from content and file names (names containing `mid` are mid colors), stage order follows natural file-name order, and the per-role **Load…** buttons force a role. If flow matrices arrive without a matching `loc`, node locations are generated. Invalid input stops rendering and shows the reason in a red banner.
 
+## Importing data tables
+
+**Import table…** (also opened automatically for any other table you drop) builds flows from ordinary data:
+
+| Layout | Expected columns | Result |
+| --- | --- | --- |
+| wide | one row per item or item group, one column per stage, optional weight | transitions counted between consecutive chosen columns |
+| long | item id, stage, category, optional weight | pivoted to one row per item, then as wide |
+| links | source, target, optional value and stage | one matrix per stage; without a stage column, layers are inferred and links that skip layers produce graph mode |
+| crosstab | row labels, then one numeric column per target | a single stage |
+
+The layout and column roles are guessed from names and types, and everything can be changed in the dialog. Other options:
+- Missing values: drop the row, or keep it as a "(missing)" node.
+- Node order: first appearance, largest first, or alphabetical.
+- Group small nodes: merge nodes below a minimum share of their stage, or outside the top N, into "Other".
+- Labels: inside node bodies, beside nodes, or none.
+
+Errors (cycles, duplicated item/stage pairs, non-numeric weights) are shown before anything is built.
+
+Imported values stay as counts. A **value scale** (Layout section) turns them into strand thickness and is chosen so node columns sit one x unit apart. Tooltips show raw values, and the R bundle multiplies the exported matrices by the same `value_scale`.
+
 ## Interaction
 
 - Hover a strand or node for values and shares of source outflow / target inflow; other strands dim.
@@ -42,6 +63,7 @@ SVG, PNG (2×), `loc.csv`, a project JSON, and an **R bundle** zip containing th
 - `js/shapes.js`: merge trunks, node bodies, interior bridges and border paths.
 - `js/render.js`: color resolution and SVG markup.
 - `js/app.js`: state, controls, file loading, interactions, inspector, history and exports.
+- `js/transform.js` and `js/importer.js`: table import converters (wide, long, links, crosstab) and the import dialog.
 - `js/csv.js`, `js/color.js`, `js/zip.js`, `js/examples.js`: parsing, color math, a store-only zip writer and the bundled examples.
 
 ## Tests
@@ -49,7 +71,7 @@ SVG, PNG (2×), `loc.csv`, a project JSON, and an **R bundle** zip containing th
 ```sh
 cd webapp
 npm install                 # Playwright test runner
-npm run test:unit           # geometry parity with R, layout and CSV parsing checks (node:test)
+npm run test:unit           # geometry parity with R, layout, CSV parsing and table import (node:test)
 npm run test:e2e            # browser tests (Playwright, Chromium)
 ```
 

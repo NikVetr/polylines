@@ -242,6 +242,42 @@ test('graph-mode R export keeps stage settings and node colors', async ({ page }
   expect(code).toContain('#FF0000');
 });
 
+test('the table importer builds a Sankey from a pasted wide table', async ({ page }) => {
+  await page.locator('.topbar [data-open-import]').click();
+  await expect(page.locator('#import-dialog')).toBeVisible();
+  await page.locator('#import-text').fill('region,plan,outcome,customers\nNorth,Basic,Renewed,120\nNorth,Pro,Churned,30\n' +
+    'South,Basic,Churned,45\nSouth,Pro,Renewed,80\nWest,Pro,Renewed,25\n');
+  await expect(page.locator('#import-summary')).toContainText('2 stages · 7 nodes · 9 strands');
+  await expect(page.locator('#import-format')).toHaveValue('wide');
+  await page.locator('#import-labels').selectOption('beside');
+  await page.locator('#import-apply').click();
+  await expect(page.locator('#import-dialog')).toBeHidden();
+  await expect(page.locator('#plot .ribbon')).toHaveCount(9);
+  const s = await state(page);
+  expect(s.stageNames).toEqual(['region → plan', 'plan → outcome']);
+  expect(s.valueScale).not.toBe(1);
+  expect(s.loc.every((r) => r.width === 0)).toBe(true);
+  const p = await ribbonCenter(page, 0);
+  await page.mouse.move(p.x, p.y);
+  await expect(page.locator('#tooltip')).toContainText('value 120');
+});
+
+test('opening a long table file starts the importer, which flags bad mappings', async ({ page }, testInfo) => {
+  const file = testInfo.outputPath('visits.csv');
+  fs.writeFileSync(file, 'patient,visit,status\nA,1,sick\nA,2,well\nB,1,sick\nB,2,sick\nC,1,well\nC,2,well\n');
+  await page.setInputFiles('#file-input', file);
+  await expect(page.locator('#import-dialog')).toBeVisible();
+  await expect(page.locator('#import-format')).toHaveValue('long');
+  await expect(page.locator('#import-preview th')).toHaveCount(3);
+  await expect(page.locator('#import-summary')).toContainText('1 stage · 4 nodes · 3 strands');
+  await page.locator('#imp-category').selectOption('visit');
+  await expect(page.locator('#import-summary')).toHaveClass(/error/);
+  await expect(page.locator('#import-apply')).toBeDisabled();
+  await page.locator('#imp-category').selectOption('status');
+  await page.locator('#import-apply').click();
+  await expect(page.locator('#plot .ribbon')).toHaveCount(3);
+});
+
 test('works when opened directly from disk', async ({ browser }) => {
   const page = await browser.newPage();
   await page.goto(`file://${path.resolve(__dirname, '..', 'index.html')}`);

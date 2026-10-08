@@ -13,6 +13,7 @@
       <label class="btn primary" title="Load flow matrices, a loc table, color matrices or a project file (CSV/TSV/JSON)">
         Open files…<input id="file-input" type="file" multiple accept=".csv,.tsv,.txt,.json" hidden>
       </label>
+      <button class="btn" data-open-import title="Build a Sankey from a long or wide data table">Import table…</button>
       <select id="example-select" aria-label="Load an example"></select>
       <button id="undo" class="btn" title="Undo (Ctrl/⌘+Z)" aria-label="Undo">↶</button>
       <button id="redo" class="btn" title="Redo (Ctrl/⌘+Shift+Z)" aria-label="Redo">↷</button>
@@ -70,6 +71,7 @@
           <ol id="mid-list" class="file-list"></ol>
         </div>
         <div class="button-grid">
+          <button class="mini-btn wide-cell" data-open-import title="Build flows from a long or wide data table">Import a data table…</button>
           <button id="auto-layout" class="mini-btn" title="Generate node locations from the matrices">Auto-layout nodes</button>
           <button id="bake-loc" class="mini-btn" title="Write adjusted y positions into loc">Bake adjusted y</button>
           <button id="clear-order" class="mini-btn" title="Forget strand orders set by dragging">Reset strand order</button>
@@ -110,6 +112,9 @@
         <li><b>Strand / mid colors</b>: color matrices shaped like the flow matrices (hex such as <code>#5B8CBAAA</code>,
           CSS names, R <code>grayNN</code>, or <code>NA</code>).</li>
         <li><b>Project</b>: a <code>.json</code> file exported from this app restores everything.</li>
+        <li><b>Data tables</b>: other tables open <b>Import table…</b>, which builds flows from wide tables (one row per
+          item, a column per stage), long tables (item, stage, category), link lists (source, target, value) or
+          crosstabs, with options for weights, missing values, node order and grouping small nodes.</li>
       </ul>
       <p>Drop files anywhere, or use <b>Open files…</b>; file roles are detected from their contents and names
         (files whose names contain “mid” are mid colors). Stage order follows file names; reorder with the arrows.</p>
@@ -123,6 +128,70 @@
       <p><b>Export → R bundle</b> writes the CSVs, a <code>loc.csv</code> with your edits and a <code>sankey.R</code>
         script that redraws the plot with the R functions.</p>
       <div class="dialog-actions"><button class="btn primary" value="close">Close</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="import-dialog" class="import">
+    <form method="dialog">
+      <h2>Import a data table</h2>
+      <p class="muted">Turn a long or wide table into Sankey flows. Each row counts once, or adds its weight.</p>
+      <div class="import-source">
+        <label class="btn">Choose file…<input id="import-file" type="file" accept=".csv,.tsv,.txt" hidden></label>
+        <span id="import-file-name" class="muted">or paste a table below</span>
+      </div>
+      <textarea id="import-text" spellcheck="false" placeholder="Paste CSV or TSV text with a header row"></textarea>
+      <div id="import-preview" class="table-preview"></div>
+      <div class="import-grid">
+        <div>
+          <div class="row">
+            <label for="import-format">Table layout</label>
+            <select id="import-format">
+              <option value="wide">wide: one row per item, a column per stage</option>
+              <option value="long">long: item, stage and category columns</option>
+              <option value="links">links: source, target, value</option>
+              <option value="crosstab">crosstab: row labels × columns</option>
+            </select>
+          </div>
+          <div id="import-mapping"></div>
+        </div>
+        <div>
+          <div class="row">
+            <label for="import-missing">Missing values</label>
+            <select id="import-missing">
+              <option value="drop">drop the row</option>
+              <option value="keep">keep as “(missing)”</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="import-order">Node order</label>
+            <select id="import-order">
+              <option value="appearance">first appearance</option>
+              <option value="size">largest first</option>
+              <option value="alphabetical">alphabetical</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="import-min-share">Group into “Other”</label>
+            <span class="pair">
+              <input id="import-min-share" type="number" min="0" max="100" step="0.5" placeholder="below %" title="Nodes below this share of their stage">
+              <input id="import-top-n" type="number" min="1" step="1" placeholder="beyond top N" title="Keep the N largest nodes per stage">
+            </span>
+          </div>
+          <div class="row">
+            <label for="import-labels">Labels</label>
+            <select id="import-labels">
+              <option value="inside">inside node bodies</option>
+              <option value="beside">beside nodes</option>
+              <option value="none">none</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div id="import-summary" class="import-summary" role="status"></div>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel">Cancel</button>
+        <button id="import-apply" type="button" class="btn primary" disabled>Build Sankey</button>
+      </div>
     </form>
   </dialog>
 
@@ -141,10 +210,12 @@
   <script src="js/layout.js"></script>
   <script src="js/color.js"></script>
   <script src="js/csv.js"></script>
+  <script src="js/transform.js"></script>
   <script src="js/shapes.js"></script>
   <script src="js/render.js"></script>
   <script src="js/zip.js"></script>
   <script src="js/examples.js"></script>
+  <script src="js/importer.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

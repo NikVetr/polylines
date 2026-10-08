@@ -69,6 +69,7 @@
       params: Object.assign({}, L.DEFAULT_PARAMS),
       stageParams: [],
       style: Object.assign({}, DEFAULT_STYLE),
+      valueScale: 1,
       view: null
     };
   }
@@ -123,7 +124,8 @@
       loc: state.loc,
       params: state.params,
       stageParams: state.stageParams,
-      manualOrder: state.manualOrder
+      manualOrder: state.manualOrder,
+      valueScale: state.valueScale
     };
   }
 
@@ -276,6 +278,8 @@
     {
       title: 'Layout',
       items: [
+        { key: 'valueScale', target: 'state', type: 'number', label: 'Value scale', min: 0, positive: true, step: 'any',
+          help: 'Strand thickness = value × scale, in x units. Tooltips and the inspector show raw values.' },
         { key: 'n', target: 'params', type: 'number', label: 'Samples per strand', min: 2, step: 1, integer: true },
         { key: 'curvature', target: 'params', type: 'range', label: 'Curvature', min: 0, max: 1, step: 0.01 },
         { key: 'merge_frac', target: 'params', type: 'number', label: 'Merge fraction', min: 0, step: 0.005,
@@ -382,12 +386,15 @@
     if (item.target === 'params') return state.params[item.key];
     if (item.target === 'stage') return currentParam(item.key);
     if (item.target === 'view') return state.view ? state.view[item.key] : null;
+    if (item.target === 'state') return state[item.key];
     return state.style[item.key];
   }
 
   function setValue(item, value) {
     if (item.target === 'params') {
       state.params[item.key] = value;
+    } else if (item.target === 'state') {
+      state[item.key] = value;
     } else if (item.target === 'stage') {
       if (routeScope === 'all') {
         state.params[item.key] = value;
@@ -534,8 +541,10 @@
           return;
         }
         const v = item.integer ? Math.round(Number(input.value)) : Number(input.value);
-        if (input.value === '' || !Number.isFinite(v) || (item.min !== undefined && v < item.min)) {
-          showError(`${item.label} must be a number${item.min !== undefined ? ` ≥ ${item.min}` : ''}.`);
+        if (input.value === '' || !Number.isFinite(v) || (item.min !== undefined && v < item.min) ||
+            (item.positive && !(v > 0))) {
+          showError(`${item.label} must be a ${item.positive ? 'positive number' : 'number'}` +
+            `${item.min !== undefined && !item.positive ? ` ≥ ${item.min}` : ''}.`);
           sync(getValue(item));
           return;
         }
@@ -651,7 +660,11 @@
       try { CSV.parseMatrix(file.text, 'color', file.name); return true; } catch (e) { return false; }
     })();
     if (colorsOk) return /mid/i.test(file.name) ? 'mids' : 'colors';
-    throw new L.SankeyError(`${file.name}: not recognised as a flow matrix, loc table, color matrix or project file.`);
+    const isTable = (() => {
+      try { window.SK.transform.parseTable(file.text); return true; } catch (e) { return false; }
+    })();
+    if (isTable) return 'table';
+    throw new L.SankeyError(`${file.name}: not recognised as a flow matrix, loc table, color matrix, data table or project file.`);
   }
 
   async function readFiles(fileList) {
@@ -660,9 +673,17 @@
   }
 
   // files: [{ name, text }]; role forces every file into one role.
+  // Returns false when the files were handed to the table importer instead of applied.
   function applyFiles(files, role) {
-    const groups = { stages: [], loc: [], colors: [], mids: [], project: [] };
+    const groups = { stages: [], loc: [], colors: [], mids: [], project: [], table: [] };
     files.forEach((f) => groups[role || classify(f)].push(f));
+    if (groups.table.length) {
+      if (files.length > 1) {
+        throw new L.SankeyError(`${groups.table[0].name} is a data table; load it on its own to open the table importer.`);
+      }
+      window.SK.importer.open(groups.table[0].text, groups.table[0].name);
+      return false;
+    }
     if (groups.project.length) {
       if (files.length > 1) throw new L.SankeyError('Load a project JSON file on its own.');
       let parsed;
@@ -672,9 +693,10 @@
         throw new L.SankeyError(`${groups.project[0].name}: not valid JSON (${err.message}).`);
       }
       importProject(parsed);
-      return;
+      return true;
     }
     applyGroups(groups, {});
+    return true;
   }
 
   function applyGroups(groups, opts) {
@@ -764,8 +786,7 @@
 
   async function loadFileList(fileList, role) {
     try {
-      applyFiles(await readFiles(fileList), role);
-      update({ fit: true, commit: true });
+      if (applyFiles(await readFiles(fileList), role)) update({ fit: true, commit: true });
     } catch (err) {
       showError(err.message);
       if (!(err instanceof L.SankeyError)) console.error(err);
@@ -776,6 +797,14 @@
     const ex = window.SK.examples.find((e) => e.id === id);
     if (!ex) throw new L.SankeyError(`Unknown example "${id}".`);
     state = blankState();
+    if (ex.table) {
+      // Table examples go through the same converter as the "Import table" dialog.
+      const table = window.SK.transform.parseTable(ex.files[ex.table]);
+      state.style = Object.assign({}, DEFAULT_STYLE, ex.style || {});
+      applyImport(window.SK.transform.build(table, ex.importSpec, ex.importOptions),
+        { labels: ex.labels, name: ex.table, params: ex.params, example: ex.id });
+      return;
+    }
     const named = (names) => (names || []).map((name) => ({ name, text: ex.files[name] }));
     applyGroups({
       stages: named(ex.stages),
@@ -791,8 +820,8 @@
     update({ fit: true, commit: true });
   }
 
-  // Default loc: node sets in evenly spaced columns, stacked to fill most of the height.
-  function autoLocate() {
+  // Node columns for auto-layout: [{ height (raw value), label, id (graph) }] per set.
+  function nodeSets() {
     const mats = state.matrices;
     if (!mats.length) throw new L.SankeyError('Load flow matrices before generating node locations.');
     let sets;
@@ -831,17 +860,41 @@
         return { height: Math.max(incoming, outgoing), label: names && !isDefaultName(names[k]) ? names[k] : '' };
       }));
     }
+    return sets;
+  }
+
+  // Columns are spaced so the tallest column of stacks fills ~60% of the plot height.
+  const STACK_FILL = 0.6;
+  const X_PAD = 1.15;
+
+  // Value scale giving unit spacing between auto-layout columns (so loc x is 0, 1, 2, ...).
+  function autoValueScale() {
+    const sets = nodeSets();
     computeFrame();
     const W = frame.width - 2 * MARGIN;
     const H = frame.height - 2 * MARGIN;
     const K = Math.max(sets.length - 1, 1);
     const tallest = Math.max(...sets.map((g) => g.reduce((s, n) => s + n.height, 0)));
-    const spacing = tallest * W / (0.6 * H * K * 1.15);
-    const pxPerUnit = W / (K * spacing * 1.15);
+    if (!(tallest > 0)) throw new L.SankeyError('The flow matrices contain no positive values.');
+    return Number((STACK_FILL * H * K * X_PAD / (W * tallest)).toPrecision(3));
+  }
+
+  // Default loc: node sets in evenly spaced columns, stacked to fill most of the height.
+  // labels: "inside" (label-derived node bodies), "beside" (zero-width nodes) or "none".
+  function autoLocate(options) {
+    const labels = (options && options.labels) || 'inside';
+    const sets = nodeSets();
+    computeFrame();
+    const W = frame.width - 2 * MARGIN;
+    const H = frame.height - 2 * MARGIN;
+    const K = Math.max(sets.length - 1, 1);
+    const tallest = Math.max(...sets.map((g) => g.reduce((s, n) => s + n.height * state.valueScale, 0)));
+    const spacing = tallest * W / (STACK_FILL * H * K * X_PAD);
+    const pxPerUnit = W / (K * spacing * X_PAD);
     const rowsByGraphId = [];
     const loc = [];
     sets.forEach((group, s) => {
-      const heights = group.map((n) => n.height * pxPerUnit);
+      const heights = group.map((n) => n.height * state.valueScale * pxPerUnit);
       const used = heights.reduce((a, b) => a + b, 0);
       const gap = group.length > 1 ? Math.max((0.8 * H - used) / (group.length - 1), 4) : 0;
       let top = H / 2 + (used + gap * (group.length - 1)) / 2;
@@ -849,7 +902,8 @@
         const Y = top - heights[k] / 2;
         top -= heights[k] + gap;
         const row = { set: s + 1, node: k + 1, x: round(s * spacing), y: round(Y / H) };
-        if (n.label) row.label = n.label;
+        if (n.label && labels !== 'none') row.label = n.label;
+        if (n.label && labels === 'beside') row.width = 0;
         if (n.id !== undefined) rowsByGraphId[n.id] = row;
         else loc.push(row);
       });
@@ -857,6 +911,28 @@
     state.loc = state.mode === 'graph' ? rowsByGraphId : loc;
     state.locName = 'auto-generated';
     state.view = null;
+  }
+
+  // Replace the data with flows built from a table (see transform.js), keeping the style.
+  function applyImport(result, options) {
+    const opts = options || {};
+    const style = Object.assign({}, state.style);
+    if (style.colorBy === 'file') style.colorBy = 'source';
+    state = blankState();
+    state.style = style;
+    state.mode = result.mode;
+    state.matrices = result.matrices;
+    state.dimnames = result.dimnames;
+    state.stageNames = result.stageNames;
+    state.valueScale = autoValueScale();
+    autoLocate({ labels: opts.labels });
+    Object.assign(state.params, opts.params || {});
+    state.locName = opts.name ? `built from ${opts.name}` : 'built from table';
+    if (opts.example) state.example = opts.example;
+    selection = null;
+    hover = null;
+    routeScope = 'all';
+    update({ fit: true, commit: true });
   }
 
   // ---------- interaction ----------
@@ -1329,6 +1405,10 @@
     // Graph mode has a single stage, so its "stage 1" overrides are plain arguments in R.
     const p = graph ? Object.assign({}, state.params, state.stageParams[0] || {}) : state.params;
     const style = state.style;
+    const scaled = state.valueScale !== 1;
+    const readThic = graph
+      ? `read_numbers("adjacency.csv")${scaled ? ' * value_scale' : ''}`
+      : `lapply(c(${files.stages.map(rString).join(', ')}), ${scaled ? 'function(f) read_numbers(f) * value_scale' : 'read_numbers'})`;
     const lines = [
       '# Generated by the polylines Sankey webapp.',
       '# Run next to the exported CSV files, with R/functions.R from the polylines repository.',
@@ -1336,7 +1416,8 @@
       '',
       'read_numbers <- function(f) unname(as.matrix(read.csv(f, header = FALSE)))',
       'read_colors <- function(f) unname(as.matrix(read.csv(f, header = FALSE, colClasses = "character")))',
-      graph ? 'thic <- read_numbers("adjacency.csv")' : `thic <- lapply(c(${files.stages.map(rString).join(', ')}), read_numbers)`,
+      ...(scaled ? [`value_scale <- ${rValue(state.valueScale)}  # strand thickness (x units) per unit of value`] : []),
+      `thic <- ${readThic}`,
       'loc <- read.csv("loc.csv", stringsAsFactors = FALSE)',
       graph ? 'col <- read_colors("colors.csv")' : `col <- lapply(c(${files.colors.map(rString).join(', ')}), read_colors)`
     ];
@@ -1653,6 +1734,7 @@
     get layout() { return layout; },
     loadExample,
     update,
+    applyImport,
     exportSvgText,
     bundleFiles,
     locCsv

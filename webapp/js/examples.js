@@ -5,6 +5,26 @@
   'use strict';
   const SK = root.SK = root.SK || {};
 
+  // Deterministic long-format survey: one row per respondent and wave; some answers drift.
+  function surveyTable() {
+    const answers = ['Agree', 'Neutral', 'Disagree'];
+    let seed = 7;
+    const next = () => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    const rows = ['respondent,wave,answer'];
+    for (let id = 1; id <= 40; id++) {
+      let a = Math.floor(next() * 3);
+      for (let wave = 1; wave <= 3; wave++) {
+        if (wave > 1 && next() < 0.35) a = Math.max(0, Math.min(2, a + (next() < 0.6 ? -1 : 1)));
+        const skipped = wave === 3 && next() < 0.1;
+        rows.push(`R${String(id).padStart(2, '0')},${wave},${skipped ? 'NA' : answers[a]}`);
+      }
+    }
+    return `${rows.join('\n')}\n`;
+  }
+
   SK.examples = [
     {
       id: 'labeled',
@@ -36,6 +56,37 @@
         'labeled_mid_1.csv': '#F2B84B,NA\nNA,#E28AA3\n#56B6A9,NA\n#8B5FBF,#DB6B92\n',
         'labeled_mid_2.csv': '#50B5A8,NA,#C86A9A\nNA,#C9AA4B,#A16FC0\n'
       }
+    },
+    {
+      id: 'pathways',
+      title: 'Patient pathways (wide table import)',
+      table: 'patient_pathways.csv',
+      importSpec: { format: 'wide', columns: ['diagnosis', 'treatment', 'response'], weight: 'patients', missing: 'drop' },
+      importOptions: { order: 'appearance' },
+      labels: 'inside',
+      params: { node_label_pad: 0.02 },
+      style: { colorBy: 'source', palette: 'tableau', opacity: 0.8, gradient: true, gradientMode: 'path' },
+      files: {
+        'patient_pathways.csv': [
+          'diagnosis,treatment,response,patients',
+          'Stage I,Surgery,Remission,120', 'Stage I,Surgery,Stable,18', 'Stage I,Radiation,Remission,35',
+          'Stage I,Radiation,Stable,9', 'Stage II,Surgery,Remission,64', 'Stage II,Surgery,Stable,30',
+          'Stage II,Chemotherapy,Remission,41', 'Stage II,Chemotherapy,Progression,22', 'Stage II,Radiation,Stable,17',
+          'Stage III,Chemotherapy,Remission,28', 'Stage III,Chemotherapy,Stable,36', 'Stage III,Chemotherapy,Progression,44',
+          'Stage III,Radiation,Progression,15', 'Stage IV,Chemotherapy,Stable,12', 'Stage IV,Chemotherapy,Progression,38',
+          'Stage IV,Palliative,Progression,26', 'Stage IV,Palliative,Stable,5'
+        ].join('\n') + '\n'
+      }
+    },
+    {
+      id: 'survey',
+      title: 'Survey waves (long table import)',
+      table: 'survey_waves.csv',
+      importSpec: { format: 'long', id: 'respondent', stage: 'wave', category: 'answer', weight: null, stageOrder: 'auto', missing: 'keep' },
+      importOptions: { order: 'appearance' },
+      labels: 'beside',
+      style: { colorBy: 'target', palette: 'okabe-ito', opacity: 0.75, gradient: true, gradientMode: 'merge' },
+      files: { 'survey_waves.csv': surveyTable() }
     },
     {
       id: 'gradients',

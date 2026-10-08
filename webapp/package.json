@@ -4,7 +4,7 @@
   "description": "Static, build-free interactive Sankey ribbons webapp for the polylines R functions.",
   "scripts": {
     "serve": "python3 -m http.server 4173 --bind 127.0.0.1",
-    "test:unit": "node --test tests/layout.test.js tests/io.test.js",
+    "test:unit": "node --test tests/layout.test.js tests/io.test.js tests/transform.test.js",
     "test:e2e": "playwright test",
     "test": "npm run test:unit && npm run test:e2e"
   },

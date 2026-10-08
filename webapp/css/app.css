@@ -235,6 +235,38 @@ dialog code { background: #f1f3f6; padding: 0 4px; border-radius: 3px; }
 }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
+/* Table import dialog. */
+dialog.import { width: min(880px, 94vw); max-width: none; }
+.import-source { display: flex; align-items: center; gap: 10px; margin: 8px 0 6px; }
+#import-text {
+  width: 100%;
+  height: 74px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+.table-preview { margin: 8px 0; }
+.table-scroll { max-height: 190px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.table-preview table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.table-preview th, .table-preview td { padding: 3px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.table-preview th { position: sticky; top: 0; background: #f8f9fb; font-weight: 600; }
+.badge { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+.import-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; margin-top: 6px; }
+.import-grid .row { grid-template-columns: 120px minmax(0, 1fr); }
+.row.top { align-items: start; }
+.stage-picker { margin: 0; padding: 0 0 0 18px; max-height: 170px; overflow-y: auto; }
+.stage-picker li { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.stage-picker li.on { color: var(--text); }
+.stage-picker li label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-picker button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0 4px; }
+.stage-picker button:disabled { opacity: 0.3; cursor: default; }
+.import-summary { margin-top: 10px; padding: 7px 10px; border-radius: 6px; background: var(--accent-soft); color: #1d4f8a; }
+.import-summary.error { background: #fef3f2; color: var(--error); }
+.button-grid .wide-cell { grid-column: 1 / -1; }
+
 @media (max-width: 1100px) {
   .layout { grid-template-columns: 260px minmax(0, 1fr); }
   .inspector { display: none; }

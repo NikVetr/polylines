@@ -246,12 +246,13 @@
     });
   }
 
-  function buildFlows(model, nodes, tf) {
+  // Strand thickness is value * scale (x data units); value stays the raw quantity for display.
+  function buildFlows(model, nodes, tf, scale) {
     const mats = model.matrices;
     if (!Array.isArray(mats) || !mats.length) fail('No flow matrices are loaded.');
     const flows = [];
     const push = (stage, i, j, from, to, value) => flows.push({
-      key: `${stage}:${i}:${j}`, stage, i, j, from, to, value, w: value * tf.sx
+      key: `${stage}:${i}:${j}`, stage, i, j, from, to, value, w: value * scale * tf.sx
     });
 
     if (model.mode === 'graph') {
@@ -309,7 +310,7 @@
       nodes[f.from].outValue += f.value;
       nodes[f.to].inValue += f.value;
     });
-    nodes.forEach((n) => { n.inPx = n.inValue * tf.sx; n.outPx = n.outValue * tf.sx; });
+    nodes.forEach((n) => { n.inPx = n.inValue * scale * tf.sx; n.outPx = n.outValue * scale * tf.sx; });
     return flows;
   }
 
@@ -697,8 +698,10 @@
     const tf = makeTransform(view);
     const warnings = [];
 
+    const scale = model.valueScale === undefined ? 1 : model.valueScale;
+    if (!(Number.isFinite(scale) && scale > 0)) fail('The value scale must be a positive number.');
     const nodes = buildNodes(model.loc, p, tf, measure);
-    const flows = buildFlows(Object.assign({}, model, { mode }), nodes, tf);
+    const flows = buildFlows(Object.assign({}, model, { mode }), nodes, tf, scale);
     if (mode === 'graph') checkBalance(nodes, p, warnings);
     if (p.adjust_loc) adjustLocations(nodes, p, tf);
     adjustNodeHeights(nodes, p, tf, measure);
@@ -736,7 +739,7 @@
       ? p.merge_length * tf.sx
       : p.merge_frac * Math.min(...flows.map((f) => f.pathLength));
 
-    return { mode, nodes, flows, mergeLength, tf, view, params: p, stageParams: sp, warnings, stageCount: stages.length };
+    return { mode, nodes, flows, mergeLength, tf, view, params: p, stageParams: sp, warnings, stageCount: stages.length, valueScale: scale };
   }
 
   SK.layout = {
