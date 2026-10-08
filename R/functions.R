@@ -3912,9 +3912,9 @@ draw_graph_interior_trunks <- function(sankey, flow_cols, merge_cols,
           x_mid <- node$x[1]
           x_pos <- (breaks[i] + breaks[i + 1]) / 2
           if(x_pos <= x_mid) {
-            interpolate_color(left_face_col, transparent_color(left_face_col), (x_pos - min(coords[, "x"])) / (x_mid - min(coords[, "x"])))
+            interpolate_color(left_col, transparent_color(left_col), (x_pos - min(coords[, "x"])) / (x_mid - min(coords[, "x"])))
           } else {
-            interpolate_color(transparent_color(right_face_col), right_face_col, (x_pos - x_mid) / (max(coords[, "x"]) - x_mid))
+            interpolate_color(transparent_color(right_col), right_col, (x_pos - x_mid) / (max(coords[, "x"]) - x_mid))
           }
         } else if(is.null(merge_cols)) {
           interpolate_color(left_col, right_col, t)

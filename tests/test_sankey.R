@@ -678,6 +678,28 @@ grDevices::dev.off()
 unlink(beside_pdf)
 stopifnot(trunk_polygons == beside$node_counts[2])
 
+# Labeled graph interior trunks use the supplied merge (trunk) colors.
+graph_label_pdf <- tempfile(fileext = ".pdf")
+grDevices::pdf(graph_label_pdf, width = 5, height = 3)
+plot.new()
+plot.window(xlim = c(-0.2, 3.0), ylim = c(0, 1))
+graph_labeled <- sankey_ribbons_graph(graph_thic, data.frame(
+  set = graph_loc[, 1], node = graph_loc[, 2], x = graph_loc[, 3], y = graph_loc[, 4],
+  label = c("", "", "Hub", "", ""), width = c(0, 0, 0.22, 0, 0)
+), xyr = 1)
+trunk_cols <- character(0)
+polygon <- function(x, y, col = NA, ...) trunk_cols <<- c(trunk_cols, col)
+draw_graph_interior_trunks(
+  graph_labeled, flow_cols = rep("#5B8CBA", nrow(graph_labeled$flows)),
+  merge_cols = list(start = rep("#FF0000", nrow(graph_labeled$flows)), end = rep("#FF0000", nrow(graph_labeled$flows))),
+  merge_length = graph_labeled$merge_length, flatten_trunks = FALSE, gradient_slices = 10
+)
+rm(polygon)
+grDevices::dev.off()
+unlink(graph_label_pdf)
+trunk_rgb <- grDevices::col2rgb(trunk_cols)
+stopifnot(length(trunk_cols) > 0, all(trunk_rgb["red", ] == 255), all(trunk_rgb["green", ] == 0))
+
 # stack_order fixes strand order per node side; unlisted strands stay above listed ones.
 stack_rows <- function(s, to) {
   f <- s$flows[s$flows$to == to, ]
