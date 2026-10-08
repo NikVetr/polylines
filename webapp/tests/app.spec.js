@@ -87,7 +87,7 @@ test('selecting a strand lets you edit its color and value', async ({ page }) =>
   });
   const p = await ribbonCenter(page, 2);
   await page.mouse.click(p.x, p.y);
-  await expect(page.locator('#inspector-main h2')).toHaveText('Strand');
+  await expect(page.locator('#inspector-main .edit-head')).toHaveText('Edit strand');
   const color = page.locator('#inspector [data-color="flow"] input[type="color"]');
   await color.evaluate((el) => {
     el.value = '#ff0000';
@@ -453,6 +453,20 @@ test('hovering traces every pathway through a strand or node; Ctrl traces the on
   await expect(page.locator('#plot .trace')).toHaveCount(0);
 });
 
+test('clicking a node pins its traces and breakdown in the inspector until Esc', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const node = await nodeAt(page, 'Remission');
+  await page.mouse.click(node.x, node.y);
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace')).toHaveCount(5);
+  await expect(page.locator('#inspector-main')).toContainText('5 pathways · 288 patients');
+  await expect(page.locator('#inspector-main .share').first()).toBeVisible();
+  await expect(page.locator('#inspector-main .edit-head')).toHaveText('Edit node');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#plot .trace')).toHaveCount(0);
+  await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
+});
+
 test('one-row-per-patient data traces single patients and draws substrand lines', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
   await expect(page.locator('#plot .substrand-lines').first()).toBeAttached();
@@ -462,7 +476,12 @@ test('one-row-per-patient data traces single patients and draws substrand lines'
   const p = await ribbonCenter(page, 0);
   await page.mouse.move(p.x, p.y);
   expect(await page.locator('#plot .trace').count()).toBeGreaterThan(1);
+  // Ctrl traces the pathway (a unique trajectory) under the pointer, Shift the single patient.
   await page.keyboard.down('Control');
+  await expect(page.locator('#plot .trace')).toHaveCount(1);
+  await expect(page.locator('#hover-info h3')).toHaveText('One pathway');
+  await page.keyboard.up('Control');
+  await page.keyboard.down('Shift');
   await expect(page.locator('#plot .trace')).toHaveCount(1);
   await expect(page.locator('#hover-info h3')).toHaveText(/^P\d{3}$/);
   await expect(page.locator('#hover-info')).toContainText(/patients? on this pathway/);
@@ -470,7 +489,7 @@ test('one-row-per-patient data traces single patients and draws substrand lines'
   await page.mouse.move(node.x - 10, node.y);
   await expect(page.locator('#plot .trace')).toHaveCount(1);
   await expect(page.locator('#hover-info h3')).toHaveText(/^P\d{3}$/);
-  await page.keyboard.up('Control');
+  await page.keyboard.up('Shift');
   const exported = await page.evaluate(() => window.SankeyApp.exportSvgText());
   expect(exported).toContain('substrand-lines');
 });

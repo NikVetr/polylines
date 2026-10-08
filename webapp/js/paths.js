@@ -115,14 +115,15 @@
   const last = (pts) => pts[pts.length - 1];
 
   // How far a trace runs into an end node's body (to the centre of a fading label body), or null.
-  function bodyReach(layout, n, side) {
+  function bodyReach(layout, n, side, fadeLabels) {
     const body = S.endpointBody(layout, n, side, 0);
-    return body ? (n.hasLabel ? n.X : body.outerX) : null;
+    return body ? (fadeLabels && n.hasLabel ? n.X : body.outerX) : null;
   }
 
   // Places for traced paths gathered into one contiguous bundle at each node they share: per node
   // id, per path, its [lower, upper] y at the node centre. Paths keep the order in which they cross
-  // the node, and the bundle is centred on their weighted mean height, within the node's stack.
+  // the node, and the bundle lines up with the node's top or bottom edge, leaving the rest of the
+  // node's height in one piece so bundles are easy to compare.
   function gatherSlots(layout, subs, list) {
     const visits = new Map();
     const add = (id, pi, spans) => {
@@ -144,25 +145,44 @@
     });
     const slots = new Map();
     visits.forEach((items, id) => {
-      const n = layout.nodes[id];
+      const [lo, hi] = nodeExtent(layout, layout.nodes[id]);
       const total = items.reduce((t, e) => t + e.w, 0);
-      const centre = items.reduce((t, e) => t + e.mid * e.w, 0) / total;
-      const half = Math.max(n.inPx, n.outPx) / 2;
-      let y = Math.min(Math.max(centre - total / 2, n.Y - half), n.Y + half - total);
-      const places = new Map();
-      items.sort((a, b) => (a.mid - b.mid) || (a.pi - b.pi)).forEach((e) => {
-        places.set(e.pi, [y, y + e.w]);
-        y += e.w;
-      });
-      slots.set(id, places);
+      items.sort((a, b) => (a.mid - b.mid) || (a.pi - b.pi));
+      const stack = (y0) => {
+        let y = y0;
+        return items.map((e) => [y, (y += e.w)]);
+      };
+      // Against the node's top or its bottom edge, whichever moves the paths less.
+      const moved = (spans) => spans.reduce((t, [a, b], i) => t + items[i].w * Math.abs((a + b) / 2 - items[i].mid), 0);
+      const top = stack(hi - total);
+      const bottom = stack(lo);
+      const spans = moved(top) <= moved(bottom) ? top : bottom;
+      slots.set(id, new Map(items.map((e, i) => [e.pi, spans[i]])));
     });
     return slots;
   }
 
-  // Edges (plot pixels) tracing path pi, or member `member` of it when member >= 0, and the
-  // trace's smallest strand thickness. With slots (gatherSlots), the trace eases into its place in
-  // each node's gathered bundle, holds it through the middle third, and eases back out.
-  function tracePolygon(layout, subs, pi, member, slots) {
+  // Bottom and top y of node n at its centre: across the trunk for interior nodes, the strand stack
+  // at the face for end nodes.
+  function nodeExtent(layout, n) {
+    const role = S.nodeRole(n);
+    if (role === 'interior') {
+      const shape = S.interiorTrunk(layout, n);
+      if (shape) return [SK.layout.pointAtX(shape.lower, n.X)[1], SK.layout.pointAtX(shape.upper, n.X)[1]];
+    } else {
+      const b = S.bundle(layout, n, role === 'source' ? 'start' : 'end');
+      if (b) return [b.lowerY, b.upperY];
+    }
+    const half = Math.max(n.inPx, n.outPx) / 2;
+    return [n.Y - half, n.Y + half];
+  }
+
+  // Edges (plot pixels) tracing path pi, and the trace's smallest strand thickness. Options:
+  // member (>= 0: just that member's slice), slots (gatherSlots: ease into the path's place in each
+  // node's gathered bundle, hold it through the middle third, ease back out) and fadeLabels
+  // (labeled end-node bodies fade out at their centre, so traces stop there).
+  function tracePolygon(layout, subs, pi, opts) {
+    const { member = -1, slots = null, fadeLabels = true } = opts || {};
     const ps = pieces(layout, subs, pi, member);
     const ease = (from, to) => S.bridgeCurve(from, to, 18);
     const placeAt = (id, k) => (slots ? slots.get(id).get(pi)[k] : undefined);
@@ -173,23 +193,29 @@
       const hold = (b[0] - a[0]) / 6;
       return ease(a, [xc - hold, y]).slice(1).concat(ease([xc + hold, y], b).slice(0, -1));
     };
-    // Points from a strand's end into the body up to x = reach (excluding the end point): level, or
-    // eased into the gathered place by 40% of the way from the face to reach and level after.
+    // Points from a strand's end on to x = reach in the node body (excluding the end point): level,
+    // or eased into the gathered place by 40% of the way from the face to reach and level after.
+    // Without a body (reach at the face), a gathered trace eases into its place across the band.
     const intoBody = (end, faceX, reach, y) => {
-      if (y === undefined) return [[reach, end[1]]];
-      return ease(end, [faceX + (reach - faceX) * 0.4, y]).slice(1).concat([[reach, y]]);
+      const level = reach !== faceX ? [[reach, y === undefined ? end[1] : y]] : [];
+      if (y === undefined) return level;
+      return ease(end, [faceX + (reach - faceX) * 0.4, y]).slice(1).concat(level);
     };
     const from = layout.nodes[ps[0].f.from];
     const to = layout.nodes[last(ps).f.to];
-    const xStart = bodyReach(layout, from, 'start');
-    const xEnd = bodyReach(layout, to, 'end');
-    // Gathering in an end node starts at the band edge, so the bundle forms across band and body.
-    const trim = (p, x0, x1) => {
-      p.up = S.sliceByX(p.up, x0, x1);
-      p.lo = S.sliceByX(p.lo, x0, x1);
-    };
-    if (slots && xStart !== null) trim(ps[0], ps[0].f.startX + ps[0].f.dir * bandLength(layout, ps[0].f), last(ps[0].up)[0]);
-    if (slots && xEnd !== null) trim(last(ps), first(last(ps).up)[0], last(ps).f.endX - last(ps).f.dir * bandLength(layout, last(ps).f));
+    const faceStart = ps[0].f.startX;
+    const faceEnd = last(ps).f.endX;
+    const reachStart = bodyReach(layout, from, 'start', fadeLabels) ?? faceStart;
+    const reachEnd = bodyReach(layout, to, 'end', fadeLabels) ?? faceEnd;
+    if (slots) {
+      // Gathering in an end node starts at the band edge, so the bundle forms across band and body.
+      const trim = (p, x0, x1) => {
+        p.up = S.sliceByX(p.up, x0, x1);
+        p.lo = S.sliceByX(p.lo, x0, x1);
+      };
+      trim(ps[0], faceStart + ps[0].f.dir * bandLength(layout, ps[0].f), last(ps[0].up)[0]);
+      trim(last(ps), first(last(ps).up)[0], faceEnd - last(ps).f.dir * bandLength(layout, last(ps).f));
+    }
     const upper = [];
     const lower = [];
     ps.forEach((p, s) => {
@@ -200,14 +226,10 @@
       upper.push(...p.up);
       lower.push(...p.lo);
     });
-    if (xStart !== null) {
-      upper.unshift(...intoBody(first(upper), ps[0].f.startX, xStart, placeAt(from.id, 1)).reverse());
-      lower.unshift(...intoBody(first(lower), ps[0].f.startX, xStart, placeAt(from.id, 0)).reverse());
-    }
-    if (xEnd !== null) {
-      upper.push(...intoBody(last(upper), last(ps).f.endX, xEnd, placeAt(to.id, 1)));
-      lower.push(...intoBody(last(lower), last(ps).f.endX, xEnd, placeAt(to.id, 0)));
-    }
+    upper.unshift(...intoBody(first(upper), faceStart, reachStart, placeAt(from.id, 1)).reverse());
+    lower.unshift(...intoBody(first(lower), faceStart, reachStart, placeAt(from.id, 0)).reverse());
+    upper.push(...intoBody(last(upper), faceEnd, reachEnd, placeAt(to.id, 1)));
+    lower.push(...intoBody(last(lower), faceEnd, reachEnd, placeAt(to.id, 0)));
     return {
       upper,
       lower,

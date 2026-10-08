@@ -45,7 +45,7 @@
   let frame = null;
   let traces = null; // { subs, paths, total } when item-level pathways can be traced
   let lastPointer = null;
-  let selection = null; // { kind: 'flow' | 'node', key }
+  let selection = null; // { kind: 'flow' | 'node', key, paths, member, single }: traces pinned by the click
   let hover = null;
   let drag = null;
   let routeScope = 'all';
@@ -408,10 +408,10 @@
       title: 'Canvas & dragging',
       items: [
         { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover',
-          help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ to trace the single pathway or item under the pointer.',
+          help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ for the single pathway under the pointer, or Shift for the single item.',
           showIf: () => !!state.paths },
         { key: 'gatherTraces', target: 'style', type: 'checkbox', label: 'Gather traces in nodes',
-          help: 'Traced pathways close up into one contiguous bundle through each node they share, fanning back out to their strands at the node edges.',
+          help: 'Traced pathways close up into one contiguous bundle along the top or bottom of each node they share, fanning back out to their strands at the node edges.',
           showIf: () => !!state.paths && state.style.tracePaths },
         { key: 'substrands', target: 'style', type: 'checkbox', label: 'Substrand lines',
           help: 'Thin lines dividing each strand into its pathways, or into single items when the data has item ids.',
@@ -1042,16 +1042,17 @@
     return { kind: 'node', index: Number(el.dataset.node) };
   }
 
-  // Pathways to trace for a hover target: every pathway through the strand or node, or with
-  // Ctrl/⌘ the single pathway (or item) under the pointer. Null when tracing does not apply.
+  // Pathways to trace for a hover target: every pathway through the strand or node; with Ctrl/⌘
+  // the single pathway under the pointer; with Shift the single item (when items have ids). Null
+  // when tracing does not apply.
   function tracedPaths(target, event) {
     if (!traces || !target || !event) return null;
-    if (event.ctrlKey || event.metaKey) {
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
       const p = plotPoint(event);
       const hit = target.kind === 'flow'
         ? P.pathAt(layout, traces.subs, target.index, p.X, p.Y)
         : P.pathAtNode(layout, traces.subs, layout.nodes[target.index], p.X, p.Y);
-      return hit ? { paths: [hit.path], member: hit.member, single: true } : null;
+      return hit ? { paths: [hit.path], member: event.shiftKey ? hit.member : -1, single: true } : null;
     }
     const n = target.kind === 'node' ? layout.nodes[target.index] : null;
     const list = n
@@ -1079,7 +1080,8 @@
     let defs = '';
     let body = '';
     target.paths.forEach((pi, n) => {
-      const t = P.tracePolygon(layout, traces.subs, pi, target.single ? target.member : -1, slots);
+      const t = P.tracePolygon(layout, traces.subs, pi,
+        { member: target.single ? target.member : -1, slots });
       const xs = t.polygon.map((p) => p[0]);
       const x0 = Math.min(...xs);
       const x1 = Math.max(...xs);
@@ -1130,8 +1132,17 @@
     return selection.kind === 'flow' ? { kind: 'flow', index: sel.index } : { kind: 'node', index: sel.id };
   }
 
+  // The selection as a highlight target, with the pathways that were traced when it was clicked.
+  function pinnedTarget() {
+    const t = selectionTarget();
+    if (!t) return null;
+    return Object.assign(t, traces && selection.paths
+      ? { paths: selection.paths, member: selection.member, single: selection.single }
+      : { paths: null, member: -1, single: false });
+  }
+
   function applyHighlight() {
-    const active = (drag && drag.target) || hover;
+    const active = (drag && drag.target) || hover || pinnedTarget();
     const sets = highlightSets(active);
     svg.classList.toggle('dimmed', !!active);
     const traceLayer = svg.querySelector('.layer-traces');
@@ -1184,8 +1195,9 @@
     const rows = path.nodes.map((ni, s) => `<tr><td>${esc(setName(s))}</td><td>${esc(nodeDisplayName(nodeAtStage(s, ni)))}</td></tr>`).join('');
     const count = `<b>${fmtValue(path.weight)}</b> ${unitOf(path.weight)} on this pathway (${pct(path.weight, traces.total)} of all)` +
       (item && item.weight !== 1 ? ` · this one weighs <b>${fmtValue(item.weight)}</b>` : '');
+    const noIds = target.member >= 0 || path.members ? '' : ' (no item ids in this table, so Shift traces pathways too)';
     return `<h3 class="focus-head">${item ? esc(item.id) : 'One pathway'}</h3><table class="focus-table">${rows}</table>` +
-      `<p>${count}</p><p class="muted small">Release Ctrl/⌘ to trace every pathway through this ${target.kind === 'flow' ? 'strand' : 'node'}.</p>`;
+      `<p>${count}</p><p class="muted small">Without Ctrl/⌘ or Shift, every pathway through this ${target.kind === 'flow' ? 'strand' : 'node'} is traced${noIds}.</p>`;
   }
 
   // Where the traced pathways run: their weight through each node and strand, as counts and as
@@ -1206,8 +1218,9 @@
     }));
     const head = (title) => `<thead><tr><th>${title}</th><th class="num">${unit}</th><th class="num">share</th></tr></thead>`;
     const group = (title) => `<tr class="group"><th colspan="3">${esc(title)}</th></tr>`;
+    // The share bar fills an outlined box that stands for 100% of the traced total.
     const row = (label, w) => `<tr><td>${label}</td><td class="num">${fmtValue(w)}</td>` +
-      `<td class="num pct" style="--p:${(100 * w / total).toFixed(1)}%">${pct(w, total)}</td></tr>`;
+      `<td class="num"><div class="share" style="--p:${(100 * w / total).toFixed(1)}%">${pct(w, total)}</div></td></tr>`;
     const note = (text) => `<tr class="note"><td colspan="3">${text}</td></tr>`;
     const more = (n) => (n > 0 ? note(`… and ${n} more`) : '');
     const name = (s, i) => esc(nodeDisplayName(nodeAtStage(s, i)));
@@ -1230,11 +1243,11 @@
     });
     const top = list.slice().sort((a, b) => weight(b) - weight(a));
     const pathways = head('Pathway') + top.slice(0, TOP).map((pi) => row(esc(pathName(pi)), weight(pi))).join('') + more(top.length - TOP);
-    const single = list.some((pi) => traces.paths[pi].members) ? unitOf(1) : 'pathway';
+    const items = list.some((pi) => traces.paths[pi].members);
     return `<h3 class="focus-head">${list.length} pathway${list.length === 1 ? '' : 's'} · ${fmtValue(total)} ${unitOf(total)} ` +
       `<span class="muted">(${pct(total, traces.total)} of all)</span></h3>` +
       `<table class="focus-table">${nodes}</table><table class="focus-table">${strands}</table><table class="focus-table">${pathways}</table>` +
-      `<p class="muted small">Hold Ctrl/⌘ to trace the single ${single} under the pointer.</p>`;
+      `<p class="muted small">Hold Ctrl/⌘ to trace the single pathway under the pointer${items ? `, or Shift for the single ${unitOf(1)}` : ''}.</p>`;
   }
 
   // Hover details replace the inspector's content until the pointer leaves the plot, so nothing
@@ -1418,9 +1431,14 @@
     if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
     if (!finished.moved) {
       const t = finished.target;
-      selection = t.kind === 'flow'
-        ? { kind: 'flow', key: layout.flows[t.index].key }
-        : { kind: 'node', key: layout.nodes[t.index].key };
+      const shown = hover && hover.kind === t.kind && hover.index === t.index ? hover : null;
+      selection = {
+        kind: t.kind,
+        key: (t.kind === 'flow' ? layout.flows : layout.nodes)[t.index].key,
+        paths: shown && shown.paths,
+        member: shown ? shown.member : -1,
+        single: !!(shown && shown.single)
+      };
       applyHighlight();
       refreshInspector();
       return;
@@ -1431,7 +1449,7 @@
   function bindPlotEvents() {
     svg.addEventListener('pointerdown', startDrag);
     svg.addEventListener('pointermove', (event) => {
-      lastPointer = { clientX: event.clientX, clientY: event.clientY, ctrlKey: event.ctrlKey, metaKey: event.metaKey };
+      lastPointer = { clientX: event.clientX, clientY: event.clientY, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey };
       if (drag) {
         moveDrag(event);
         return;
@@ -1470,6 +1488,9 @@
     else obj[key] = value;
   };
 
+  // A selected strand or node keeps its hover details (and traced pathways) pinned above its editor.
+  const pinnedHtml = () => `<p class="pin-note muted small">Pinned · click empty space or press Esc to release</p>${hoverHtml(pinnedTarget())}`;
+
   function refreshInspector() {
     const host = $('#inspector-main');
     if (drag) return;
@@ -1478,7 +1499,7 @@
       host.innerHTML = '<h2>Inspector</h2><p class="muted">Hover a strand or node for details; click to select and edit it.</p>' +
         '<ul class="tips"><li>Drag a node to move it (Shift: vertical only, Alt: horizontal only).</li>' +
         '<li>Drag a strand up or down to reorder it in the stack at its nearer end.</li>' +
-        (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Ctrl/⌘ to trace the single pathway or item under the pointer.</li>' : '') +
+        (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Ctrl/⌘ to trace the single pathway under the pointer, or Shift for the single item. Click to pin the traces and breakdown.</li>' : '') +
         '<li>Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo, F fit view, Esc deselect.</li></ul>';
       return;
     }
@@ -1488,8 +1509,7 @@
       const b = layout.nodes[f.to];
       const mid = colors.mid[f.index];
       const midSet = Object.prototype.hasOwnProperty.call(state.midOverrides, f.key);
-      host.innerHTML = `<h2>Strand</h2><p><b>${esc(nodeDisplayName(a))}</b> → <b>${esc(nodeDisplayName(b))}</b></p>` +
-        `<p class="muted">${state.mode === 'graph' ? 'graph' : `stage ${f.stage + 1}`} · matrix [${f.i + 1}, ${f.j + 1}]</p>` +
+      host.innerHTML = pinnedHtml() + '<h3 class="edit-head">Edit strand</h3>' +
         `<div class="row"><label for="ins-value">Value</label><input id="ins-value" type="number" min="0" step="any" value="${f.value}"></div>` +
         colorEditor('flow', 'Color', colors.flow[f.index], !!state.flowOverrides[f.key]) +
         `<div class="row"><label for="ins-mid-on">Mid color</label><input id="ins-mid-on" type="checkbox"${mid.color ? ' checked' : ''}></div>` +
@@ -1533,8 +1553,7 @@
     const n = sel;
     const row = state.loc[n.id];
     const num = (v) => (v === null || v === undefined || v === '' ? '' : v);
-    host.innerHTML = `<h2>Node</h2><p><b>${esc(nodeDisplayName(n))}</b></p>` +
-      `<p class="muted">set ${n.set} · node ${n.node} · in ${fmtValue(n.inValue)} · out ${fmtValue(n.outValue)}</p>` +
+    host.innerHTML = pinnedHtml() + '<h3 class="edit-head">Edit node</h3>' +
       `<div class="row"><label for="ins-label">Label</label><input id="ins-label" type="text" value="${esc(row.label || '')}"></div>` +
       ['x', 'y', 'width', 'height', 'cex'].map((k) => `<div class="row"><label for="ins-${k}">${k}</label>` +
         `<input id="ins-${k}" data-field="${k}" type="number" step="any" value="${num(row[k])}" ` +
@@ -1989,10 +2008,10 @@
       });
     });
 
-    // Holding or releasing Ctrl/⌘ switches between one traced pathway and all of them.
+    // Holding or releasing Ctrl/⌘ or Shift switches between all traced pathways, one pathway and one item.
     const retrace = (e) => {
-      if (!hover || !lastPointer || drag || !['Control', 'Meta'].includes(e.key)) return;
-      lastPointer = Object.assign({}, lastPointer, { ctrlKey: e.ctrlKey, metaKey: e.metaKey });
+      if (!hover || !lastPointer || drag || !['Control', 'Meta', 'Shift'].includes(e.key)) return;
+      lastPointer = Object.assign({}, lastPointer, { ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey });
       setHover({ kind: hover.kind, index: hover.index }, lastPointer);
     };
     document.addEventListener('keyup', retrace);

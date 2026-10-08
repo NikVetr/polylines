@@ -118,8 +118,8 @@ test('members tile their substrand, can be hit and traced, and draw boundary lin
     const Y = f.lower[k][1] + (f.upper[k][1] - f.lower[k][1]) * t;
     assert.deepStrictEqual(SK.paths.pathAt(layout, subs, f.index, X, Y), { path: pi, member });
   });
-  const whole = SK.paths.tracePolygon(layout, subs, pi, -1);
-  const one = SK.paths.tracePolygon(layout, subs, pi, 1);
+  const whole = SK.paths.tracePolygon(layout, subs, pi);
+  const one = SK.paths.tracePolygon(layout, subs, pi, { member: 1 });
   assert.ok(Math.abs(one.thickness * 3 - whole.thickness) < 1e-9);
   // One line between each pair of neighbouring items in a strand.
   const lines = SK.paths.boundaryLines(layout, subs);
@@ -130,19 +130,31 @@ test('members tile their substrand, can be hit and traced, and draw boundary lin
   assert.ok(hit && hit.path >= 0 && hit.member >= 0);
 });
 
-test('gathered traces sit flush at the centre of every node they share', () => {
+test('gathered traces sit flush against a node edge at the centre of every node they share', () => {
   const r = T.build(T.parseTable(perPatient), { format: 'wide', id: 'patient_id', columns: ['a', 'b', 'c'] });
   const layout = buildLayout(r);
   const subs = SK.paths.substrands(layout, r.paths);
   // Trace the pathways leaving A: a subset of each later node's stack.
   const list = r.paths.map((p, pi) => (p.nodes[0] === 0 ? pi : -1)).filter((pi) => pi >= 0);
   const slots = SK.paths.gatherSlots(layout, subs, list);
-  slots.forEach((places) => {
+  slots.forEach((places, id) => {
     const spans = [...places.values()].sort((a, b) => a[0] - b[0]);
     spans.slice(1).forEach((span, i) => assert.ok(Math.abs(span[0] - spans[i][1]) < 1e-9));
+    // The bundle lines up with the node's bottom or top edge at its centre.
+    const n = layout.nodes[id];
+    const role = SK.shapes.nodeRole(n);
+    let edges;
+    if (role === 'interior') {
+      const shape = SK.shapes.interiorTrunk(layout, n);
+      edges = [SK.layout.pointAtX(shape.lower, n.X)[1], SK.layout.pointAtX(shape.upper, n.X)[1]];
+    } else {
+      const b = SK.shapes.bundle(layout, n, role === 'source' ? 'start' : 'end');
+      edges = [b.lowerY, b.upperY];
+    }
+    assert.ok(Math.abs(spans[0][0] - edges[0]) < 1e-9 || Math.abs(spans[spans.length - 1][1] - edges[1]) < 1e-9);
   });
   list.forEach((pi) => {
-    const t = SK.paths.tracePolygon(layout, subs, pi, -1, slots);
+    const t = SK.paths.tracePolygon(layout, subs, pi, { slots });
     const n = layout.nodes[t.flows[1].from];
     const [lo, up] = slots.get(n.id).get(pi);
     const near = (pts, y) => pts.filter((pt) => Math.abs(pt[1] - y) < 1e-9 && Math.abs(pt[0] - n.X) < 30).length;
