@@ -97,7 +97,7 @@
       table: 'patient_pathways.csv',
       importSpec: { format: 'wide', columns: ['diagnosis', 'treatment', 'response'], weight: 'patients', missing: 'drop' },
       importOptions: { order: 'appearance' },
-      labels: 'inside',
+      labels: 'above',
       params: { node_label_pad: 0.02 },
       style: { colorBy: 'source', palette: 'tableau', opacity: 0.8, gradient: true, gradientMode: 'path' },
       files: {
@@ -121,7 +121,7 @@
         columns: ['diagnosis', 'first treatment', 'response at 6 months', 'status at 2 years']
       },
       importOptions: { order: 'appearance' },
-      labels: 'inside',
+      labels: 'above',
       params: { node_label_pad: 0.02 },
       style: { colorBy: 'source', palette: 'tableau', opacity: 0.8, gradient: true, gradientMode: 'path', substrands: true },
       files: { 'patient_cohort.csv': cohortTable() }
@@ -132,7 +132,7 @@
       table: 'survey_waves.csv',
       importSpec: { format: 'long', id: 'respondent', stage: 'wave', category: 'answer', weight: null, stageOrder: 'auto', missing: 'keep' },
       importOptions: { order: 'appearance' },
-      labels: 'beside',
+      labels: 'above',
       style: { colorBy: 'target', palette: 'okabe-ito', opacity: 0.75, gradient: true, gradientMode: 'merge' },
       files: { 'survey_waves.csv': surveyTable() }
     },

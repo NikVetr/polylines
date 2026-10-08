@@ -27,6 +27,8 @@
     showPoints: false,
     nodeSums: false,
     fontSize: 13,
+    labelPosition: 'auto',
+    labelColorBy: 'single',
     labelColor: '#1F2937',
     canvasWidth: null,
     canvasHeight: null,
@@ -194,7 +196,10 @@
       if (!state.style.labels || !text) return;
       const size = m(text, n.cex, n.font);
       const role = S.nodeRole(n);
-      if (n.hasLabel && n.widthPx > 0) {
+      if (state.style.labelPosition === 'above') {
+        const pos = R.labelPlacement(n, state.style, state.style.fontSize * n.cex);
+        out.push([pos.X - size.width / 2, pos.Y + size.height], [pos.X + size.width / 2, pos.Y + size.height]);
+      } else if (n.hasLabel && n.widthPx > 0) {
         out.push([n.X - size.width / 2, n.Y], [n.X + size.width / 2, n.Y]);
       } else if (role === 'source') {
         out.push([n.X - 9 - size.width, n.Y]);
@@ -399,7 +404,12 @@
         { key: 'showIndices', target: 'style', type: 'checkbox', label: 'Label unlabeled nodes by index',
           showIf: () => state.style.labels },
         { key: 'fontSize', target: 'style', type: 'number', label: 'Font size (px)', min: 4, step: 0.5, fit: true },
-        { key: 'labelColor', target: 'style', type: 'color', label: 'Label color' },
+        { key: 'labelPosition', target: 'style', type: 'select', label: 'Label position',
+          options: [['auto', 'in node bodies, else beside'], ['above', 'above nodes']],
+          help: 'Above nodes, labels leave node bodies solid instead of fading them to a clear centre.' },
+        { key: 'labelColorBy', target: 'style', type: 'select', label: 'Label color by',
+          options: [['single', 'one color'], ['node', 'darker node color']] },
+        { key: 'labelColor', target: 'style', type: 'color', label: 'Label color', showIf: () => state.style.labelColorBy === 'single' },
         { key: 'showPoints', target: 'style', type: 'checkbox', label: 'Node points' },
         { key: 'nodeSums', target: 'style', type: 'checkbox', label: 'Node total bars' }
       ]
@@ -954,7 +964,8 @@
   }
 
   // Default loc: node sets in evenly spaced columns, stacked to fill most of the height.
-  // labels: "inside" (label-derived node bodies), "beside" (zero-width nodes) or "none".
+  // labels: "above" (labels above solid nodes a tenth of a column gap wide), "inside"
+  // (label-derived node bodies), "beside" (zero-width nodes) or "none".
   function autoLocate(options) {
     const labels = (options && options.labels) || 'inside';
     const sets = nodeSets();
@@ -978,6 +989,7 @@
         const row = { set: s + 1, node: k + 1, x: round(s * spacing), y: round(Y / H) };
         if (n.label && labels !== 'none') row.label = n.label;
         if (n.label && labels === 'beside') row.width = 0;
+        if (labels === 'above') row.width = round(0.1 * spacing);
         if (n.id !== undefined) rowsByGraphId[n.id] = row;
         else loc.push(row);
       });
@@ -992,6 +1004,10 @@
     const opts = options || {};
     const style = Object.assign({}, state.style);
     if (style.colorBy === 'file') style.colorBy = 'source';
+    if (opts.labels) {
+      style.labelPosition = opts.labels === 'above' ? 'above' : 'auto';
+      style.labelColorBy = opts.labels === 'above' ? 'node' : 'single';
+    }
     state = blankState();
     state.style = style;
     state.mode = result.mode;
@@ -1081,7 +1097,7 @@
     let body = '';
     target.paths.forEach((pi, n) => {
       const t = P.tracePolygon(layout, traces.subs, pi,
-        { member: target.single ? target.member : -1, slots });
+        { member: target.single ? target.member : -1, slots, fadeLabels: state.style.labelPosition !== 'above' });
       const xs = t.polygon.map((p) => p[0]);
       const x0 = Math.min(...xs);
       const x1 = Math.max(...xs);
@@ -1734,6 +1750,8 @@
       ...(scaled ? [`value_scale <- ${rValue(state.valueScale)}  # strand thickness (x units) per unit of value`] : []),
       `thic <- ${readThic}`,
       'loc <- read.csv("loc.csv", stringsAsFactors = FALSE)',
+      // Labels inside nodes fade their bodies in R too; labels above are drawn separately below.
+      ...(style.labelPosition === 'above' ? ['loc$label <- NA  # labels are drawn above the nodes, so node bodies stay solid'] : []),
       graph ? 'col <- read_colors("colors.csv")' : `col <- lapply(c(${files.colors.map(rString).join(', ')}), read_colors)`
     ];
     if (files.mids.length) {
@@ -1800,28 +1818,25 @@
     lines.push(`plot_sankey_ribbons(\n  sankey,\n  ${plotArgs.join(',\n  ')}\n)`);
     const labeled = style.labels ? layout.nodes.filter((n) => n.hasLabel) : [];
     if (labeled.length) {
-      // Same placement as the webapp: centred in node bodies, else left of sources (pos 2),
-      // right of sinks (pos 4) and centred above flow-through bundles (pos 0 = centred).
+      // Same placement as the webapp (render.js labelPlacement): centred text (pos 0), or left of
+      // sources (pos 2) and right of sinks (pos 4).
       const rows = labeled.map((n) => {
-        const role = S.nodeRole(n);
-        if (n.widthPx > 0 || role === 'isolated') return [n.x, n.y, n, 0];
-        if (role === 'source') return [n.x, n.y, n, 2];
-        if (role === 'sink') return [n.x, n.y, n, 4];
-        const above = n.Y + Math.max(n.inPx, n.outPx) / 2 + 0.8 * style.fontSize * n.cex;
-        return [n.x, layout.tf.y(above), n, 0];
+        const pos = R.labelPlacement(n, style, style.fontSize * n.cex);
+        const side = pos.anchor === 'end' ? 2 : pos.anchor === 'start' ? 4 : 0;
+        return [n.x, side ? n.y : layout.tf.y(pos.Y), n, side, C.toHex(R.labelColor(n, colors, style))];
       });
       const col = (f) => rows.map(f).join(', ');
       lines.push(`labels <- data.frame(\n  x = c(${col((r) => rValue(r[0]))}),\n  y = c(${col((r) => rValue(r[1]))}),\n` +
         `  label = c(${col((r) => rString(r[2].label))}),\n  cex = c(${col((r) => rValue(r[2].cex))}),\n` +
-        `  font = c(${col((r) => r[2].font)}),\n  pos = c(${col((r) => r[3])}),\n  stringsAsFactors = FALSE\n)`,
-      'centred <- labels$pos == 0',
-      `label_col <- ${rString(C.toHex(C.parse(style.labelColor)))}`);
+        `  font = c(${col((r) => r[2].font)}),\n  pos = c(${col((r) => r[3])}),\n` +
+        `  col = c(${col((r) => rString(r[4]))}),\n  stringsAsFactors = FALSE\n)`,
+      'centred <- labels$pos == 0');
       // text() rejects zero-length labels, so only emit the calls that have rows.
       if (rows.some((r) => r[3] === 0)) {
-        lines.push('text(labels$x[centred], labels$y[centred], labels$label[centred], cex = labels$cex[centred], font = labels$font[centred], col = label_col)');
+        lines.push('text(labels$x[centred], labels$y[centred], labels$label[centred], cex = labels$cex[centred], font = labels$font[centred], col = labels$col[centred])');
       }
       if (rows.some((r) => r[3] !== 0)) {
-        lines.push('text(labels$x[!centred], labels$y[!centred], labels$label[!centred], pos = labels$pos[!centred], cex = labels$cex[!centred], font = labels$font[!centred], col = label_col)');
+        lines.push('text(labels$x[!centred], labels$y[!centred], labels$label[!centred], pos = labels$pos[!centred], cex = labels$cex[!centred], font = labels$font[!centred], col = labels$col[!centred])');
       }
     }
     if (style.showPoints) lines.push('points(sankey$nodes$x, sankey$nodes$y, pch = 21, bg = "white", lwd = 2)');

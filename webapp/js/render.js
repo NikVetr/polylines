@@ -75,6 +75,30 @@
     return { flow, mid, node, merge, bg: bgParsed, flatBg };
   }
 
+  // ---------- labels ----------
+
+  // Labels inside a node fade its body to a transparent centre; labels drawn above leave it solid.
+  const labelFades = (n, style) => n.hasLabel && style.labelPosition !== 'above';
+
+  // Where a node's label goes (plot pixels) and its text anchor. With labelPosition "above", above
+  // every node; otherwise centred in a node body, left of sources, right of sinks and above
+  // flow-through nodes.
+  function labelPlacement(n, style, textSize) {
+    const above = { X: n.X, Y: n.Y + Math.max(n.inPx, n.outPx) / 2 + 0.8 * textSize, anchor: 'middle' };
+    if (style.labelPosition === 'above') return above;
+    if (n.hasLabel && n.widthPx > 0) return { X: n.X, Y: n.Y, anchor: 'middle' };
+    const role = S.nodeRole(n);
+    if (role === 'source') return { X: n.X - 7, Y: n.Y, anchor: 'end' };
+    if (role === 'sink') return { X: n.X + 7, Y: n.Y, anchor: 'start' };
+    return above;
+  }
+
+  // One label color, or a darker shade of each node's color.
+  function labelColor(n, colors, style) {
+    if (style.labelColorBy === 'node') return C.mix(C.opaque(colors.node[n.id]), { r: 0, g: 0, b: 0, a: 1 }, 0.45);
+    return C.parse(style.labelColor);
+  }
+
   // ---------- svg helpers ----------
 
   function makeFrame(layout, frame) {
@@ -140,7 +164,7 @@
       const inX = shape.inFaceX <= shape.outFaceX ? shape.x0 : shape.x1;
       const outX = inX === shape.x0 ? shape.x1 : shape.x0;
       // The fade to a transparent centre is a label body, so it needs a node with width.
-      const labelBody = n.hasLabel && n.widthPx > 0 && shape.x1 - shape.x0 > 1e-9;
+      const labelBody = labelFades(n, style) && n.widthPx > 0 && shape.x1 - shape.x0 > 1e-9;
       if (!style.gradient) return labelBody ? [[inX, merge], [n.X, clear], [outX, merge]] : [[inX, merge], [outX, merge]];
       // Node color at the band edges (where strands arrive), trunk color across the node faces.
       return [[inX, node], [shape.inFaceX, merge]].concat(labelBody ? [[n.X, clear]] : [], [[shape.outFaceX, merge], [outX, node]]);
@@ -151,7 +175,7 @@
     const inward = b.faceX + (side === 'start' ? b.dir : -b.dir) * Math.max(layout.mergeLength, 0);
     const body = S.endpointBody(layout, n, side, 0);
     const stops = [[inward, style.gradient ? node : merge], [b.faceX, merge]];
-    if (body) stops.push(n.hasLabel ? [n.X, clear] : [body.outerX, merge]);
+    if (body) stops.push(labelFades(n, style) ? [n.X, clear] : [body.outerX, merge]);
     return stops;
   }
 
@@ -261,7 +285,7 @@
         const shape = S.interiorTrunk(layout, n);
         if (!shape) return;
         const span = shape.x1 - shape.x0;
-        const labelBody = n.hasLabel && n.widthPx > 0 && span > 1e-9;
+        const labelBody = labelFades(n, style) && n.widthPx > 0 && span > 1e-9;
         if ((style.gradient || labelBody) && span > 1e-9) {
           const stops = nodeStops(layout, n, colors, style).map(([x, c]) => [(x - shape.x0) / span, c]);
           nodeFill(n, 'i', shape.polygon, shape.x0, shape.x1, stops.sort((a, b) => a[0] - b[0]));
@@ -300,7 +324,7 @@
       if (body) {
         const tc = Math.abs(n.X - body.faceX) / Math.abs(body.outerX - body.faceX);
         // The trunk meets the body at the face in the trunk (merge) color, so the body starts there too.
-        if (n.hasLabel) {
+        if (labelFades(n, style)) {
           nodeFill(n, 'b', body.polygon, body.faceX, body.outerX,
             [[0, mergeColor], [tc, C.withAlpha(mergeColor, 0)], [1, C.withAlpha(mergeColor, 0)]]);
         } else {
@@ -341,7 +365,6 @@
     }
 
     layout.nodes.forEach((n) => {
-      const role = S.nodeRole(n);
       const nodePaint = C.paint(C.opaque(colors.node[n.id]));
       if (style.showPoints) {
         dots.push(`<circle class="node-dot" data-node="${n.id}" cx="${fmt(map.x(n.X))}" cy="${fmt(map.y(n.Y))}" r="4.5" ` +
@@ -350,17 +373,9 @@
       const text = n.hasLabel ? n.label : (style.showIndices ? String(n.node) : '');
       if (!style.labels || !text) return;
       const font = fontFor(n, style);
-      let x = map.x(n.X);
-      let y = map.y(n.Y);
-      let anchor = 'middle';
-      const inside = n.hasLabel && n.widthPx > 0;
-      if (!inside) {
-        if (role === 'source') { x -= 7; anchor = 'end'; }
-        else if (role === 'sink') { x += 7; anchor = 'start'; }
-        else { y -= Math.max(n.inPx, n.outPx) / 2 + font.size * 0.8; }
-      }
-      const labelPaint = C.paint(C.parse(style.labelColor));
-      labels.push(`<text class="node-label" data-node="${n.id}" x="${fmt(x)}" y="${fmt(y)}" text-anchor="${anchor}" ` +
+      const pos = labelPlacement(n, style, font.size);
+      const labelPaint = C.paint(labelColor(n, colors, style));
+      labels.push(`<text class="node-label" data-node="${n.id}" x="${fmt(map.x(pos.X))}" y="${fmt(map.y(pos.Y))}" text-anchor="${pos.anchor}" ` +
         `dominant-baseline="central" font-family="${FONT_FAMILY}" font-size="${fmt(font.size)}" ` +
         `font-weight="${font.weight}" font-style="${font.slant}" fill="${labelPaint.color}" ` +
         `fill-opacity="${labelPaint.opacity}">${esc(text)}</text>`);
@@ -394,6 +409,6 @@
     };
   }
 
-  SK.render = { render, resolveColors, makeMeasure, traceStops, FONT_FAMILY };
+  SK.render = { render, resolveColors, makeMeasure, traceStops, labelPlacement, labelColor, FONT_FAMILY };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

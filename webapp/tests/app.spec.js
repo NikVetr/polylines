@@ -442,11 +442,11 @@ test('hovering traces every pathway through a strand or node; Ctrl traces the on
   // Traced nodes fade like the rest; only their labels stay in focus.
   await expect(page.locator('#plot .trunk.hl')).toHaveCount(0);
   await expect(page.locator('#plot .node-label.hl')).toHaveCount(7);
-  // Traces run on into the sink's label body, fading out at its centre.
+  // Labels sit above solid nodes, so traces run on through the sink's whole body.
   const reach = await page.evaluate(() => {
     const n = window.SankeyApp.layout.nodes.find((x) => x.label === 'Remission');
     const right = Math.max(...[...document.querySelectorAll('#plot .trace')].map((el) => { const b = el.getBBox(); return b.x + b.width; }));
-    return right - (18 + n.X);
+    return right - (18 + n.X + n.widthPx / 2);
   });
   expect(Math.abs(reach)).toBeLessThan(1);
   await page.mouse.move(5, 5);
@@ -465,6 +465,28 @@ test('clicking a node pins its traces and breakdown in the inspector until Esc',
   await page.keyboard.press('Escape');
   await expect(page.locator('#plot .trace')).toHaveCount(0);
   await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
+});
+
+test('imported tables label nodes above solid bodies in darker node colors', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const s = await state(page);
+  expect(s.style.labelPosition).toBe('above');
+  expect(s.style.labelColorBy).toBe('node');
+  const check = await page.evaluate(() => {
+    const L = window.SankeyApp.layout;
+    const n = L.nodes.find((x) => x.label === 'Surgery');
+    const label = document.querySelector(`#plot .node-label[data-node="${n.id}"]`);
+    const top = document.querySelector('#plot').getBoundingClientRect().height - 18 - (n.Y + Math.max(n.inPx, n.outPx) / 2);
+    const body = document.querySelector(`#plot linearGradient[id="gn${n.id}_i"]`);
+    return {
+      above: Number(label.getAttribute('y')) < top,
+      fill: label.getAttribute('fill'),
+      clear: body ? [...body.querySelectorAll('stop')].some((st) => st.getAttribute('stop-opacity') === '0') : false
+    };
+  });
+  expect(check.above).toBe(true);
+  expect(check.fill).not.toBe('#1F2937');
+  expect(check.clear).toBe(false);
 });
 
 test('one-row-per-patient data traces single patients and draws substrand lines', async ({ page }) => {

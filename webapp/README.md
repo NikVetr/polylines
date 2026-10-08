@@ -37,7 +37,7 @@ The layout and column roles are guessed from names and types, and everything can
 - Missing values: drop the row, or keep it as a "(missing)" node.
 - Node order: first appearance, largest first, or alphabetical.
 - Group small nodes: merge nodes below a minimum share of their stage, or outside the top N, into "Other".
-- Labels: inside node bodies, beside nodes, or none.
+- Labels: above nodes (default: solid nodes a tenth of a column gap wide, labels in a darker shade of each node's color), inside node bodies (which fade to a clear centre behind the label), beside nodes, or none. Label position and color can be changed later under Borders & labels, and the R bundle draws labels the same way.
 
 Errors (cycles, duplicated item/stage pairs, non-numeric weights) are shown before anything is built.
 
