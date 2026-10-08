@@ -118,10 +118,12 @@
     const end = colors.node[f.to];
     const mid = colors.mid[f.index];
     const thread = mid.provided ? mid.color : colors.flow[f.index];
-    if (!thread) return [[0, start], [1, end]];
-    if (style.gradientMode === 'path') return [[0, start], [0.5, thread], [1, end]];
+    // Stops run between the band edges (one merge length in from each node face), so a strand
+    // reaches its node color exactly where the opaque merge band starts, with no color step.
     const span = Math.abs(f.endX - f.startX);
-    const m = Math.min(layout.mergeLength / span, 0.25);
+    const m = Math.min(Math.max(layout.mergeLength, 0) / span, 0.25);
+    if (!thread) return [[m, start], [1 - m, end]];
+    if (style.gradientMode === 'path') return [[m, start], [0.5, thread], [1 - m, end]];
     if (!(m > 0)) return [[0, thread], [1, thread]];
     return [[m, start], [2 * m, thread], [1 - 2 * m, thread], [1 - m, end]];
   }
@@ -205,11 +207,19 @@
       if (role === 'interior') {
         const shape = S.interiorTrunk(layout, n);
         if (!shape) return;
+        const span = shape.x1 - shape.x0;
+        const at = (x) => (x - shape.x0) / span;
         // The fade to a transparent centre is a label body, so it needs a node with width.
-        if (n.hasLabel && n.widthPx > 0 && shape.x1 - shape.x0 > 1e-9) {
-          const tc = (n.X - shape.x0) / (shape.x1 - shape.x0);
+        const labelBody = n.hasLabel && n.widthPx > 0 && span > 1e-9;
+        if (style.gradient && span > 1e-9) {
+          // Node color at the band edges (where strands arrive), trunk color across the node faces.
+          const inEdge = at(shape.inFaceX) <= at(shape.outFaceX) ? 0 : 1;
+          const stops = [[inEdge, nodeColor], [at(shape.inFaceX), mergeColor], [at(shape.outFaceX), mergeColor], [1 - inEdge, nodeColor]];
+          if (labelBody) stops.push([at(n.X), C.withAlpha(mergeColor, 0)]);
+          nodeFill(n, 'i', shape.polygon, shape.x0, shape.x1, stops.sort((a, b) => a[0] - b[0]));
+        } else if (labelBody) {
           nodeFill(n, 'i', shape.polygon, shape.x0, shape.x1,
-            [[0, mergeColor], [tc, C.withAlpha(mergeColor, 0)], [1, mergeColor]]);
+            [[0, mergeColor], [at(n.X), C.withAlpha(mergeColor, 0)], [1, mergeColor]]);
         } else {
           solidNode(n, shape.polygon, mergeColor);
         }
@@ -243,11 +253,10 @@
       const body = S.endpointBody(layout, n, side);
       if (body) {
         const tc = Math.abs(n.X - body.faceX) / Math.abs(body.outerX - body.faceX);
+        // The trunk meets the body at the face in the trunk (merge) color, so the body starts there too.
         if (n.hasLabel) {
           nodeFill(n, 'b', body.polygon, body.faceX, body.outerX,
-            [[0, nodeColor], [tc, C.withAlpha(nodeColor, 0)], [1, C.withAlpha(nodeColor, 0)]]);
-        } else if (style.gradient) {
-          nodeFill(n, 'b', body.polygon, body.faceX, body.outerX, [[0, nodeColor], [1, mergeColor]]);
+            [[0, mergeColor], [tc, C.withAlpha(mergeColor, 0)], [1, C.withAlpha(mergeColor, 0)]]);
         } else {
           solidNode(n, body.polygon, mergeColor);
         }

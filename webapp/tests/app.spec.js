@@ -319,6 +319,25 @@ test('imports keep numeric category names and later matrices reset the value sca
   expect(s.loc.every((r) => !r.label)).toBe(true);
 });
 
+test('path gradients reach their node colors where strands meet the merge band', async ({ page }) => {
+  const stops = await page.evaluate(() => {
+    const app = window.SankeyApp;
+    app.state.style.gradientMode = 'path';
+    app.update();
+    const L = app.layout;
+    return L.flows.map((f) => {
+      const offsets = [...document.querySelectorAll(`#gs${f.index} stop`)].map((s) => parseFloat(s.getAttribute('offset')));
+      return { first: offsets[0], last: offsets[offsets.length - 1], band: 100 * Math.min(L.mergeLength / Math.abs(f.endX - f.startX), 0.25) };
+    });
+  });
+  expect(stops.length).toBe(14);
+  stops.forEach((s) => {
+    expect(s.band).toBeGreaterThan(0);
+    expect(Math.abs(s.first - s.band)).toBeLessThan(0.02);
+    expect(Math.abs(s.last - (100 - s.band))).toBeLessThan(0.02);
+  });
+});
+
 test('works when opened directly from disk', async ({ browser }) => {
   const page = await browser.newPage();
   await page.goto(`file://${path.resolve(__dirname, '..', 'index.html')}`);
