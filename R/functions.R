@@ -2788,25 +2788,30 @@ draw_x_color_stops_polygon <- function(coords, x_stops, cols, steps = 24,
   invisible(NULL)
 }
 
-default_fill_overlap <- function(draw_border, gradient_slices, merge_length, cols) {
-  if(draw_border || (gradient_slices > 1 && colors_have_alpha(cols))) {
+default_fill_overlap <- function(draw_border, gradient_slices, merge_length, cols, flatten_trunks = TRUE) {
+  # Opaque (flattened) trunks hide the overlap, so translucent strands can safely run under them.
+  if(draw_border || (!isTRUE(flatten_trunks) && gradient_slices > 1 && colors_have_alpha(cols))) {
     return(0)
   }
   max(merge_length * 0.02, 1e-4)
 }
 
+# band: path distances where the strand leaves its start trunk and enters its end trunk. Colors
+# are positioned between them, so a strand shows exactly its node color where it meets the
+# opaque trunk instead of stepping to a color part-way along the path.
 flow_gradient_color <- function(sankey, flow_cols, node_cols, flow_ind, distance,
                                 mid_cols = NULL,
-                                merge_length, gradient_mode = c("merge", "path")) {
+                                merge_length, gradient_mode = c("merge", "path"),
+                                band = c(0, sankey$path_lengths[flow_ind])) {
   gradient_mode <- match.arg(gradient_mode)
-  path_length <- sankey$path_lengths[flow_ind]
   thread_col <- if(is.null(mid_cols)) flow_cols[flow_ind] else mid_cols[flow_ind]
-  if(path_length <= 0) {
+  span <- band[2] - band[1]
+  if(sankey$path_lengths[flow_ind] <= 0 || span <= 0) {
     return(if(is.na(thread_col)) node_cols$start[flow_ind] else thread_col)
   }
+  t <- min(max((distance - band[1]) / span, 0), 1)
 
   if(gradient_mode == "path") {
-    t <- min(max(distance / path_length, 0), 1)
     if(is.na(thread_col)) {
       return(interpolate_color(node_cols$start[flow_ind], node_cols$end[flow_ind], t))
     }
@@ -2817,20 +2822,16 @@ flow_gradient_color <- function(sankey, flow_cols, node_cols, flow_ind, distance
   }
 
   if(is.na(thread_col)) {
-    return(interpolate_color(node_cols$start[flow_ind], node_cols$end[flow_ind], distance / path_length))
+    return(interpolate_color(node_cols$start[flow_ind], node_cols$end[flow_ind], t))
   }
   if(merge_length <= 0) {
     return(thread_col)
   }
-  if(distance <= merge_length) {
-    return(interpolate_color(node_cols$start[flow_ind], thread_col, distance / merge_length))
+  if(distance - band[1] <= merge_length) {
+    return(interpolate_color(node_cols$start[flow_ind], thread_col, (distance - band[1]) / merge_length))
   }
-  if(distance >= path_length - merge_length) {
-    return(interpolate_color(
-      thread_col,
-      node_cols$end[flow_ind],
-      (distance - (path_length - merge_length)) / merge_length
-    ))
+  if(band[2] - distance <= merge_length) {
+    return(interpolate_color(thread_col, node_cols$end[flow_ind], 1 - (band[2] - distance) / merge_length))
   }
   thread_col
 }
@@ -3004,6 +3005,17 @@ draw_sankey_fill_layer <- function(sankey, fill_cols, combine = TRUE,
     stop("`gradient_slices` must be a single finite number >= 1.", call. = FALSE)
   }
   gradient_slices <- as.integer(round(gradient_slices))
+  # Strand gradients run between node (endpoint) colors; merge_cols stand in when none are given.
+  # Trunks use the same colors at their inner edges, so strands meet them without a color step.
+  gradient_node_cols <- if(gradient_slices == 1) {
+    NULL
+  } else if(!is.null(endpoint_cols)) {
+    endpoint_cols
+  } else if(is.null(merge_cols)) {
+    flow_node_colors(sankey, fill_cols)
+  } else {
+    merge_cols
+  }
 
   if(gradient_slices == 1) {
     if(merge_length <= 0 && combine && length(unique(fill_cols)) == 1 && length(fill_border) == 1) {
@@ -3029,17 +3041,18 @@ draw_sankey_fill_layer <- function(sankey, fill_cols, combine = TRUE,
       }
     }
   } else {
-    # Strand gradients run between node (endpoint) colors; merge_cols stand in when none are given.
-    node_cols <- if(!is.null(endpoint_cols)) {
-      endpoint_cols
-    } else if(is.null(merge_cols)) {
-      flow_node_colors(sankey, fill_cols)
-    } else {
-      merge_cols
-    }
     for(k in seq_along(sankey$centerlines)) {
+      centerline <- sankey$centerlines[[k]]
+      distances <- edge_distances(centerline, sankey$xyr)
+      band <- c(0, sankey$path_lengths[k])
       if(merge_length > 0 && sankey$path_lengths[k] > 2 * merge_length) {
         xcuts <- flow_x_cuts(sankey, k, merge_length, fill_overlap)
+        # The trunks reach merge_length + fill_overlap in from each node face.
+        band_x <- flow_x_cuts(sankey, k, merge_length + fill_overlap)
+        band <- sort(c(
+          distance_at_x(centerline, distances, band_x[["start"]]),
+          distance_at_x(centerline, distances, band_x[["end"]])
+        ))
       } else {
         xcuts <- sort(c(
           start = sankey$flows$start_x[k],
@@ -3047,9 +3060,14 @@ draw_sankey_fill_layer <- function(sankey, fill_cols, combine = TRUE,
         ))
       }
       breaks_x <- seq(xcuts["start"], xcuts["end"], length.out = gradient_slices + 1)
-      centerline <- sankey$centerlines[[k]]
-      distances <- edge_distances(centerline, sankey$xyr)
-      for(i in seq_len(gradient_slices)) {
+      if(identical(gradient_mode, "merge") && merge_length > 0 && band[1] > 0) {
+        # Merge-mode blends span one merge length past each band edge; give them their own slices.
+        dir <- sign(sankey$flows$end_x[k] - sankey$flows$start_x[k])
+        zone <- function(x0, toward) seq(x0, x0 + toward * merge_length, length.out = 17)
+        extra <- c(zone(band_x[["start"]], dir), zone(band_x[["end"]], -dir))
+        breaks_x <- sort(unique(c(breaks_x, extra[extra >= min(xcuts) & extra <= max(xcuts)])))
+      }
+      for(i in seq_len(length(breaks_x) - 1)) {
         coords <- ribbon_slice_polygon_by_x(sankey, k, breaks_x[i], breaks_x[i + 1])
         if(is.null(coords)) {
           next
@@ -3061,12 +3079,13 @@ draw_sankey_fill_layer <- function(sankey, fill_cols, combine = TRUE,
           col = flow_gradient_color(
             sankey,
             fill_cols,
-            node_cols,
+            gradient_node_cols,
             k,
             mid,
             mid_cols = mid_cols,
             merge_length = merge_length,
-            gradient_mode = gradient_mode
+            gradient_mode = gradient_mode,
+            band = band
           ),
           border = NA,
           xpd = NA,
@@ -3085,7 +3104,8 @@ draw_sankey_fill_layer <- function(sankey, fill_cols, combine = TRUE,
       trunk_end = trunk_end,
       flatten_trunks = flatten_trunks,
       trunk_bg = trunk_bg,
-      gradient_slices = gradient_slices
+      gradient_slices = gradient_slices,
+      merge_length = merge_length
     )
     draw_node_trunk_fills(
       sankey,
@@ -3096,12 +3116,14 @@ draw_sankey_fill_layer <- function(sankey, fill_cols, combine = TRUE,
       flatten_trunks = flatten_trunks,
       trunk_bg = trunk_bg,
       merge_cols = merge_cols,
+      endpoint_cols = gradient_node_cols,
       gradient_slices = gradient_slices
     )
     draw_graph_interior_trunks(
       sankey,
       flow_cols = fill_cols,
       merge_cols = merge_cols,
+      endpoint_cols = gradient_node_cols,
       merge_length = merge_length,
       fill_overlap = fill_overlap,
       flatten_trunks = flatten_trunks,
@@ -3284,7 +3306,9 @@ node_width_bridge_curve_body <- function(p0, p1, node = NULL, side = c("lower", 
   )
 }
 
-endpoint_node_body_polygon <- function(sankey, node, flow_inds, side) {
+# overlap (x units) pushes the fill polygon's face edge under the merge trunk, so the two
+# antialiased edges do not leave a light seam at the node face; borders stay at the face.
+endpoint_node_body_polygon <- function(sankey, node, flow_inds, side, overlap = 0) {
   if(is.null(node$node_width) || !is.finite(node$node_width) || node$node_width <= 0) {
     return(NULL)
   }
@@ -3318,12 +3342,15 @@ endpoint_node_body_polygon <- function(sankey, node, flow_inds, side) {
     node$x - label_half_width
   }
   transition_x <- min(max(transition_x, min(face_x, outer_x)), max(face_x, outer_x))
+  fill_face_x <- face_x + sign(face_x - outer_x) * max(overlap, 0)
 
   coords <- if(face_x > outer_x) {
     rbind(
       c(x = outer_x, y = outer_y["lower"]),
       c(x = transition_x, y = outer_y["lower"]),
       c(x = face_x, y = lower$y),
+      c(x = fill_face_x, y = lower$y),
+      c(x = fill_face_x, y = upper$y),
       c(x = face_x, y = upper$y),
       c(x = transition_x, y = outer_y["upper"]),
       c(x = outer_x, y = outer_y["upper"]),
@@ -3331,13 +3358,15 @@ endpoint_node_body_polygon <- function(sankey, node, flow_inds, side) {
     )
   } else {
     rbind(
+      c(x = fill_face_x, y = lower$y),
       c(x = face_x, y = lower$y),
       c(x = transition_x, y = outer_y["lower"]),
       c(x = outer_x, y = outer_y["lower"]),
       c(x = outer_x, y = outer_y["upper"]),
       c(x = transition_x, y = outer_y["upper"]),
       c(x = face_x, y = upper$y),
-      c(x = face_x, y = lower$y)
+      c(x = fill_face_x, y = upper$y),
+      c(x = fill_face_x, y = lower$y)
     )
   }
   colnames(coords) <- c("x", "y")
@@ -3394,7 +3423,14 @@ draw_endpoint_node_bodies <- function(sankey, flow_cols, merge_cols,
                                       trunk_start = TRUE, trunk_end = TRUE,
                                       flatten_trunks = TRUE,
                                       trunk_bg = par("bg"),
-                                      gradient_slices = 24) {
+                                      gradient_slices = 24,
+                                      merge_length = 0) {
+  # Opaque trunks hide a sliver of body pushed under them (about 0.02 inch), removing the seam.
+  overlap <- if(isTRUE(flatten_trunks) && merge_length > 0) {
+    min(0.02 * diff(par("usr")[1:2]) / par("pin")[1], merge_length)
+  } else {
+    0
+  }
   node_flow_id <- function(nodes, i) {
     if(inherits(sankey, "sankey_graph") && "id" %in% names(nodes)) nodes$id[i] else nodes$node[i]
   }
@@ -3412,46 +3448,35 @@ draw_endpoint_node_bodies <- function(sankey, flow_cols, merge_cols,
       if(length(flow_inds) == 0) {
         next
       }
-      coords <- endpoint_node_body_polygon(sankey, nodes[i, ], flow_inds, side)
+      coords <- endpoint_node_body_polygon(sankey, nodes[i, ], flow_inds, side, overlap = overlap)
       if(is.null(coords)) {
         next
       }
-      outer_col <- if(is.null(merge_cols)) {
+      # The trunk meets the body at the node face in its merge color, so the body continues it.
+      body_col <- if(is.null(merge_cols)) {
         node_merge_color(sankey, flow_cols, flow_inds)
       } else {
         merge_cols[[merge_side]][flow_inds[1]]
       }
-      face_col <- node_merge_color(sankey, flow_cols, flow_inds)
-      x_rng <- range(coords[, "x"])
-      face_x <- attr(coords, "face_x", exact = TRUE)
-      face_is_low <- is.null(face_x) || face_x <= mean(x_rng)
-      low_col <- if(face_is_low) face_col else outer_col
-      high_col <- if(face_is_low) outer_col else face_col
       if(node_has_user_label(nodes[i, ])) {
-        midpoint_col <- transparent_color(face_col)
+        x_rng <- range(coords[, "x"])
+        face_x <- attr(coords, "face_x", exact = TRUE)
+        face_is_low <- face_x <= mean(x_rng)
+        midpoint_col <- transparent_color(body_col)
         draw_x_color_stops_polygon(
           coords,
           c(x_rng[1], nodes$x[i], x_rng[2]),
           if(face_is_low) {
-            c(face_col, midpoint_col, midpoint_col)
+            c(body_col, midpoint_col, midpoint_col)
           } else {
-            c(midpoint_col, midpoint_col, face_col)
+            c(midpoint_col, midpoint_col, body_col)
           },
           steps = max(24L, gradient_slices),
           flatten = flatten_trunks,
           bg = trunk_bg
         )
-      } else if(gradient_slices > 1 || !identical(outer_col, face_col)) {
-        draw_x_gradient_polygon(
-          coords,
-          low_col,
-          high_col,
-          steps = max(2L, gradient_slices),
-          flatten = flatten_trunks,
-          bg = trunk_bg
-        )
       } else {
-        col <- outer_col
+        col <- body_col
         if(flatten_trunks) {
           col <- flatten_alpha_color(col, bg = trunk_bg)
         }
@@ -3548,8 +3573,10 @@ draw_node_trunk_fills <- function(sankey, flow_cols, merge_length,
                                   flatten_trunks = TRUE,
                                   trunk_bg = par("bg"),
                                   merge_cols = NULL,
+                                  endpoint_cols = NULL,
                                   gradient_slices = 24) {
   validate_merge_cols(sankey, merge_cols)
+  validate_merge_cols(sankey, endpoint_cols)
   node_flow_id <- function(nodes, i) {
     if(inherits(sankey, "sankey_graph") && "id" %in% names(nodes)) nodes$id[i] else nodes$node[i]
   }
@@ -3577,7 +3604,13 @@ draw_node_trunk_fills <- function(sankey, flow_cols, merge_length,
       } else {
         merge_cols[[merge_side]][flow_inds[1]]
       }
-      flow_col <- node_merge_color(sankey, flow_cols, flow_inds)
+      # With gradients, strands show their endpoint (node) color where they meet the trunk's inner
+      # edge, so the trunk blends to that color there; solid strands meet their average color.
+      inner_col <- if(!is.null(endpoint_cols) && gradient_slices > 1) {
+        endpoint_cols[[merge_side]][flow_inds[1]]
+      } else {
+        node_merge_color(sankey, flow_cols, flow_inds)
+      }
       directions <- sign(sankey$flows$end_x[flow_inds] - sankey$flows$start_x[flow_inds])
       directions <- unique(directions[directions != 0])
       if(length(directions) != 1) {
@@ -3593,9 +3626,9 @@ draw_node_trunk_fills <- function(sankey, flow_cols, merge_length,
       } else {
         -directions[1] * merge_length
       }
-      low_col <- if(endpoint_x < interior_x) endpoint_col else flow_col
-      high_col <- if(endpoint_x < interior_x) flow_col else endpoint_col
-      if(gradient_slices > 1 || !identical(endpoint_col, flow_col)) {
+      low_col <- if(endpoint_x < interior_x) endpoint_col else inner_col
+      high_col <- if(endpoint_x < interior_x) inner_col else endpoint_col
+      if(gradient_slices > 1 || !identical(endpoint_col, inner_col)) {
         draw_x_gradient_polygon(
           coords,
           low_col,
@@ -3681,12 +3714,16 @@ draw_multi_stage_interior_trunks <- function(sankey, node_cols, merge_cols,
                                              merge_length, fill_overlap = 0,
                                              flatten_trunks = TRUE,
                                              trunk_bg = par("bg"),
-                                             gradient_slices = 1) {
+                                             gradient_slices = 1,
+                                             endpoint_cols = NULL) {
   if(length(sankey$segments) < 2 || merge_length <= 0) {
     return(invisible(NULL))
   }
   if(is.null(merge_cols) && is.null(node_cols)) {
     stop("Interior node trunks need `merge_cols` or `node_cols`.", call. = FALSE)
+  }
+  side_color <- function(cols, stage, end, segment, inds) {
+    weighted_average_color(cols[[stage]][[end]][inds], segment$flows$width[inds])
   }
 
   draw_length <- merge_length + fill_overlap
@@ -3699,52 +3736,60 @@ draw_multi_stage_interior_trunks <- function(sankey, node_cols, merge_cols,
         next
       }
       node_row <- interior_node_row(prev_segment, next_segment, node)
+      prev_inds <- which(prev_segment$flows$to == node)
+      next_inds <- which(next_segment$flows$from == node)
+      # Trunks use merge colors; node colors only stand in when no merge colors exist.
+      left_col <- if(!is.null(merge_cols)) {
+        side_color(merge_cols, node_set - 1, "end", prev_segment, prev_inds)
+      } else {
+        node_cols[[node_set]][node]
+      }
+      right_col <- if(!is.null(merge_cols)) {
+        side_color(merge_cols, node_set, "start", next_segment, next_inds)
+      } else {
+        node_cols[[node_set]][node]
+      }
+      middle_col <- transparent_color(weighted_average_color(
+        c(left_col, right_col),
+        c(sum(prev_segment$flows$width[prev_inds]), sum(next_segment$flows$width[next_inds]))
+      ))
       # The fade to a transparent centre is a label body, so it needs a node with width.
-      if(!is.null(node_row) && node_has_user_label(node_row) && isTRUE(node_row$node_width[1] > 0)) {
-        prev_inds <- which(prev_segment$flows$to == node)
-        next_inds <- which(next_segment$flows$from == node)
-        left_col <- if(!is.null(merge_cols)) {
-          weighted_average_color(
-            merge_cols[[node_set - 1]]$end[prev_inds],
-            prev_segment$flows$width[prev_inds]
-          )
-        } else {
-          node_cols[[node_set]][node]
+      label_body <- !is.null(node_row) && node_has_user_label(node_row) && isTRUE(node_row$node_width[1] > 0)
+
+      # Strands reach their endpoint (node) colors at the band edges; merge colors span the faces.
+      in_col <- if(is.null(endpoint_cols)) left_col else side_color(endpoint_cols, node_set - 1, "end", prev_segment, prev_inds)
+      out_col <- if(is.null(endpoint_cols)) right_col else side_color(endpoint_cols, node_set, "start", next_segment, next_inds)
+      varies <- length(unique(c(in_col, left_col, right_col, out_col))) > 1
+
+      if(gradient_slices > 1 && (varies || label_body)) {
+        in_face <- prev_segment$flows$end_x[prev_inds[1]]
+        out_face <- next_segment$flows$start_x[next_inds[1]]
+        x_rng <- range(coords[, "x"])
+        edges <- if(in_face <= out_face) x_rng else rev(x_rng)
+        stops <- c(edges[1], in_face, out_face, edges[2])
+        cols <- c(in_col, left_col, right_col, out_col)
+        if(label_body) {
+          stops <- c(stops, node_row$x[1])
+          cols <- c(cols, middle_col)
         }
-        right_col <- if(!is.null(merge_cols)) {
-          weighted_average_color(
-            merge_cols[[node_set]]$start[next_inds],
-            next_segment$flows$width[next_inds]
-          )
-        } else {
-          node_cols[[node_set]][node]
-        }
-        middle_col <- transparent_color(weighted_average_color(
-          c(left_col, right_col),
-          c(sum(prev_segment$flows$width[prev_inds]), sum(next_segment$flows$width[next_inds]))
-        ))
+        draw_x_color_stops_polygon(coords, stops, cols, steps = max(24L, gradient_slices),
+                                   flatten = flatten_trunks, bg = trunk_bg)
+      } else if(label_body) {
         draw_x_color_stops_polygon(
           coords,
           c(min(coords[, "x"]), node_row$x[1], max(coords[, "x"])),
           c(left_col, middle_col, right_col),
-          steps = max(24L, gradient_slices),
+          steps = 24L,
           flatten = flatten_trunks,
           bg = trunk_bg
         )
-        next
-      }
-
-      # Trunks use merge colors; node colors only stand in when no merge colors exist.
-      col <- if(!is.null(merge_cols)) {
-        flow_inds <- which(prev_segment$flows$to == node)
-        merge_cols[[node_set - 1]]$end[flow_inds[1]]
       } else {
-        node_cols[[node_set]][node]
+        col <- left_col
+        if(flatten_trunks) {
+          col <- flatten_alpha_color(col, bg = trunk_bg)
+        }
+        polygon(coords[, "x"], coords[, "y"], col = col, border = NA, xpd = NA)
       }
-      if(flatten_trunks) {
-        col <- flatten_alpha_color(col, bg = trunk_bg)
-      }
-      polygon(coords[, "x"], coords[, "y"], col = col, border = NA, xpd = NA)
     }
   }
 
@@ -3871,7 +3916,8 @@ draw_graph_interior_trunks <- function(sankey, flow_cols, merge_cols,
                                        merge_length, fill_overlap = 0,
                                        flatten_trunks = TRUE,
                                        trunk_bg = par("bg"),
-                                       gradient_slices = 1) {
+                                       gradient_slices = 1,
+                                       endpoint_cols = NULL) {
   if(!inherits(sankey, "sankey_graph") || merge_length <= 0) {
     return(invisible(NULL))
   }
@@ -3900,34 +3946,26 @@ draw_graph_interior_trunks <- function(sankey, flow_cols, merge_cols,
     }
 
     if(gradient_slices > 1 && diff(range(coords[, "x"])) > 1e-12) {
-      breaks <- seq(min(coords[, "x"]), max(coords[, "x"]), length.out = gradient_slices + 1)
-      node <- sankey$nodes[sankey$nodes$id == node, , drop = FALSE]
-      for(i in seq_len(gradient_slices)) {
-        slice <- clip_polygon_x(coords, breaks[i], breaks[i + 1])
-        if(is.null(slice)) {
-          next
-        }
-        t <- (i - 0.5) / gradient_slices
-        col <- if(nrow(node) == 1 && node_has_user_label(node) && isTRUE(node$node_width[1] > 0)) {
-          x_mid <- node$x[1]
-          x_pos <- (breaks[i] + breaks[i + 1]) / 2
-          if(x_pos <= x_mid) {
-            interpolate_color(left_col, transparent_color(left_col), (x_pos - min(coords[, "x"])) / (x_mid - min(coords[, "x"])))
-          } else {
-            interpolate_color(transparent_color(right_col), right_col, (x_pos - x_mid) / (max(coords[, "x"]) - x_mid))
-          }
-        } else if(is.null(merge_cols)) {
-          interpolate_color(left_col, right_col, t)
-        } else if(t <= 0.5) {
-          interpolate_color(left_face_col, left_col, t * 2)
-        } else {
-          interpolate_color(right_col, right_face_col, (t - 0.5) * 2)
-        }
-        if(flatten_trunks) {
-          col <- flatten_alpha_color(col, bg = trunk_bg)
-        }
-        polygon(slice[, "x"], slice[, "y"], col = col, border = NA, xpd = NA)
+      # Strands reach their endpoint (node) colors at the band edges; merge colors span the faces.
+      in_col <- if(is.null(endpoint_cols)) left_col else weighted_average_color(endpoint_cols$end[in_inds], sankey$flows$width[in_inds])
+      out_col <- if(is.null(endpoint_cols)) right_col else weighted_average_color(endpoint_cols$start[out_inds], sankey$flows$width[out_inds])
+      in_face <- sankey$flows$end_x[in_inds[1]]
+      out_face <- sankey$flows$start_x[out_inds[1]]
+      x_rng <- range(coords[, "x"])
+      edges <- if(in_face <= out_face) x_rng else rev(x_rng)
+      stops <- c(edges[1], in_face, out_face, edges[2])
+      cols <- c(in_col, left_col, right_col, out_col)
+      node_row <- sankey$nodes[sankey$nodes$id == node, , drop = FALSE]
+      # The fade to a transparent centre is a label body, so it needs a node with width.
+      if(nrow(node_row) == 1 && node_has_user_label(node_row) && isTRUE(node_row$node_width[1] > 0)) {
+        stops <- c(stops, node_row$x[1])
+        cols <- c(cols, transparent_color(weighted_average_color(
+          c(left_col, right_col),
+          c(sum(sankey$flows$width[in_inds]), sum(sankey$flows$width[out_inds]))
+        )))
       }
+      draw_x_color_stops_polygon(coords, stops, cols, steps = max(24L, gradient_slices),
+                                 flatten = flatten_trunks, bg = trunk_bg)
       next
     }
 
@@ -4276,7 +4314,8 @@ draw_sankey_multi_fill_layer <- function(sankey, col, combine, gradient_slices,
     fill_overlap = fill_overlap,
     flatten_trunks = flatten_trunks,
     trunk_bg = trunk_bg,
-    gradient_slices = multi_gradient_slices
+    gradient_slices = multi_gradient_slices,
+    endpoint_cols = endpoint_cols
   )
 }
 
@@ -4424,7 +4463,7 @@ plot_sankey_multi <- function(sankey, col = "#5B8CBAAA", border = NA,
       )
     }
     multi_fill_overlap <- if(is.null(fill_overlap)) {
-      default_fill_overlap(visible_border, max_gradient_slices, merge_length, alpha_cols)
+      default_fill_overlap(visible_border, max_gradient_slices, merge_length, alpha_cols, flatten_trunks)
     } else if(is.list(fill_overlap)) {
       stage_arg(fill_overlap, 1)
     } else {
@@ -4552,7 +4591,8 @@ plot_sankey_multi <- function(sankey, col = "#5B8CBAAA", border = NA,
       trunk_bg = trunk_bg,
       gradient_slices = max(vapply(stage_inds, function(i) {
         as.integer(round(stage_arg(gradient_slices, i)))
-      }, integer(1)))
+      }, integer(1))),
+      endpoint_cols = endpoint_cols
     )
     draw_multi_stage_interior_node_borders(
       sankey,
@@ -4720,7 +4760,7 @@ plot_sankey_ribbons <- function(sankey, col = "#5B8CBAAA", border = NA,
     if(!is.null(mid_cols)) {
       alpha_cols <- c(alpha_cols, mid_cols)
     }
-    fill_overlap <- default_fill_overlap(draw_border, gradient_slices, merge_length, alpha_cols)
+    fill_overlap <- default_fill_overlap(draw_border, gradient_slices, merge_length, alpha_cols, flatten_trunks)
   }
   if(!is.numeric(fill_overlap) || length(fill_overlap) != 1 ||
      !is.finite(fill_overlap) || fill_overlap < 0) {

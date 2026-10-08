@@ -700,6 +700,36 @@ unlink(graph_label_pdf)
 trunk_rgb <- grDevices::col2rgb(trunk_cols)
 stopifnot(length(trunk_cols) > 0, all(trunk_rgb["red", ] == 255), all(trunk_rgb["green", ] == 0))
 
+# Strand gradients reach their node colors exactly at the trunk (band) edges, and trunks blend to
+# those endpoint colors at their inner edges, so strands meet trunks without a color step.
+band_sankey <- sankey_ribbons(thic, loc, xyr = 1)
+band_cols <- list(start = rep("#FF0000", nrow(band_sankey$flows)), end = rep("#0000FF", nrow(band_sankey$flows)))
+band <- c(0.2, 1.4)
+same_color <- function(a, b) all(grDevices::col2rgb(a, alpha = TRUE) == grDevices::col2rgb(b, alpha = TRUE))
+for(mode in c("path", "merge")) {
+  stopifnot(
+    same_color(flow_gradient_color(band_sankey, rep("#00FF00", 6), band_cols, 1, band[1], merge_length = 0.1,
+                                   gradient_mode = mode, band = band), "#FF0000"),
+    same_color(flow_gradient_color(band_sankey, rep("#00FF00", 6), band_cols, 1, band[2], merge_length = 0.1,
+                                   gradient_mode = mode, band = band), "#0000FF")
+  )
+}
+band_png <- tempfile(fileext = ".png")
+grDevices::png(band_png, width = 300, height = 200)
+plot.new()
+plot.window(xlim = c(-0.2, 2.2), ylim = c(0, 1))
+inner_cols <- character(0)
+polygon <- function(x, y, col = NA, ...) inner_cols <<- c(inner_cols, col)
+draw_node_trunk_fills(band_sankey, flow_cols = rep("#00FF00", nrow(band_sankey$flows)), merge_length = 0.1,
+                      trunk_end = FALSE, flatten_trunks = FALSE, gradient_slices = 40,
+                      merge_cols = band_cols, endpoint_cols = list(start = rep("#0000FF", 6), end = rep("#0000FF", 6)))
+rm(polygon)
+grDevices::dev.off()
+unlink(band_png)
+inner_rgb <- grDevices::col2rgb(inner_cols)
+# Each trunk runs from the merge color (red) at the face to the endpoint color (blue) inside.
+stopifnot(max(inner_rgb["blue", ]) > 245, max(inner_rgb["red", ]) > 245, all(inner_rgb["green", ] == 0))
+
 # stack_order fixes strand order per node side; unlisted strands stay above listed ones.
 stack_rows <- function(s, to) {
   f <- s$flows[s$flows$to == to, ]
