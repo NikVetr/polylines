@@ -1322,25 +1322,6 @@
       svg.querySelectorAll(`.ribbon[${attr}="${sel.index}"], .trunk[${attr}="${sel.index}"], .node-dot[${attr}="${sel.index}"]`)
         .forEach((el) => el.classList.add('selected'));
     }
-    // The selection is outlined only while it is what the plot shows (not while hovering others).
-    const selLayer = svg.querySelector('.layer-selection');
-    const shown = sel && !drag && (!hover || (hover.kind === sel.kind && hover.index === sel.index));
-    if (selLayer) selLayer.innerHTML = shown ? selectionMarkup(sel) : '';
-  }
-
-  // A dashed outline just inside the selected strand (its visible part) or whole node: the stroke
-  // is twice as wide and clipped to the shape, so only its inner half shows.
-  function selectionMarkup(sel) {
-    const polygon = sel.kind === 'flow'
-      ? S.ribbonPolygon(layout.flows[sel.index], S.strandCuts(layout, layout.flows[sel.index]))
-      : S.nodeOutline(layout, layout.nodes[sel.index]);
-    if (!polygon) return '';
-    const h = layout.view.height;
-    const r2 = (v) => Math.round(v * 100) / 100;
-    const d = `${polygon.map((p, i) => `${i ? 'L' : 'M'}${r2(MARGIN + p[0])} ${r2(MARGIN + h - p[1])}`).join('')}Z`;
-    return `<clipPath id="selection-clip"><path d="${d}"/></clipPath>` +
-      `<path class="selection-outline" d="${d}" fill="none" stroke="#111827" stroke-opacity="0.75" stroke-width="2.8" ` +
-      'stroke-dasharray="4 3" clip-path="url(#selection-clip)"/>';
   }
 
   const pct = (v, total) => (total > 0 ? `${(100 * v / total).toFixed(1)}%` : '–');
@@ -1831,7 +1812,7 @@
       if (cs.opacity !== '1') copies[i].setAttribute('opacity', cs.opacity);
       if (cs.filter && cs.filter !== 'none') copies[i].setAttribute('filter', cs.filter.replace(/url\("?([^")]+)"?\)/, 'url($1)'));
     });
-    clone.querySelectorAll('.layer-hits, .layer-selection').forEach((el) => el.remove());
+    clone.querySelectorAll('.layer-hits').forEach((el) => el.remove());
     clone.querySelectorAll('.layer-traces, .layer-fills').forEach((el) => { if (!el.childElementCount) el.remove(); });
     clone.removeAttribute('class');
     clone.removeAttribute('id');

@@ -502,23 +502,15 @@ test('clicking a node pins its traces and breakdown in the inspector until Esc',
   await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
 });
 
-test('a pinned node is outlined inside its edge, only while it is what the plot shows', async ({ page }) => {
+test('pinning a node draws no outline around it', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const node = await nodeAt(page, 'Stable');
   await page.mouse.click(node.x, node.y);
   await page.mouse.move(5, 5);
-  const outline = page.locator('#plot .layer-selection .selection-outline');
-  await expect(outline).toHaveCount(1);
-  expect(await outline.getAttribute('clip-path')).toBe('url(#selection-clip)');
-  // One outline around band and body together, so no dashed line runs through the node.
-  expect((await outline.getAttribute('d')).match(/M/g)).toHaveLength(1);
-  const p = await ribbonCenter(page, 0);
-  await page.mouse.move(p.x, p.y);
-  await expect(outline).toHaveCount(0);
-  await page.mouse.move(5, 5);
-  await expect(outline).toHaveCount(1);
-  await page.keyboard.press('Escape');
-  await expect(outline).toHaveCount(0);
+  await expect(page.locator('#plot .trace').first()).toBeAttached();
+  await expect(page.locator('#plot [stroke-dasharray]')).toHaveCount(0);
+  const dashed = await page.locator('#plot .trunk, #plot .ribbon').evaluateAll((els) => els.filter((el) => getComputedStyle(el).strokeDasharray !== 'none').length);
+  expect(dashed).toBe(0);
 });
 
 test('dimmed nodes stay opaque so their necks match their bodies', async ({ page }) => {
@@ -584,7 +576,7 @@ test('SVG and PNG export in one click and keep the focused view', async ({ page 
   expect(svg).toContain('class="node-fill"');
   expect(svg).toContain('opacity="0.16"');
   expect(svg).toContain('filter="url(#dim-node)"');
-  expect(svg).not.toContain('selection-outline');
+  expect(svg).not.toContain('stroke-dasharray');
 });
 
 test('totals can follow node labels', async ({ page }) => {

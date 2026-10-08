@@ -149,26 +149,6 @@
     };
   }
 
-  // Closed outline of a whole node (merge bands, bridge and body), for highlighting it.
-  function nodeOutline(layout, n) {
-    const role = nodeRole(n);
-    if (role === 'isolated') return null;
-    if (role === 'interior') {
-      const shape = interiorTrunk(layout, n);
-      return shape ? shape.polygon : null;
-    }
-    const side = role === 'source' ? 'start' : 'end';
-    const trunk = trunkPolygon(layout, n, side);
-    const body = endpointBody(layout, n, side, 0);
-    if (!body || !trunk) return body ? body.polygon : trunk ? trunk.polygon : null;
-    // Body bottom from its outer side to the face, band bottom out to its edge, then back along the tops.
-    const [outerLo, transitionLo, faceLo] = body.polygon;
-    const [faceHi, transitionHi, outerHi] = body.polygon.slice(5);
-    const lower = side === 'start' ? trunk.edges.lower : trunk.edges.lower.slice().reverse();
-    const upper = side === 'start' ? trunk.edges.upper.slice().reverse() : trunk.edges.upper;
-    return [outerLo, transitionLo, faceLo, ...lower, ...upper, faceHi, transitionHi, outerHi];
-  }
-
   function nodeRole(node) {
     if (node.inFlows.length && node.outFlows.length) return 'interior';
     if (node.outFlows.length) return 'source';
@@ -199,7 +179,7 @@
 
   SK.shapes = {
     sliceByX, strandCuts, ribbonPolygon, edgeSegments, bundle, trunkPolygon, trunkEdges,
-    bridgeCurve, bridgeBody, endpointBody, interiorTrunk, nodeOutline, nodeRole, geometryBounds
+    bridgeCurve, bridgeBody, endpointBody, interiorTrunk, nodeRole, geometryBounds
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -399,7 +399,6 @@
       `<g class="layer-node-borders">${nodeBorders.join('')}</g>` +
       `<g class="layer-sums">${sums.join('')}</g>` +
       '<g class="layer-traces"></g>' +
-      '<g class="layer-selection"></g>' +
       `<g class="layer-hits">${hits.join('')}</g>` +
       `<g class="layer-dots">${dots.join('')}</g>` +
       `<g class="layer-labels">${labels.join('')}</g>` +
