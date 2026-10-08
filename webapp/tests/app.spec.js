@@ -453,6 +453,33 @@ test('hovering traces every pathway through a strand or node; Ctrl traces the on
   await expect(page.locator('#plot .trace')).toHaveCount(0);
 });
 
+test('hovering draws a bar under each node it passes through showing the share it fills', async ({ page }) => {
+  // Plain strands: the strand's two nodes.
+  const p = await ribbonCenter(page, 0);
+  await page.mouse.move(p.x, p.y);
+  await expect(page.locator('#plot .node-fill')).toHaveCount(2);
+  // Traced pathways: every node they pass through, e.g. 63 of Stage II's 174 patients.
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const point = await page.evaluate(() => {
+    const L = window.SankeyApp.layout;
+    const f = L.flows.find((x) => x.stage === 0 && L.nodes[x.from].label === 'Stage II' && L.nodes[x.to].label === 'Chemotherapy');
+    const c = f.centerline[Math.floor(f.centerline.length / 2)];
+    const box = document.querySelector('#plot').getBoundingClientRect();
+    return { x: box.left + 18 + c[0], y: box.top + (box.height - 18) - c[1], from: f.from };
+  });
+  await page.mouse.move(point.x, point.y);
+  await expect(page.locator('#plot .node-fill')).toHaveCount(4);
+  const bar = page.locator(`#plot .node-fill[data-fill="${point.from}"]`);
+  await expect(bar).toContainText('36%');
+  await expect(bar).toContainText('64%');
+  const widths = await bar.locator('rect').evaluateAll((rects) => rects.map((r) => Number(r.getAttribute('width'))));
+  expect(widths[2] / widths[1]).toBeCloseTo(63 / 174, 2);
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .node-fill')).toHaveCount(0);
+  const exported = await page.evaluate(() => window.SankeyApp.exportSvgText());
+  expect(exported).not.toContain('layer-fills');
+});
+
 test('clicking a node pins its traces and breakdown in the inspector until Esc', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const node = await nodeAt(page, 'Remission');

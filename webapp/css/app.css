@@ -216,7 +216,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 #plot .ribbon.selected, #plot .trunk.selected { stroke: #111827; stroke-width: 1.4; stroke-dasharray: 4 3; }
 #plot .node-dot.selected { stroke-width: 3.5; }
 #plot.stale { opacity: 0.3; filter: grayscale(0.7); pointer-events: none; }
-#plot .layer-traces, #plot .layer-substrands { pointer-events: none; }
+#plot .layer-traces, #plot .layer-substrands, #plot .layer-fills { pointer-events: none; }
 .banner-action { margin-left: 8px; color: var(--error); border-color: #fecdca; }
 
 dialog {

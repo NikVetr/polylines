@@ -1156,12 +1156,72 @@
       : { paths: null, member: -1, single: false });
   }
 
+  // Weight of the hovered selection passing through each node id: the traced pathways (or item),
+  // else the hovered strand, or the hovered node and its strands.
+  function focusWeights(target) {
+    const w = new Map();
+    const add = (id, v) => w.set(id, (w.get(id) || 0) + v);
+    if (target.paths && traces) {
+      target.paths.forEach((pi) => {
+        const p = traces.paths[pi];
+        const v = target.single && target.member >= 0 && p.members ? p.members[target.member].weight : p.weight;
+        p.nodes.forEach((ni, s) => add(nodeAtStage(s, ni).id, v));
+      });
+    } else if (target.kind === 'flow') {
+      const f = layout.flows[target.index];
+      add(f.from, f.value);
+      add(f.to, f.value);
+    } else {
+      const n = layout.nodes[target.index];
+      add(n.id, Math.max(n.inValue, n.outValue));
+      n.inFlows.forEach((k) => add(layout.flows[k].from, layout.flows[k].value));
+      n.outFlows.forEach((k) => add(layout.flows[k].to, layout.flows[k].value));
+    }
+    return w;
+  }
+
+  // Under each node the selection passes through, a small bar: the share of the node it fills in
+  // the node's color, the rest in a faded node color, with both percentages beside it.
+  const FILL_BAR = { width: 60, height: 8, gap: 7, font: 10.5 };
+  function fillMarkup(target) {
+    const h = layout.view.height;
+    const f2 = (v) => Math.round(v * 100) / 100;
+    let out = '';
+    focusWeights(target).forEach((v, id) => {
+      const n = layout.nodes[id];
+      const total = Math.max(n.inValue, n.outValue);
+      if (!(total > 0 && v > 0)) return;
+      const t = Math.min(v / total, 1);
+      // Both shares get one decimal when the smaller one is under 10%, so they add up to 100%.
+      const digits = t > 0 && t < 1 && Math.min(t, 1 - t) < 0.0995 ? 1 : 0;
+      const share = (x) => `${(100 * x).toFixed(digits)}%`;
+      const { width, height, gap, font } = FILL_BAR;
+      const x0 = MARGIN + n.X - width / 2;
+      const y0 = MARGIN + h - (n.Y - Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2) + gap;
+      const node = C.opaque(colors.node[id]);
+      const solid = C.paint(node).color;
+      const faded = C.paint(C.flatten(C.withAlpha(node, 0.22), colors.flatBg)).color;
+      const text = C.paint(R.labelColor(n, colors, state.style)).color;
+      const label = (x, anchor, value) => `<text x="${f2(x)}" y="${f2(y0 + height / 2)}" text-anchor="${anchor}" dominant-baseline="central" ` +
+        `font-family="${R.FONT_FAMILY}" font-size="${font}" fill="${text}">${value}</text>`;
+      // Both parts are clipped to one rounded bar, so they meet in a straight edge.
+      out += `<g class="node-fill" data-fill="${id}"><clipPath id="fill-clip${id}">` +
+        `<rect x="${f2(x0)}" y="${f2(y0)}" width="${width}" height="${height}" rx="2.5"/></clipPath>` +
+        `<g clip-path="url(#fill-clip${id})"><rect x="${f2(x0)}" y="${f2(y0)}" width="${width}" height="${height}" fill="${faded}"/>` +
+        `<rect class="node-fill-solid" x="${f2(x0)}" y="${f2(y0)}" width="${f2(Math.max(width * t, 1))}" height="${height}" fill="${solid}"/></g>` +
+        label(x0 - 4, 'end', share(t)) + label(x0 + width + 4, 'start', share(1 - t)) + '</g>';
+    });
+    return out;
+  }
+
   function applyHighlight() {
     const active = (drag && drag.target) || hover || pinnedTarget();
     const sets = highlightSets(active);
     svg.classList.toggle('dimmed', !!active);
     const traceLayer = svg.querySelector('.layer-traces');
     if (traceLayer) traceLayer.innerHTML = active && active.paths && traces ? traceMarkup(active) : '';
+    const fillLayer = svg.querySelector('.layer-fills');
+    if (fillLayer) fillLayer.innerHTML = active && !drag ? fillMarkup(active) : '';
     svg.querySelectorAll('[data-flow]').forEach((el) => el.classList.toggle('hl', sets.flows.has(Number(el.dataset.flow))));
     svg.querySelectorAll('[data-node]').forEach((el) => {
       const set = el.classList.contains('node-label') ? sets.labels : sets.nodes;
@@ -1626,7 +1686,7 @@
   function exportSvgText() {
     if (!layout) throw new L.SankeyError('Nothing to export: the current data does not produce a plot.');
     const clone = svg.cloneNode(true);
-    clone.querySelectorAll('.layer-hits, .layer-traces').forEach((el) => el.remove());
+    clone.querySelectorAll('.layer-hits, .layer-traces, .layer-fills').forEach((el) => el.remove());
     clone.removeAttribute('class');
     clone.removeAttribute('id');
     clone.querySelectorAll('[class]').forEach((el) => {
