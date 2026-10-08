@@ -101,7 +101,13 @@ Namely, an arrow, a spiral, some curly hair because I realized that together the
 
 The repository also includes Sankey-style ribbons built from the same polygon expansion ideas. First build the geometry with `sankey_ribbons()`, then draw it with `plot_sankey_ribbons()`.
 
-`thic` can be either a single matrix or a list of matrices. For one matrix, rows are source nodes and columns are target nodes. For a list, each matrix represents one transition between successive node sets, and adjacent dimensions must match. `loc` is a matrix with four columns: node set index, node index within that set, x location, and y location.
+`thic` can be either a single matrix or a list of matrices. For one matrix, rows are source nodes and columns are target nodes. For a list, each matrix represents one transition between successive node sets, and adjacent dimensions must match. `loc` is a matrix with at least four columns: node set index, node index within that set, x location, and y location. An optional fifth numeric column gives each node a horizontal width; ribbons then attach to the node faces instead of the node centers. `loc` can also be a data frame with `set`, `node`, `x`, `y`, and optional `width`, `label`, `cex`, and `font` columns. If `width` is absent but `label` is present, the node width is computed from `strwidth(label, cex = cex, font = font)` plus symmetric horizontal padding controlled by `node_label_pad` and a proportional buffer controlled by `node_label_pad_frac`; otherwise it uses `default_node_width`. User-labeled node title/body sections fade from the weighted average of attached strand colors at the ribbon face to a transparent midpoint; unlabeled nodes keep a solid weighted-average node color.
+
+If manually chosen node y locations are too close for the total incoming or outgoing ribbon thickness, `sankey_ribbons(..., adjust_loc = TRUE)` isotonic-adjusts node y coordinates within each node set while preserving their vertical order. `min_node_gap` sets the minimum visual gap between adjacent node bundles, in the same visual units as `thic`. `adjust_loc_expand = TRUE` lets a node set expand outside its original y range when the requested bundle spacing cannot fit; with `FALSE`, the adjusted nodes stay within the original range and use the closest feasible compressed spacing.
+
+By default, Sankey ribbons use independent Bezier centerlines. Dense fan-in or fan-out stages can instead use `sankey_ribbons(..., route = "boundary")`, which interpolates packed ribbon boundaries directly. `boundary_group = "target"` groups strands by destination and is useful for fan-in; `"source"` is useful for fan-out; `"stage"` treats the whole stage as one ordered stack when endpoint order is compatible. `boundary_compensation = "none"` is the default. Set it to `"full"` to expand steep ribbons so their apparent width is closer to their specified width, or `"gap_budget"` for a conservative expansion that uses only available inter-ribbon gaps. Multi-stage layouts can pass stage-specific route settings as lists, for example `route = list("boundary", "bezier")`.
+
+For non-layered diagrams, `sankey_ribbons_graph()` accepts one square adjacency matrix whose rows and columns both refer to all rows of `loc`. This allows a node to receive strands from nodes at multiple earlier x positions without adding dummy pass-through stages. By default, positive graph flows must move left-to-right, the diagonal must be zero, and optional `balance = "error"` checks that flow-through nodes have equal incoming and outgoing totals. Flow-through graph nodes with positive width are filled across the node body, with a smooth color transition when gradient fills are enabled.
 
 Useful plotting arguments include:
 
@@ -112,10 +118,35 @@ Useful plotting arguments include:
 - `gradient_slices`: number of polygon slices used to approximate gradients.
 - `raster_fill`: rasterizes only the fill layer before overlaying labels and borders, which keeps large gradient figures lighter to render.
 - `add`: when `TRUE`, draw into the existing plot region; when `FALSE`, create a blank plot window without axes.
+- `source_order` and `target_order`: control endpoint stack ordering. Defaults use the vertical position of the opposite endpoint; the `_desc` options reverse those local stack orders when that reduces crossings. The `target_projected` and `source_projected` variants do one approximate repacking pass using each strand's linearly projected y position at the nearest shared opposite-side ribbon-face x location. The `target_bezier` and `source_bezier` variants do the same kind of one-pass repacking, but sample the first-pass Bezier centerlines instead of a straight-line approximation; these modes require `route = "bezier"`.
+- `node_border`: optional vector border color for node title/body sections created by explicit or label-derived node widths. The default `NULL` draws automatic borders around user-labeled node bodies using the fully opaque weighted-average strand color; use `NA` to disable these borders. `node_border_shape = "polyline"` draws constant-width faded borders using the same polygon-line machinery as `polylines()`, avoiding base-graphics stroke artifacts; use `"taper"` to narrow borders to a point or `"line"` for the older stroked segment renderer. `node_border_lwd` controls the polygon-line width or line stroke width, while `node_border_lty` only affects `"line"` borders. `node_border_fade = "background"` blends faded borders against `node_border_bg` before drawing opaque polygon or line segments; use `"alpha"` to preserve true transparency.
+- `adjust_node_height`: controls how labeled node bodies handle vertical label fit. `"none"` leaves geometry and text unchanged; `"label"` rescales label `cex` downward when needed and then recomputes label-derived widths without changing node heights; `"node"` keeps the requested `cex` and expands the filled node body only when needed, never shrinking it below the true ribbon-bundle thickness. The label/title border uses the label-based height even when the conserved filled body is thicker. `node_label_vpad` and `node_label_vpad_frac` control the vertical label buffer; the default proportional buffer is `node_label_vpad_frac = 0.25` times the tallest label.
 
 The third example is contained in `example_3.R` and generates this Sankey ribbon figure:
 
 ![Sankey ribbon example](images/sankey_example.png)
+
+It also generates a settings grid using a labeled unequal-x 4-2-3 multi-stage layout, where the top-left panel is the default reference and each other panel shows one useful non-default argument:
+
+![Sankey settings grid](images/sankey_settings_grid.png)
+
+It also includes a small comparison showing how `adjust_loc = TRUE` can separate crowded node bundles while preserving their vertical order:
+
+![Sankey adjusted location example](images/sankey_adjust_loc_example.png)
+
+Nodes in the same stage can also use different x locations:
+
+![Sankey unequal x example](images/sankey_unequal_x_example.png)
+
+For dense fan-in layouts, boundary transport can keep adjacent ribbons packed without changing the plotting call:
+
+![Sankey boundary route example](images/sankey_boundary_route_example.png)
+
+Focused Sankey checks can be run with:
+
+```sh
+Rscript tests/test_sankey.R
+```
 
 ## Future Work
 
