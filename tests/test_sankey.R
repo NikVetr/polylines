@@ -574,4 +574,91 @@ stopifnot(
 )
 unlink(c(raster_other, raster_main))
 
+render_md5 <- function(draw, width = 300, height = 200) {
+  file <- tempfile(fileext = ".png")
+  grDevices::png(file, width = width, height = height)
+  par(mar = c(0, 0, 0, 0))
+  plot.new()
+  plot.window(xlim = c(-0.2, 3.2), ylim = c(0, 1))
+  draw()
+  grDevices::dev.off()
+  on.exit(unlink(file))
+  unname(tools::md5sum(file))
+}
+
+# Blank or NA labels leave that node unlabeled, including after re-parsing the table.
+partial_pdf <- tempfile(fileext = ".pdf")
+grDevices::pdf(partial_pdf, width = 5, height = 3)
+plot.new()
+plot.window(xlim = c(0, 3), ylim = c(0, 1))
+partial_loc <- data.frame(
+  set = c(1, 1, 2, 2), node = c(1, 2, 1, 2), x = c(0, 0, 2, 2), y = c(0.7, 0.3, 0.7, 0.3),
+  label = c("Alpha", NA, "", "Delta")
+)
+partial_table <- as_sankey_loc_table(partial_loc, node_label_pad = 0.02)
+reparsed_table <- as_sankey_loc_table(partial_table, node_label_pad = 0.02)
+grDevices::dev.off()
+unlink(partial_pdf)
+stopifnot(
+  identical(partial_table$has_label, c(TRUE, FALSE, FALSE, TRUE)),
+  all(partial_table$node_width[2:3] == 0),
+  all(partial_table$node_label_width[2:3] == 0),
+  all(partial_table$node_width[c(1, 4)] > 0.04),
+  identical(reparsed_table$has_label, partial_table$has_label)
+)
+
+# add = FALSE opens a window with the aspect ratio the geometry was built for.
+aspect_png <- tempfile(fileext = ".png")
+grDevices::png(aspect_png, width = 900, height = 300)
+aspect_sankey <- sankey_ribbons(list(thic, thic2), multi_loc)
+plot_sankey_ribbons(aspect_sankey, add = FALSE, label_nodes = FALSE)
+stopifnot(abs(xyrat_local() - aspect_sankey$xyr) < 1e-9)
+grDevices::dev.off()
+unlink(aspect_png)
+
+# With both supplied, node_col drives strand gradients and merge_col the trunks.
+color_multi <- sankey_ribbons(list(thic, thic2), multi_loc, xyr = 1)
+color_nodes <- list(c("#AA0000", "#00AA00", "#0000AA"), c("#AAAA00", "#00AAAA"), c("#AA00AA", "#555555"))
+color_merges <- lapply(color_nodes, function(x) rep("#222222", length(x)))
+merge_only <- render_md5(function() {
+  plot_sankey_ribbons(color_multi, merge_col = color_merges, gradient_slices = 40,
+                      gradient_mode = "path", label_nodes = FALSE)
+})
+node_and_merge <- render_md5(function() {
+  plot_sankey_ribbons(color_multi, node_col = color_nodes, merge_col = color_merges,
+                      gradient_slices = 40, gradient_mode = "path", label_nodes = FALSE)
+})
+stopifnot(!identical(merge_only, node_and_merge))
+
+# Borders are drawn even when merge zones cover whole strands; multi-stage node sums are drawn.
+no_border <- render_md5(function() {
+  plot_sankey_ribbons(sankey_ribbons(thic, loc, xyr = 1, merge_frac = 0.6), label_nodes = FALSE)
+})
+long_merge_border <- render_md5(function() {
+  plot_sankey_ribbons(sankey_ribbons(thic, loc, xyr = 1, merge_frac = 0.6), border = "black", label_nodes = FALSE)
+})
+without_sums <- render_md5(function() plot_sankey_ribbons(color_multi, label_nodes = FALSE))
+with_sums <- render_md5(function() plot_sankey_ribbons(color_multi, label_nodes = FALSE, show_node_sums = TRUE))
+stopifnot(!identical(no_border, long_merge_border), !identical(without_sums, with_sums))
+expect_error(
+  draw_multi_stage_interior_trunks(color_multi, node_cols = NULL, merge_cols = NULL, merge_length = 0.1),
+  "need `merge_cols` or `node_cols`"
+)
+
+# Path gradients color each x slice by the path distance at the slice's x midpoint.
+steep <- sankey_ribbons(matrix(0.05), rbind(c(1, 1, 0, 0.95), c(2, 1, 1, 0.05)), xyr = 1, merge_frac = 0)
+slice_cols <- character(0)
+polygon <- function(x, y, col = NA, ...) slice_cols <<- c(slice_cols, col)
+draw_sankey_fill_layer(steep, fill_cols = "#FF0000", gradient_slices = 4, merge_length = 0,
+                       gradient_mode = "path", merge_cols = list(start = "#000000", end = "#FFFFFF"))
+rm(polygon)
+steep_distances <- edge_distances(steep$centerlines[[1]], 1)
+expected_t <- vapply((seq_len(4) - 0.5) / 4, function(u) {
+  distance_at_x(steep$centerlines[[1]], steep_distances, u) / max(steep_distances)
+}, numeric(1))
+expected_cols <- vapply(expected_t, function(t) {
+  if(t <= 0.5) interpolate_color("#000000", "#FF0000", 2 * t) else interpolate_color("#FF0000", "#FFFFFF", 2 * t - 1)
+}, character(1))
+stopifnot(identical(slice_cols, expected_cols), abs(expected_t[1] - 0.125) > 0.02)
+
 cat("sankey tests passed\n")

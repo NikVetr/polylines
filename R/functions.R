@@ -686,12 +686,23 @@ as_sankey_loc_table <- function(loc, default_node_width = 0, node_label_pad = 0,
     )
 
     label_col <- if("label" %in% loc_names) "label" else if("name" %in% loc_names) "name" else NA_character_
-    out$label <- if(is.na(label_col)) as.character(out$node) else as.character(loc[[label_col]])
-    out$has_label <- !is.na(label_col)
+    labels <- if(is.na(label_col)) rep(NA_character_, nrow(out)) else as.character(loc[[label_col]])
+    # Labels are per row: blank or NA labels leave a node unlabeled. A has_label column comes
+    # from re-parsing this function's own output and is kept as is.
+    out$has_label <- if("has_label" %in% loc_names) {
+      as.logical(loc[["has_label"]])
+    } else {
+      !is.na(labels) & nzchar(trimws(labels))
+    }
+    out$label <- ifelse(out$has_label, labels, as.character(out$node))
     out$cex <- if("cex" %in% loc_names) as.numeric(loc[["cex"]]) else rep(1, nrow(out))
     out$font <- if("font" %in% loc_names) as.numeric(loc[["font"]]) else rep(1, nrow(out))
     out$node_label_width <- if(!is.na(label_col)) {
-      sankey_text_metric(out$label, cex = out$cex, font = out$font, metric = "width")
+      width <- rep(0, nrow(out))
+      width[out$has_label] <- sankey_text_metric(
+        out$label[out$has_label], cex = out$cex[out$has_label], font = out$font[out$has_label], metric = "width"
+      )
+      width
     } else if("node_label_width" %in% loc_names) {
       as.numeric(loc[["node_label_width"]])
     } else {
@@ -710,11 +721,15 @@ as_sankey_loc_table <- function(loc, default_node_width = 0, node_label_pad = 0,
       }
     } else if(!is.na(label_col)) {
       text_width <- out$node_label_width
-      median_width <- stats::median(text_width[text_width > 0], na.rm = TRUE)
+      median_width <- stats::median(text_width[out$has_label & text_width > 0], na.rm = TRUE)
       if(!is.finite(median_width)) {
         median_width <- 0
       }
-      out$node_width <- text_width + 2 * node_label_pad + 2 * node_label_pad_frac * median_width
+      out$node_width <- ifelse(
+        out$has_label,
+        text_width + 2 * node_label_pad + 2 * node_label_pad_frac * median_width,
+        default_node_width
+      )
       out$width_explicit <- FALSE
     } else {
       out$node_width <- rep(default_node_width, nrow(out))
@@ -1272,6 +1287,7 @@ adjust_sankey_node_heights <- function(thic, loc, mode = c("none", "label", "nod
     recompute <- loc_table$has_label & !loc_table$width_explicit
     if(any(recompute)) {
       text_width <- sankey_text_metric(loc_table$label, cex = loc_table$cex, font = loc_table$font, metric = "width")
+      text_width[!loc_table$has_label] <- 0
       loc_table$node_label_width <- text_width
       median_width <- stats::median(text_width[text_width > 0], na.rm = TRUE)
       if(!is.finite(median_width)) {
@@ -2876,28 +2892,6 @@ ribbon_slice_polygon_by_x <- function(sankey, flow_ind, start_x, end_x) {
   coords
 }
 
-merge_cut_distances <- function(sankey, flow_ind, merge_length, fill_overlap = 0) {
-  centerline <- sankey$centerlines[[flow_ind]]
-  distances <- edge_distances(centerline, sankey$xyr)
-  path_length <- max(distances)
-  if(merge_length <= 0 || path_length <= 0) {
-    return(c(start = 0, end = path_length))
-  }
-
-  dx <- sankey$flows$end_x[flow_ind] - sankey$flows$start_x[flow_ind]
-  direction <- sign(dx)
-  if(direction == 0) {
-    return(c(start = 0, end = path_length))
-  }
-
-  cut <- max(merge_length - fill_overlap, 0)
-  start_x <- sankey$flows$start_x[flow_ind] + direction * cut
-  end_x <- sankey$flows$end_x[flow_ind] - direction * cut
-  d0 <- distance_at_x(centerline, distances, start_x)
-  d1 <- distance_at_x(centerline, distances, end_x)
-  sort(c(start = d0, end = d1))
-}
-
 draw_sankey_fill_layer <- function(sankey, fill_cols, combine = TRUE,
                                    gradient_slices = 1,
                                    merge_length = sankey$merge_length,
@@ -2909,9 +2903,11 @@ draw_sankey_fill_layer <- function(sankey, fill_cols, combine = TRUE,
                                    flatten_trunks = TRUE,
                                    trunk_bg = par("bg"),
                                    merge_cols = NULL,
+                                   endpoint_cols = NULL,
                                    mid_cols = NULL, ...) {
   gradient_mode <- match.arg(gradient_mode)
   validate_merge_cols(sankey, merge_cols)
+  validate_merge_cols(sankey, endpoint_cols)
   if(!is.null(mid_cols) && length(mid_cols) != nrow(sankey$flows)) {
     stop("`mid_cols` must be NULL or one color per positive flow.", call. = FALSE)
   }
@@ -2945,29 +2941,33 @@ draw_sankey_fill_layer <- function(sankey, fill_cols, combine = TRUE,
       }
     }
   } else {
-    node_cols <- if(is.null(merge_cols)) flow_node_colors(sankey, fill_cols) else merge_cols
+    # Strand gradients run between node (endpoint) colors; merge_cols stand in when none are given.
+    node_cols <- if(!is.null(endpoint_cols)) {
+      endpoint_cols
+    } else if(is.null(merge_cols)) {
+      flow_node_colors(sankey, fill_cols)
+    } else {
+      merge_cols
+    }
     for(k in seq_along(sankey$centerlines)) {
       if(merge_length > 0 && sankey$path_lengths[k] > 2 * merge_length) {
         xcuts <- flow_x_cuts(sankey, k, merge_length, fill_overlap)
-        breaks_x <- seq(xcuts["start"], xcuts["end"], length.out = gradient_slices + 1)
-        distance_cuts <- merge_cut_distances(sankey, k, merge_length, fill_overlap)
       } else {
         xcuts <- sort(c(
           start = sankey$flows$start_x[k],
           end = sankey$flows$end_x[k]
         ))
-        breaks_x <- seq(xcuts["start"], xcuts["end"], length.out = gradient_slices + 1)
-        distance_cuts <- c(start = 0, end = sankey$path_lengths[k])
       }
-      d0 <- distance_cuts["start"]
-      d1 <- distance_cuts["end"]
-      breaks <- seq(d0, d1, length.out = gradient_slices + 1)
+      breaks_x <- seq(xcuts["start"], xcuts["end"], length.out = gradient_slices + 1)
+      centerline <- sankey$centerlines[[k]]
+      distances <- edge_distances(centerline, sankey$xyr)
       for(i in seq_len(gradient_slices)) {
         coords <- ribbon_slice_polygon_by_x(sankey, k, breaks_x[i], breaks_x[i + 1])
         if(is.null(coords)) {
           next
         }
-        mid <- mean(breaks[i:(i + 1)])
+        # Slices are evenly spaced in x, so color each by the path distance at its x midpoint.
+        mid <- distance_at_x(centerline, distances, mean(breaks_x[i:(i + 1)]))
         polygon(
           coords[, "x"], coords[, "y"],
           col = flow_gradient_color(
@@ -3597,6 +3597,9 @@ draw_multi_stage_interior_trunks <- function(sankey, node_cols, merge_cols,
   if(length(sankey$segments) < 2 || merge_length <= 0) {
     return(invisible(NULL))
   }
+  if(is.null(merge_cols) && is.null(node_cols)) {
+    stop("Interior node trunks need `merge_cols` or `node_cols`.", call. = FALSE)
+  }
 
   draw_length <- merge_length + fill_overlap
   for(node_set in 2:length(sankey$segments)) {
@@ -3616,20 +3619,16 @@ draw_multi_stage_interior_trunks <- function(sankey, node_cols, merge_cols,
             merge_cols[[node_set - 1]]$end[prev_inds],
             prev_segment$flows$width[prev_inds]
           )
-        } else if(!is.null(node_cols)) {
-          node_cols[[node_set]][node]
         } else {
-          "#00000000"
+          node_cols[[node_set]][node]
         }
         right_col <- if(!is.null(merge_cols)) {
           weighted_average_color(
             merge_cols[[node_set]]$start[next_inds],
             next_segment$flows$width[next_inds]
           )
-        } else if(!is.null(node_cols)) {
-          node_cols[[node_set]][node]
         } else {
-          "#00000000"
+          node_cols[[node_set]][node]
         }
         middle_col <- transparent_color(weighted_average_color(
           c(left_col, right_col),
@@ -3646,11 +3645,12 @@ draw_multi_stage_interior_trunks <- function(sankey, node_cols, merge_cols,
         next
       }
 
-      col <- if(!is.null(node_cols)) {
-        node_cols[[node_set]][node]
-      } else {
+      # Trunks use merge colors; node colors only stand in when no merge colors exist.
+      col <- if(!is.null(merge_cols)) {
         flow_inds <- which(prev_segment$flows$to == node)
         merge_cols[[node_set - 1]]$end[flow_inds[1]]
+      } else {
+        node_cols[[node_set]][node]
       }
       if(flatten_trunks) {
         col <- flatten_alpha_color(col, bg = trunk_bg)
@@ -3974,15 +3974,17 @@ draw_node_outer_borders <- function(sankey, col, lwd, lty, merge_length,
 draw_sankey_borders <- function(sankey, border, lwd = 1, lty = 1,
                                 merge_length = sankey$merge_length,
                                 cap_start = TRUE, cap_end = TRUE) {
-  if(is.na(border) || merge_length >= min(sankey$path_lengths) / 2) {
+  if(is.na(border)) {
     return(invisible(NULL))
   }
 
   for(k in seq_along(sankey$centerlines)) {
     centerline <- sankey$centerlines[[k]]
     edges <- sankey_centerline_edges(sankey, k)
-    draw_edge_segment(edges$left, centerline, merge_length, merge_length, border, lwd, lty, sankey$xyr)
-    draw_edge_segment(edges$right, centerline, merge_length, merge_length, border, lwd, lty, sankey$xyr)
+    # Strands too short for both merge zones are filled whole, so border them whole.
+    skip <- if(sankey$path_lengths[k] > 2 * merge_length) merge_length else 0
+    draw_edge_segment(edges$left, centerline, skip, skip, border, lwd, lty, sankey$xyr)
+    draw_edge_segment(edges$right, centerline, skip, skip, border, lwd, lty, sankey$xyr)
   }
   if(merge_length > 0) {
     draw_node_outer_borders(
@@ -4109,6 +4111,7 @@ draw_sankey_fill_raster <- function(sankey, fill_cols, combine, gradient_slices,
                                     flatten_trunks = TRUE,
                                     trunk_bg = par("bg"),
                                     merge_cols = NULL,
+                                    endpoint_cols = NULL,
                                     mid_cols = NULL, ...) {
   # Read the background from the calling device, not the temporary raster device.
   force(trunk_bg)
@@ -4127,6 +4130,7 @@ draw_sankey_fill_raster <- function(sankey, fill_cols, combine, gradient_slices,
       flatten_trunks = flatten_trunks,
       trunk_bg = trunk_bg,
       merge_cols = merge_cols,
+      endpoint_cols = endpoint_cols,
       mid_cols = mid_cols,
       ...
     )
@@ -4136,6 +4140,7 @@ draw_sankey_fill_raster <- function(sankey, fill_cols, combine, gradient_slices,
 draw_sankey_multi_fill_layer <- function(sankey, col, combine, gradient_slices,
                                          merge_length, fill_overlap, gradient_mode,
                                          merge_cols, node_cols,
+                                         endpoint_cols = NULL,
                                          mid_col = NULL,
                                          flatten_trunks = TRUE,
                                          trunk_bg = par("bg"), ...) {
@@ -4168,6 +4173,7 @@ draw_sankey_multi_fill_layer <- function(sankey, col, combine, gradient_slices,
       flatten_trunks = flatten_trunks,
       trunk_bg = trunk_bg,
       merge_cols = merge_cols[[i]],
+      endpoint_cols = endpoint_cols[[i]],
       mid_cols = mid_cols,
       ...
     )
@@ -4188,6 +4194,7 @@ draw_sankey_multi_fill_layer <- function(sankey, col, combine, gradient_slices,
 draw_sankey_multi_fill_raster <- function(sankey, col, combine, gradient_slices,
                                           merge_length, fill_overlap, gradient_mode,
                                           merge_cols, node_cols,
+                                          endpoint_cols = NULL,
                                           mid_col = NULL,
                                           raster_res = 96,
                                           interpolate = TRUE,
@@ -4205,12 +4212,28 @@ draw_sankey_multi_fill_raster <- function(sankey, col, combine, gradient_slices,
       gradient_mode = gradient_mode,
       merge_cols = merge_cols,
       node_cols = node_cols,
+      endpoint_cols = endpoint_cols,
       mid_col = mid_col,
       flatten_trunks = flatten_trunks,
       trunk_bg = trunk_bg,
       ...
     )
   }, raster_res = raster_res, interpolate = interpolate)
+}
+
+# Opens a plot window with the aspect ratio the geometry was built for
+# (asp = xyr), so strand widths and stack offsets stay visually correct.
+open_sankey_window <- function(sankey) {
+  xs <- c(sankey$flows$start_x, sankey$flows$end_x)
+  ys <- c(sankey$flows$start_y, sankey$flows$end_y)
+  pad_x <- diff(range(xs)) * 0.08
+  pad_y <- max(sum(sankey$flows$width) / sankey$xyr, diff(range(ys))) * 0.25
+  plot.new()
+  plot.window(
+    xlim = range(xs) + c(-pad_x, pad_x),
+    ylim = range(ys) + c(-pad_y, pad_y),
+    asp = sankey$xyr
+  )
 }
 
 is_sankey_multi <- function(sankey) {
@@ -4257,19 +4280,11 @@ plot_sankey_multi <- function(sankey, col = "#5B8CBAAA", border = NA,
   gradient_mode <- match.arg(gradient_mode)
 
   if(!add) {
-    xs <- c(sankey$flows$start_x, sankey$flows$end_x)
-    ys <- c(sankey$flows$start_y, sankey$flows$end_y)
-    pad_x <- diff(range(xs)) * 0.08
-    pad_y <- max(sum(sankey$flows$width), diff(range(ys))) * 0.25
-    plot.new()
-    plot.window(
-      xlim = range(xs) + c(-pad_x, pad_x),
-      ylim = range(ys) + c(-pad_y, pad_y),
-      asp = NA
-    )
+    open_sankey_window(sankey)
   }
 
   node_cols <- NULL
+  endpoint_cols <- NULL
   if(!is.null(node_col)) {
     node_cols <- multi_sankey_node_colors(sankey, node_col, arg = "`node_col`")
   }
@@ -4277,7 +4292,12 @@ plot_sankey_multi <- function(sankey, col = "#5B8CBAAA", border = NA,
   if(!is.null(merge_col)) {
     merge_node_cols <- multi_sankey_node_colors(sankey, merge_col, arg = "`merge_col`")
     merge_cols <- merge_cols_from_node_cols(sankey, merge_node_cols)
-    node_cols <- merge_node_cols
+    if(is.null(node_cols)) {
+      node_cols <- merge_node_cols
+    } else {
+      # With both supplied, node_col sets strand gradient endpoints and merge_col the trunks.
+      endpoint_cols <- merge_cols_from_node_cols(sankey, node_cols)
+    }
   } else if(!is.null(node_cols)) {
     merge_cols <- merge_cols_from_node_cols(sankey, node_cols)
   } else if(is.null(merge_cols)) {
@@ -4303,7 +4323,8 @@ plot_sankey_multi <- function(sankey, col = "#5B8CBAAA", border = NA,
     }, integer(1)))
     alpha_cols <- c(
       unlist(lapply(stage_inds, function(i) sankey_flow_colors(sankey$segments[[i]], stage_arg(col, i)))),
-      unlist(lapply(merge_cols, function(x) c(x$start, x$end)))
+      unlist(lapply(merge_cols, function(x) c(x$start, x$end))),
+      unlist(lapply(endpoint_cols, function(x) c(x$start, x$end)))
     )
     if(!is.null(mid_col)) {
       alpha_cols <- c(
@@ -4335,6 +4356,7 @@ plot_sankey_multi <- function(sankey, col = "#5B8CBAAA", border = NA,
       gradient_mode = gradient_mode,
       merge_cols = merge_cols,
       node_cols = node_cols,
+      endpoint_cols = endpoint_cols,
       mid_col = mid_col,
       raster_res = stage_arg(raster_res, 1),
       interpolate = stage_arg(interp_raster, 1),
@@ -4415,6 +4437,7 @@ plot_sankey_multi <- function(sankey, col = "#5B8CBAAA", border = NA,
         trunk_start = trunk_start,
         trunk_end = trunk_end,
         merge_cols = merge_cols[[i]],
+        endpoint_cols = endpoint_cols[[i]],
         mid_col = stage_arg(mid_col, i),
         flatten_trunks = flatten_trunks,
         trunk_bg = trunk_bg,
@@ -4454,6 +4477,13 @@ plot_sankey_multi <- function(sankey, col = "#5B8CBAAA", border = NA,
       bg = stage_arg(node_border_bg, 1),
       edge_border = all_stages_have_border
     )
+  }
+
+  if(show_node_sums) {
+    offset <- if(is.null(node_sum_offset)) diff(range(sankey$nodes$x)) * 0.06 else node_sum_offset
+    for(segment in sankey$segments) {
+      draw_node_sum_segments(segment, col = node_sum_col, lwd = node_sum_lwd, offset = offset)
+    }
   }
 
   if(label_nodes) {
@@ -4506,6 +4536,7 @@ plot_sankey_ribbons <- function(sankey, col = "#5B8CBAAA", border = NA,
                                 node_col = NULL,
                                 merge_col = NULL,
                                 merge_cols = NULL,
+                                endpoint_cols = NULL,
                                 mid_col = NULL,
                                 flatten_trunks = TRUE,
                                 trunk_bg = par("bg"),
@@ -4564,16 +4595,7 @@ plot_sankey_ribbons <- function(sankey, col = "#5B8CBAAA", border = NA,
   }
 
   if(!add) {
-    xs <- c(sankey$flows$start_x, sankey$flows$end_x)
-    ys <- c(sankey$flows$start_y, sankey$flows$end_y)
-    pad_x <- diff(range(xs)) * 0.08
-    pad_y <- max(sum(sankey$flows$width), diff(range(ys))) * 0.25
-    plot.new()
-    plot.window(
-      xlim = range(xs) + c(-pad_x, pad_x),
-      ylim = range(ys) + c(-pad_y, pad_y),
-      asp = NA
-    )
+    open_sankey_window(sankey)
   }
 
   draw_border <- length(border) == 1 && !is.na(border)
@@ -4585,6 +4607,10 @@ plot_sankey_ribbons <- function(sankey, col = "#5B8CBAAA", border = NA,
     merge_cols <- single_merge_cols_from_node_cols(sankey, node_cols)
   }
   if(!is.null(merge_col)) {
+    # With both supplied, node_col sets strand gradient endpoints and merge_col the trunks.
+    if(!is.null(node_col)) {
+      endpoint_cols <- merge_cols
+    }
     merge_node_cols <- single_sankey_node_colors(sankey, merge_col, arg = "`merge_col`")
     merge_cols <- single_merge_cols_from_node_cols(sankey, merge_node_cols)
   }
@@ -4598,6 +4624,9 @@ plot_sankey_ribbons <- function(sankey, col = "#5B8CBAAA", border = NA,
     alpha_cols <- c(fill_cols)
     if(!is.null(merge_cols)) {
       alpha_cols <- c(alpha_cols, merge_cols$start, merge_cols$end)
+    }
+    if(!is.null(endpoint_cols)) {
+      alpha_cols <- c(alpha_cols, endpoint_cols$start, endpoint_cols$end)
     }
     if(!is.null(mid_cols)) {
       alpha_cols <- c(alpha_cols, mid_cols)
@@ -4625,6 +4654,7 @@ plot_sankey_ribbons <- function(sankey, col = "#5B8CBAAA", border = NA,
       flatten_trunks = flatten_trunks,
       trunk_bg = trunk_bg,
       merge_cols = merge_cols,
+      endpoint_cols = endpoint_cols,
       mid_cols = mid_cols,
       ...
     )
@@ -4643,6 +4673,7 @@ plot_sankey_ribbons <- function(sankey, col = "#5B8CBAAA", border = NA,
       flatten_trunks = flatten_trunks,
       trunk_bg = trunk_bg,
       merge_cols = merge_cols,
+      endpoint_cols = endpoint_cols,
       mid_cols = mid_cols,
       ...
     )
