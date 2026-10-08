@@ -1254,8 +1254,7 @@
   function locCsv() {
     const rows = state.loc;
     const anyLabel = rows.some((r) => r.label);
-    // R derives a width for every row once a label column exists, so partial labels need explicit widths.
-    const anyWidth = rows.some((r) => Number.isFinite(r.width)) || (anyLabel && rows.some((r) => !r.label));
+    const anyWidth = rows.some((r) => Number.isFinite(r.width));
     const anyHeight = rows.some((r) => Number.isFinite(r.height));
     const anyColor = rows.some((r) => r.color) || Object.keys(state.nodeColors).length > 0;
     const anyMerge = rows.some((r) => r.merge_col) || Object.keys(state.mergeColors).length > 0;
@@ -1298,6 +1297,21 @@
     })));
   }
 
+  // Manual strand orders as R's stack_order rows: side, stage, from, to, rank (1-based, 1 = bottom).
+  function stackOrderRows() {
+    const keys = new Set(layout.flows.map((f) => f.key));
+    const rows = [];
+    ['start', 'end'].forEach((side) => {
+      Object.values(state.manualOrder[side]).forEach((list) => {
+        list.filter((key) => keys.has(key)).forEach((key, r) => {
+          const [stage, i, j] = key.split(':').map(Number);
+          rows.push([side, stage + 1, i + 1, j + 1, r + 1]);
+        });
+      });
+    });
+    return rows;
+  }
+
   function rString(s) {
     return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   }
@@ -1329,11 +1343,14 @@
     if (files.mids.length) {
       lines.push(graph ? 'mid_col <- read_colors("mid_colors.csv")' : `mid_col <- lapply(c(${files.mids.map(rString).join(', ')}), read_colors)`);
     }
+    if (files.stackOrder) lines.push('stack_order <- read.csv("stack_order.csv", stringsAsFactors = FALSE)');
     const setCount = graph ? 0 : state.matrices.length + 1;
     if (graph) {
-      // One color per strand, in R's column-major order of positive adjacency entries.
-      const ends = (side) => layout.flows.map((f) => rString(C.toHex(colors.merge[side === 'start' ? f.from : f.to])));
-      lines.push(`merge_cols <- list(\n  start = c(${ends('start').join(', ')}),\n  end = c(${ends('end').join(', ')})\n)`);
+      // One color per strand, in R's column-major order of positive adjacency entries:
+      // trunk (merge) colors and strand gradient endpoint (node) colors.
+      const ends = (cols, side) => layout.flows.map((f) => rString(C.toHex(cols[side === 'start' ? f.from : f.to])));
+      const perStrand = (cols) => `list(\n  start = c(${ends(cols, 'start').join(', ')}),\n  end = c(${ends(cols, 'end').join(', ')})\n)`;
+      lines.push(`merge_cols <- ${perStrand(colors.merge)}`, `endpoint_cols <- ${perStrand(colors.node)}`);
     } else {
       const bySet = Array.from({ length: setCount }, () => []);
       const mergeBySet = Array.from({ length: setCount }, () => []);
@@ -1343,7 +1360,6 @@
       });
       lines.push(`node_col <- list(\n${bySet.map((s) => `  c(${s.map(rString).join(', ')})`).join(',\n')}\n)`);
       if (mergeBySet.some((s, i) => s.some((c, j) => c !== bySet[i][j]))) {
-        lines.push('# R uses merge_col for both trunks and strand gradient endpoints when it is supplied.');
         lines.push(`merge_col <- list(\n${mergeBySet.map((s) => `  c(${s.map(rString).join(', ')})`).join(',\n')}\n)`);
       }
     }
@@ -1366,9 +1382,10 @@
         args.push(`${key} = ${rValue(p[key])}`);
       }
     });
+    if (files.stackOrder) args.push('stack_order = stack_order');
     lines.push(`sankey <- ${graph ? 'sankey_ribbons_graph' : 'sankey_ribbons'}(\n  thic,\n  loc${args.map((a) => `,\n  ${a}`).join('')}\n)`);
     const plotArgs = ['col = col'];
-    if (graph) plotArgs.push('merge_cols = merge_cols');
+    if (graph) plotArgs.push('merge_cols = merge_cols', 'endpoint_cols = endpoint_cols');
     else plotArgs.push('node_col = node_col');
     if (lines.some((l) => l.startsWith('merge_col <-'))) plotArgs.push('merge_col = merge_col');
     if (files.mids.length) plotArgs.push('mid_col = mid_col');
@@ -1377,30 +1394,20 @@
     plotArgs.push(`border = ${style.border === 'none' ? 'NA' : rString(style.border)}`);
     if (style.border !== 'none') plotArgs.push(`border_lwd = ${rValue(style.borderWidth)}`, `border_caps = ${rValue(style.borderCaps)}`);
     plotArgs.push(`node_border = ${style.nodeBorder === 'auto' ? 'NULL' : style.nodeBorder === 'none' ? 'NA' : rString(style.nodeBorder)}`);
-    plotArgs.push(`node_border_lwd = ${rValue(style.nodeBorderWidth)}`, `flatten_trunks = ${rValue(style.flatten)}`,
-      'label_nodes = FALSE', 'add = TRUE');
-    lines.push(`plot_sankey_ribbons(\n  sankey,\n  ${plotArgs.join(',\n  ')}\n)`);
+    plotArgs.push(`node_border_lwd = ${rValue(style.nodeBorderWidth)}`, `flatten_trunks = ${rValue(style.flatten)}`);
     if (style.nodeSums) {
-      // Drawn directly: plot_sankey_ribbons() ignores show_node_sums for multi-stage objects.
       const xs = layout.nodes.map((n) => n.x);
-      const offset = round(0.06 * (Math.max(...xs) - Math.min(...xs)));
-      const sumArgs = `col = ${rString(C.toHex(C.parse(style.labelColor)))}, lwd = 2, offset = ${offset}`;
-      lines.push(graph
-        ? `draw_node_sum_segments(sankey, ${sumArgs})`
-        : `for(segment in sankey$segments) draw_node_sum_segments(segment, ${sumArgs})`);
+      plotArgs.push('show_node_sums = TRUE', `node_sum_col = ${rString(C.toHex(C.parse(style.labelColor)))}`,
+        `node_sum_offset = ${round(0.06 * (Math.max(...xs) - Math.min(...xs)))}`);
     }
+    plotArgs.push('label_nodes = FALSE', 'add = TRUE');
+    lines.push(`plot_sankey_ribbons(\n  sankey,\n  ${plotArgs.join(',\n  ')}\n)`);
     if (style.labels && state.loc.some((r) => r.label)) {
       lines.push('labeled <- sankey$nodes[sankey$nodes$has_label, ]',
         `text(labeled$x, labeled$y, labeled$label, cex = labeled$cex, font = labeled$font, col = ${rString(C.toHex(C.parse(style.labelColor)))})`);
     }
     if (style.showPoints) lines.push('points(sankey$nodes$x, sankey$nodes$y, pch = 21, bg = "white", lwd = 2)');
     lines.push('dev.off()');
-    const manual = Object.keys(state.manualOrder.start).length + Object.keys(state.manualOrder.end).length;
-    if (manual) lines.push('', '# Note: manual strand reordering from the webapp has no R equivalent and is not reproduced.');
-    if (state.loc.some((r) => r.label) && state.loc.some((r) => !r.label)) {
-      lines.push('# Note: R treats every node as labeled when loc has a label column, so unlabeled nodes',
-        '# get label-style (faded) node bodies; their widths are written explicitly in loc.csv.');
-    }
     lines.push(`# Plot region: ${plotW} x ${plotH} px.`);
     return `${lines.join('\n')}\n`;
   }
@@ -1428,6 +1435,11 @@
       });
     }
     out.push({ name: 'loc.csv', text: locCsv() });
+    const stackRows = stackOrderRows();
+    if (stackRows.length) {
+      names.stackOrder = true;
+      out.push({ name: 'stack_order.csv', text: CSV.format([['side', 'stage', 'from', 'to', 'rank'], ...stackRows]) });
+    }
     out.push({ name: 'sankey.R', text: rCode(names) });
     out.push({ name: 'project.json', text: projectJson() });
     return out;

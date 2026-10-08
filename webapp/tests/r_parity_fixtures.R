@@ -151,7 +151,18 @@ cases <- list(
            list(n = 40, route = "boundary", boundary_group = "source", boundary_compensation = "full")),
   run_case("graph_widths", graph_thic, graph_loc, list(n = 30), graph = TRUE),
   run_case("graph_projected", projected_thic, projected_loc, list(n = 20, target_order = "source_projected"), graph = TRUE),
-  run_case("graph_bezier_order", bezier_order_thic, bezier_order_loc, list(n = 40, target_order = "source_bezier"), graph = TRUE)
+  run_case("graph_bezier_order", bezier_order_thic, bezier_order_loc, list(n = 40, target_order = "source_bezier"), graph = TRUE),
+  run_case("multi_stack_order", multi_thic, multi_loc, list(
+    n = 20,
+    stack_order = data.frame(side = c("start", "start", "end", "end"), stage = c(1, 1, 3, 3),
+                             from = c(2, 2, 1, 4), to = c(1, 3, 2, 2), rank = c(2, 1, 1, 2))
+  )),
+  run_case("graph_stack_order_bezier", graph_thic, graph_loc, list(
+    n = 30,
+    target_order = "source_bezier",
+    stack_order = data.frame(side = c("end", "end", "start", "start"), from = c(3, 1, 1, 1),
+                             to = c(4, 4, 3, 4), rank = c(1, 2, 2, 1))
+  ), graph = TRUE)
 )
 
 dir.create("webapp/tests/fixtures", showWarnings = FALSE, recursive = TRUE)

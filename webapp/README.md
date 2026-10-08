@@ -34,7 +34,7 @@ All `sankey_ribbons()` layout options are available in the sidebar, including pe
 
 ## Exports
 
-SVG, PNG (2×), `loc.csv`, a project JSON, and an **R bundle** zip containing the flow matrices, resolved color matrices, `loc.csv` and a `sankey.R` script that calls `sankey_ribbons()`/`sankey_ribbons_graph()` and `plot_sankey_ribbons()` with the current settings. Manual strand reordering has no R equivalent and is noted in the script.
+SVG, PNG (2×), `loc.csv`, a project JSON, and an **R bundle** zip containing the flow matrices, resolved color matrices, `loc.csv` and a `sankey.R` script that calls `sankey_ribbons()`/`sankey_ribbons_graph()` and `plot_sankey_ribbons()` with the current settings. Strand orders set by dragging are written to `stack_order.csv` and passed to R as `stack_order`.
 
 ## Code layout
 

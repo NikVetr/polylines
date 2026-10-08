@@ -10,17 +10,38 @@ const cases = require('./fixtures/r_parity.json');
 const unitView = { xlim: [0, 1], ylim: [0, 1], width: 1, height: 1 };
 const TOL = 1e-8;
 
+// R's stack_order rows (side, [stage], from, to, rank; 1-based) as the app's manualOrder
+// ({ side: { nodeKey: [flowKey, ...] } }, bottom to top).
+function manualOrderFrom(rows, c) {
+  const out = { start: {}, end: {} };
+  rows.slice().sort((a, b) => a.rank - b.rank).forEach((r) => {
+    const stage = (r.stage || 1) - 1;
+    let nodeKey;
+    if (c.mode === 'graph') {
+      const node = c.loc[(r.side === 'start' ? r.from : r.to) - 1];
+      nodeKey = `${node.set}:${node.node}`;
+    } else {
+      nodeKey = r.side === 'start' ? `${stage + 1}:${r.from}` : `${stage + 2}:${r.to}`;
+    }
+    (out[r.side][nodeKey] = out[r.side][nodeKey] || []).push(`${stage}:${r.from - 1}:${r.to - 1}`);
+  });
+  return out;
+}
+
 function toModel(c) {
   const params = {};
   const stageParams = [];
+  let manualOrder;
   Object.entries(c.params).forEach(([key, value]) => {
-    if (Array.isArray(value)) {
+    if (key === 'stack_order') {
+      manualOrder = manualOrderFrom(value, c);
+    } else if (Array.isArray(value)) {
       value.forEach((v, s) => { stageParams[s] = Object.assign(stageParams[s] || {}, { [key]: v }); });
     } else {
       params[key] = value;
     }
   });
-  return { mode: c.mode, matrices: c.matrices, loc: c.loc, params, stageParams };
+  return { mode: c.mode, matrices: c.matrices, loc: c.loc, params, stageParams, manualOrder };
 }
 
 function maxPointDiff(a, b) {

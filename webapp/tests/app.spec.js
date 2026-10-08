@@ -70,6 +70,10 @@ test('dragging a strand reorders it in the stack at its nearer end', async ({ pa
   expect(s.manualOrder.start['1:1'][s.manualOrder.start['1:1'].length - 1]).toBe(info.key);
   const offset = await page.evaluate((key) => window.SankeyApp.layout.flows.find((f) => f.key === key).startOffset, info.key);
   expect(offset).toBeGreaterThan(info.offset);
+  const bundle = await page.evaluate(() => window.SankeyApp.bundleFiles());
+  const stackOrder = bundle.find((f) => f.name === 'stack_order.csv');
+  expect(stackOrder.text).toContain('start,1,1,2,');
+  expect(bundle.find((f) => f.name === 'sankey.R').text).toContain('stack_order = stack_order');
 });
 
 test('selecting a strand lets you edit its color and value', async ({ page }) => {
