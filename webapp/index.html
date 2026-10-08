@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Polylines Sankey</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">polylines <span>Sankey</span></div>
+    <div class="actions">
+      <label class="btn primary" title="Load flow matrices, a loc table, color matrices or a project file (CSV/TSV/JSON)">
+        Open files…<input id="file-input" type="file" multiple accept=".csv,.tsv,.txt,.json" hidden>
+      </label>
+      <select id="example-select" aria-label="Load an example"></select>
+      <button id="undo" class="btn" title="Undo (Ctrl/⌘+Z)" aria-label="Undo">↶</button>
+      <button id="redo" class="btn" title="Redo (Ctrl/⌘+Shift+Z)" aria-label="Redo">↷</button>
+      <button id="fit" class="btn" title="Fit the view to the content (F)">Fit view</button>
+      <div class="menu">
+        <button id="export-btn" class="btn">Export ▾</button>
+        <div id="export-menu" class="menu-list" hidden>
+          <button data-export="svg">SVG image</button>
+          <button data-export="png">PNG image (2×)</button>
+          <button data-export="loc">Node locations (loc.csv)</button>
+          <button data-export="bundle">R bundle (.zip: CSVs + sankey.R)</button>
+          <button data-export="rcode">Show R code…</button>
+          <button data-export="project">Project file (.json)</button>
+        </div>
+      </div>
+      <button id="help-btn" class="btn" title="Help (?)" aria-label="Help">?</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <details class="section" open>
+        <summary>Data</summary>
+        <div class="row">
+          <label for="mode-select">Mode</label>
+          <select id="mode-select">
+            <option value="layered">layered stages</option>
+            <option value="graph">graph (square adjacency)</option>
+          </select>
+        </div>
+        <div class="file-group">
+          <div class="file-head"><span>Flow matrices</span>
+            <label class="mini-btn">Load…<input type="file" data-role="stages" multiple accept=".csv,.tsv,.txt" hidden></label>
+          </div>
+          <ol id="stage-list" class="file-list"></ol>
+        </div>
+        <div class="file-group">
+          <div class="file-head"><span>Node locations</span>
+            <label class="mini-btn">Load…<input type="file" data-role="loc" accept=".csv,.tsv,.txt" hidden></label>
+          </div>
+          <div id="loc-name" class="file-note"></div>
+        </div>
+        <div class="file-group">
+          <div class="file-head"><span>Strand colors</span>
+            <span><button id="clear-colors" class="mini-btn" title="Remove color matrices">clear</button>
+            <label class="mini-btn">Load…<input type="file" data-role="colors" multiple accept=".csv,.tsv,.txt" hidden></label></span>
+          </div>
+          <ol id="color-list" class="file-list"></ol>
+        </div>
+        <div class="file-group">
+          <div class="file-head"><span>Mid colors</span>
+            <span><button id="clear-mids" class="mini-btn" title="Remove mid-color matrices">clear</button>
+            <label class="mini-btn">Load…<input type="file" data-role="mids" multiple accept=".csv,.tsv,.txt" hidden></label></span>
+          </div>
+          <ol id="mid-list" class="file-list"></ol>
+        </div>
+        <div class="button-grid">
+          <button id="auto-layout" class="mini-btn" title="Generate node locations from the matrices">Auto-layout nodes</button>
+          <button id="bake-loc" class="mini-btn" title="Write adjusted y positions into loc">Bake adjusted y</button>
+          <button id="clear-order" class="mini-btn" title="Forget strand orders set by dragging">Reset strand order</button>
+          <button id="download-examples" class="mini-btn" title="Download the current example's input files">Example files</button>
+        </div>
+      </details>
+      <div id="controls"></div>
+    </aside>
+
+    <section id="stage" class="stage">
+      <div class="banners">
+        <div id="banner" class="banner error" role="alert" hidden></div>
+        <div id="warnings" class="banner warn" hidden></div>
+        <div id="notice" class="banner info" role="status" hidden></div>
+      </div>
+      <svg id="plot" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div id="tooltip" class="tooltip" hidden></div>
+      <div id="drop-overlay" class="drop-overlay" hidden>Drop CSV or project files to load them</div>
+    </section>
+
+    <aside id="inspector" class="inspector"></aside>
+  </main>
+
+  <dialog id="help-dialog">
+    <form method="dialog">
+      <h2>Polylines Sankey</h2>
+      <p>An interactive version of the Sankey ribbons in <code>R/functions.R</code>. It reads the same inputs as
+        <code>sankey_ribbons()</code> / <code>sankey_ribbons_graph()</code>, saved as CSV files.</p>
+      <h3>Files</h3>
+      <ul>
+        <li><b>Flow matrices</b>: one numeric CSV per stage (rows = source nodes, columns = target nodes); adjacent
+          stages must share dimensions. In graph mode, one square matrix over all loc rows. Headers and row names
+          (as written by R's <code>write.csv()</code>) are detected and used as node names.</li>
+        <li><b>Node locations (loc)</b>: columns <code>set, node, x, y</code> plus optional <code>width</code>,
+          <code>label</code>, <code>cex</code>, <code>font</code>, <code>height</code>, <code>color</code> and
+          <code>merge_col</code>. A headerless file is read like R's numeric loc matrix
+          (<code>set, node, x, y [, width [, height]]</code>).</li>
+        <li><b>Strand / mid colors</b>: color matrices shaped like the flow matrices (hex such as <code>#5B8CBAAA</code>,
+          CSS names, R <code>grayNN</code>, or <code>NA</code>).</li>
+        <li><b>Project</b>: a <code>.json</code> file exported from this app restores everything.</li>
+      </ul>
+      <p>Drop files anywhere, or use <b>Open files…</b>; file roles are detected from their contents and names
+        (files whose names contain “mid” are mid colors). Stage order follows file names; reorder with the arrows.</p>
+      <h3>Interaction</h3>
+      <ul>
+        <li>Hover strands or nodes for values and shares; click to edit them in the inspector.</li>
+        <li>Drag nodes to move them (Shift: vertical only, Alt: horizontal only).</li>
+        <li>Drag a strand up or down to reorder it within the stack at its nearer end.</li>
+        <li>Ctrl/⌘+Z and Ctrl/⌘+Shift+Z undo and redo; F fits the view; Esc clears the selection.</li>
+      </ul>
+      <p><b>Export → R bundle</b> writes the CSVs, a <code>loc.csv</code> with your edits and a <code>sankey.R</code>
+        script that redraws the plot with the R functions.</p>
+      <div class="dialog-actions"><button class="btn primary" value="close">Close</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="code-dialog">
+    <form method="dialog">
+      <h2>R code</h2>
+      <p class="muted">Reads the files in the R bundle export.</p>
+      <textarea id="code-text" readonly spellcheck="false"></textarea>
+      <div class="dialog-actions">
+        <button id="copy-code" type="button" class="btn">Copy</button>
+        <button class="btn primary" value="close">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="js/layout.js"></script>
+  <script src="js/color.js"></script>
+  <script src="js/csv.js"></script>
+  <script src="js/shapes.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/zip.js"></script>
+  <script src="js/examples.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

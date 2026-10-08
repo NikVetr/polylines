@@ -148,6 +148,10 @@ Focused Sankey checks can be run with:
 Rscript tests/test_sankey.R
 ```
 
+### Interactive Sankey webapp
+
+`webapp/` contains a static, build-free browser version of the Sankey helpers: open `webapp/index.html` (or run `npm run serve` inside `webapp/`). It loads the same flow matrices, `loc` table and color matrices as CSV files, adds hover details, node and strand dragging, live color and layout editing, and exports SVG/PNG images plus an R bundle (CSVs and a `sankey.R` script) that redraws the edited diagram with `sankey_ribbons()` and `plot_sankey_ribbons()`. See [`webapp/README.md`](webapp/README.md) for file formats and tests.
+
 ## Future Work
 
 There are a couple things I still want to do here, like support more general overlap-order controls, add formal tests, and decide whether the Sankey helpers should be promoted into a fuller R package interface.
