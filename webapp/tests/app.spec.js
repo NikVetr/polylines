@@ -494,6 +494,25 @@ test('clicking a node pins its traces and breakdown in the inspector until Esc',
   await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
 });
 
+test('autosave keeps only non-default style, so later default changes reach restored sessions', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  await page.waitForTimeout(600);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('polylines-sankey-v1')).style);
+  expect(saved.labelPosition).toBe('above');
+  expect('gatherInNodes' in saved).toBe(false);
+  // A session saved by an older version, with a since-renamed key, restores cleanly.
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('polylines-sankey-v1'));
+    s.style.gatherTraces = true;
+    localStorage.setItem('polylines-sankey-v1', JSON.stringify(s));
+  });
+  await page.reload();
+  const style = await page.evaluate(() => window.SankeyApp.state.style);
+  expect(style.gatherInNodes).toBe(false);
+  expect('gatherTraces' in style).toBe(false);
+  expect(style.labelPosition).toBe('above');
+});
+
 test('imported tables label nodes above solid bodies in darker node colors', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const s = await state(page);

@@ -34,7 +34,7 @@
     canvasHeight: null,
     collision: 'wall',
     tracePaths: true,
-    gatherTraces: false,
+    gatherInNodes: false,
     substrands: false
   };
 
@@ -420,7 +420,7 @@
         { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover',
           help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ for the single pathway under the pointer, or Shift for the single item.',
           showIf: () => !!state.paths },
-        { key: 'gatherTraces', target: 'style', type: 'checkbox', label: 'Gather traces in nodes',
+        { key: 'gatherInNodes', target: 'style', type: 'checkbox', label: 'Gather traces in nodes',
           help: 'Traced pathways close up into one contiguous bundle along the top or bottom of each node they share, fanning back out to their strands at the node edges.',
           showIf: () => !!state.paths && state.style.tracePaths },
         { key: 'substrands', target: 'style', type: 'checkbox', label: 'Substrand lines',
@@ -1090,7 +1090,7 @@
     const sy = (Y) => Math.round((MARGIN + h - Y) * 100) / 100;
     const line = (pts) => pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p[0])} ${sy(p[1])}`).join('');
     const stopTag = (offset, color, opacity) => `<stop offset="${(offset * 100).toFixed(2)}%" stop-color="${color}" stop-opacity="${opacity}"/>`;
-    const slots = !target.single && state.style.gatherTraces && target.paths.length > 1
+    const slots = !target.single && state.style.gatherInNodes && target.paths.length > 1
       ? P.gatherSlots(layout, traces.subs, target.paths) : null;
     let defs = '';
     let body = '';
@@ -1952,7 +1952,9 @@
     const next = blankState();
     Object.keys(next).forEach((key) => { if (key in obj) next[key] = obj[key]; });
     next.params = Object.assign({}, L.DEFAULT_PARAMS, obj.params);
-    next.style = Object.assign({}, DEFAULT_STYLE, obj.style);
+    // Only known style keys are restored (renamed or retired ones are dropped); the rest take defaults.
+    next.style = Object.assign({}, DEFAULT_STYLE);
+    Object.keys(DEFAULT_STYLE).forEach((k) => { if (obj.style && k in obj.style) next.style[k] = obj.style[k]; });
     state = next;
     selection = null;
     routeScope = 'all';
@@ -2001,7 +2003,13 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        // Style values equal to the defaults are left out, so a later change of default reaches
+        // restored sessions instead of being frozen in as if it had been chosen.
+        const style = {};
+        Object.keys(state.style).forEach((k) => {
+          if (JSON.stringify(state.style[k]) !== JSON.stringify(DEFAULT_STYLE[k])) style[k] = state.style[k];
+        });
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.assign({}, state, { style })));
       } catch (err) {
         notify('This session is too large to autosave in the browser; export a project file to keep it.');
       }
