@@ -571,6 +571,22 @@ test('Alt-click adds and removes substrands from a pool traced and tabulated tog
   await expect(page.locator('#plot .trace')).toHaveCount(0);
 });
 
+test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
+  await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
+  await expect(page.locator('.topbar .actions > [data-export="png"]')).toBeVisible();
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const node = await nodeAt(page, 'Remission');
+  await page.mouse.click(node.x, node.y);
+  await page.mouse.move(5, 5);
+  await page.waitForTimeout(200);
+  const svg = await page.evaluate(() => window.SankeyApp.exportSvgText());
+  expect(svg).toContain('class="trace"');
+  expect(svg).toContain('class="node-fill"');
+  expect(svg).toContain('opacity="0.16"');
+  expect(svg).toContain('filter="url(#dim-node)"');
+  expect(svg).not.toContain('selection-outline');
+});
+
 test('nodes and strands fully covered by traces hide their faded copies', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const node = await nodeAt(page, 'Remission');

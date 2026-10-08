@@ -1805,7 +1805,16 @@
   function exportSvgText() {
     if (!layout) throw new L.SankeyError('Nothing to export: the current data does not produce a plot.');
     const clone = svg.cloneNode(true);
-    clone.querySelectorAll('.layer-hits, .layer-traces, .layer-fills, .layer-selection').forEach((el) => el.remove());
+    // The app's CSS dims or hides parts of the plot around a focus; copy those computed styles
+    // onto the export so it shows the focused view, traces and fill bars included.
+    const copies = clone.querySelectorAll('*');
+    svg.querySelectorAll('*').forEach((el, i) => {
+      const cs = getComputedStyle(el);
+      if (cs.opacity !== '1') copies[i].setAttribute('opacity', cs.opacity);
+      if (cs.filter && cs.filter !== 'none') copies[i].setAttribute('filter', cs.filter.replace(/url\("?([^")]+)"?\)/, 'url($1)'));
+    });
+    clone.querySelectorAll('.layer-hits, .layer-selection').forEach((el) => el.remove());
+    clone.querySelectorAll('.layer-traces, .layer-fills').forEach((el) => { if (!el.childElementCount) el.remove(); });
     clone.removeAttribute('class');
     clone.removeAttribute('id');
     clone.querySelectorAll('[class]').forEach((el) => {
@@ -2204,7 +2213,7 @@
       menu.hidden = !menu.hidden;
     });
     document.addEventListener('click', () => { menu.hidden = true; });
-    menu.querySelectorAll('[data-export]').forEach((b) => b.addEventListener('click', () => runExport(b.dataset.export)));
+    document.querySelectorAll('[data-export]').forEach((b) => b.addEventListener('click', () => runExport(b.dataset.export)));
     $('#help-btn').addEventListener('click', () => $('#help-dialog').showModal());
     $('#copy-code').addEventListener('click', () => {
       navigator.clipboard.writeText($('#code-text').value).then(() => notify('R code copied.'), () => {

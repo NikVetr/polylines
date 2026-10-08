@@ -18,11 +18,11 @@
       <button id="undo" class="btn" title="Undo (Ctrl/⌘+Z)" aria-label="Undo">↶</button>
       <button id="redo" class="btn" title="Redo (Ctrl/⌘+Shift+Z)" aria-label="Redo">↷</button>
       <button id="fit" class="btn" title="Fit the view to the content (F)">Fit view</button>
+      <button class="btn" data-export="svg" title="Download the plot as shown, focused substrands included, as an SVG image">SVG</button>
+      <button class="btn" data-export="png" title="Download the plot as shown, focused substrands included, as a PNG image (2×)">PNG</button>
       <div class="menu">
         <button id="export-btn" class="btn">Export ▾</button>
         <div id="export-menu" class="menu-list" hidden>
-          <button data-export="svg">SVG image</button>
-          <button data-export="png">PNG image (2×)</button>
           <button data-export="loc">Node locations (loc.csv)</button>
           <button data-export="bundle">R bundle (.zip: CSVs + sankey.R)</button>
           <button data-export="rcode">Show R code…</button>
@@ -129,6 +129,7 @@
           and breaks them down by node and strand in the inspector; hold Ctrl/⌘ to trace the single pathway, or
           the single item when the table has item ids, under the pointer. Click to pin what is shown; Alt-click
           (⌥-click) to add or remove substrands from a pool that is traced and tabulated together.</li>
+        <li>The SVG and PNG buttons export the plot as shown, including any focused substrands.</li>
         <li>Dragging a node into a neighbour stops at a wall, or pushes it along (Canvas &amp; dragging).</li>
         <li>Ctrl/⌘+Z and Ctrl/⌘+Shift+Z undo and redo; F fits the view; Esc clears the selection.</li>
       </ul>
