@@ -1,7 +1,7 @@
 /* Interactive Sankey app: state, controls, file loading, rendering, interaction and export. */
 (function () {
   'use strict';
-  const { layout: L, color: C, csv: CSV, shapes: S, render: R } = window.SK;
+  const { layout: L, color: C, csv: CSV, shapes: S, render: R, paths: P } = window.SK;
   const $ = (selector) => document.querySelector(selector);
   const STORAGE_KEY = 'polylines-sankey-v1';
   const MARGIN = 18;
@@ -30,7 +30,8 @@
     labelColor: '#1F2937',
     canvasWidth: null,
     canvasHeight: null,
-    collision: 'wall'
+    collision: 'wall',
+    tracePaths: true
   };
 
   const svg = $('#plot');
@@ -41,6 +42,8 @@
   let layout = null;
   let colors = null;
   let frame = null;
+  let traces = null; // { subs, paths, total } when item-level pathways can be traced
+  let lastPointer = null;
   let selection = null; // { kind: 'flow' | 'node', key }
   let hover = null;
   let drag = null;
@@ -72,6 +75,8 @@
       style: Object.assign({}, DEFAULT_STYLE),
       valueScale: 1,
       trustedNames: false,
+      paths: null,
+      pathUnit: null,
       view: null
     };
   }
@@ -81,7 +86,8 @@
   const round = (v, digits = 6) => Number(Number(v).toPrecision(digits));
   const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const fmtValue = (v) => (Math.abs(v) >= 100 ? v.toFixed(1) : Number(v.toPrecision(4)).toString());
+  const fmtValue = (v) => (Number.isInteger(v) ? v.toLocaleString()
+    : Math.abs(v) >= 100 ? v.toFixed(1) : Number(v.toPrecision(4)).toString());
   const isDefaultName = (name) => !name || /^V?\d+$/.test(name);
   // Matrix dimnames like V1 or 1 are R defaults, but names from an imported table are real categories.
   const usableName = (name) => !!name && (state.trustedNames || !isDefaultName(name));
@@ -249,7 +255,16 @@
         svg.innerHTML = R.render(layout, colors, state.style, frame);
         svg.classList.remove('stale');
         showError(null);
-        showWarnings(layout.warnings);
+        const warnings = layout.warnings.slice();
+        traces = null;
+        if (state.paths && P.consistent(layout, state.paths)) {
+          if (state.style.tracePaths) {
+            traces = { subs: P.substrands(layout, state.paths), paths: state.paths, total: state.paths.reduce((t, x) => t + x.weight, 0) };
+          }
+        } else if (state.paths) {
+          warnings.push('The pathway data no longer matches the flow values, so pathway tracing is off.');
+        }
+        showWarnings(warnings);
       }
     } catch (err) {
       // Keep the last good drawing visible (dimmed, inert) so there is context for undoing.
@@ -260,6 +275,7 @@
     }
     if (selection && layout && !findSelected()) selection = null;
     // Hover indices refer to the previous layout; drop them when that strand/node is gone.
+    if (hover && hover.paths && !traces) hover = Object.assign({}, hover, { paths: null });
     if (hover && !(layout && (hover.kind === 'flow' ? layout.flows : layout.nodes)[hover.index])) {
       hover = null;
       tooltip.hidden = true;
@@ -388,6 +404,9 @@
     {
       title: 'Canvas & dragging',
       items: [
+        { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover',
+          help: 'Hover a strand to trace one item-level pathway; hold Ctrl/⌘ to trace every pathway through a strand or node.',
+          showIf: () => !!state.paths },
         { key: 'collision', target: 'style', type: 'select', label: 'Dragged node hits',
           options: [['wall', 'a wall (stops)'], ['push', 'neighbours (pushes them)']],
           help: 'What happens when a dragged node would leave a strand no horizontal room.' },
@@ -629,10 +648,12 @@
     fileList($('#stage-list'), state.stageNames, (i, d) => {
       if (i + d < 0 || i + d >= state.matrices.length) return;
       stageArrays().forEach((arr) => { [arr[i], arr[i + d]] = [arr[i + d], arr[i]]; });
+      state.paths = null;
       clearKeyedEdits();
       update({ fit: true, commit: true });
     }, (i) => {
       stageArrays().forEach((arr) => { if (i < arr.length) arr.splice(i, 1); });
+      state.paths = null;
       if (state.colorMatrices && !state.colorMatrices.some(Boolean)) {
         state.colorMatrices = null;
         state.colorNames = [];
@@ -769,6 +790,7 @@
       // New flow matrices are R thickness values, unrelated to an earlier table's scale.
       state.valueScale = 1;
       state.trustedNames = false;
+      state.paths = null;
     }
     if (loc) {
       state.loc = loc;
@@ -967,6 +989,8 @@
     state.matrices = result.matrices;
     state.dimnames = result.dimnames;
     state.stageNames = result.stageNames;
+    state.paths = result.paths || null;
+    state.pathUnit = result.unit || null;
     state.trustedNames = true;
     state.valueScale = autoValueScale();
     autoLocate({ labels: opts.labels });
@@ -1008,10 +1032,60 @@
     return { kind: 'node', index: Number(el.dataset.node) };
   }
 
+  // Pathways to trace for a hover target: the one under the pointer on a strand, or with Ctrl/⌘
+  // every pathway through the strand or node. Null when tracing does not apply.
+  function tracedPaths(target, event) {
+    if (!traces || !target || !event) return null;
+    const all = event.ctrlKey || event.metaKey;
+    if (target.kind === 'flow') {
+      if (all) return traces.subs.byFlow[target.index].map((e) => e.path);
+      const p = plotPoint(event);
+      const pi = P.pathAt(layout, traces.subs, target.index, p.X, p.Y);
+      return pi >= 0 ? [pi] : null;
+    }
+    if (!all) return null;
+    const n = layout.nodes[target.index];
+    const list = traces.paths.map((path, pi) => (path.nodes[n.set - 1] === n.node - 1 ? pi : -1)).filter((pi) => pi >= 0);
+    return list.length ? list : null;
+  }
+
+  const nodeAtStage = (s, i) => layout.nodes.find((n) => n.set === s + 1 && n.node === i + 1);
+  const pathName = (pi) => traces.paths[pi].nodes.map((ni, s) => nodeDisplayName(nodeAtStage(s, ni))).join(' → ');
+
+  // Overlay shapes for traced pathways, colored like the strands they pass through.
+  function traceMarkup(list) {
+    const h = layout.view.height;
+    const sx = (X) => Math.round((MARGIN + X) * 100) / 100;
+    const sy = (Y) => Math.round((MARGIN + h - Y) * 100) / 100;
+    let defs = '';
+    let body = '';
+    list.forEach((pi, n) => {
+      const t = P.tracePolygon(layout, traces.subs, pi);
+      const xs = t.polygon.map((p) => p[0]);
+      const x0 = Math.min(...xs);
+      const x1 = Math.max(...xs);
+      const stops = t.flows.map((f, s) => {
+        const c = colors.flow[f.index];
+        const paint = C.paint(C.withAlpha(c, Math.max(c.a, 0.92)));
+        const offset = x1 > x0 ? ((t.spans[s][0] + t.spans[s][1]) / 2 - x0) / (x1 - x0) : 0.5;
+        return [offset, `<stop offset="${(offset * 100).toFixed(2)}%" stop-color="${paint.color}" stop-opacity="${paint.opacity}"/>`];
+      }).sort((a, b) => a[0] - b[0]).map((e) => e[1]).join('');
+      defs += `<linearGradient id="trace${n}" gradientUnits="userSpaceOnUse" x1="${sx(x0)}" y1="0" x2="${sx(x1)}" y2="0">${stops}</linearGradient>`;
+      body += `<path class="trace" data-path="${pi}" d="M${t.polygon.map((p) => `${sx(p[0])} ${sy(p[1])}`).join('L')}Z" ` +
+        `fill="url(#trace${n})" stroke="#111827" stroke-opacity="0.55" stroke-width="0.7" stroke-linejoin="round"/>`;
+    });
+    return `<defs>${defs}</defs>${body}`;
+  }
+
   function highlightSets(target) {
     const flows = new Set();
     const nodes = new Set();
     if (!target || !layout) return { flows, nodes };
+    if (target.paths) {
+      // Traced pathways replace their strands with overlays; keep their nodes in focus.
+      target.paths.forEach((pi) => traces.paths[pi].nodes.forEach((ni, s) => nodes.add(nodeAtStage(s, ni).id)));
+      return { flows, nodes };
+    }
     if (target.kind === 'flow') {
       const f = layout.flows[target.index];
       flows.add(f.index);
@@ -1035,6 +1109,8 @@
     const active = (drag && drag.target) || hover;
     const sets = highlightSets(active);
     svg.classList.toggle('dimmed', !!active);
+    const traceLayer = svg.querySelector('.layer-traces');
+    if (traceLayer) traceLayer.innerHTML = active && active.paths && traces ? traceMarkup(active.paths) : '';
     svg.querySelectorAll('[data-flow]').forEach((el) => el.classList.toggle('hl', sets.flows.has(Number(el.dataset.flow))));
     svg.querySelectorAll('[data-node]').forEach((el) => el.classList.toggle('hl', sets.nodes.has(Number(el.dataset.node))));
     const sel = selectionTarget();
@@ -1047,6 +1123,25 @@
   }
 
   function tooltipHtml(target) {
+    if (target.paths) {
+      const unit = esc(state.pathUnit || 'items');
+      const share = (w) => `${(100 * w / traces.total).toFixed(1)}%`;
+      const weight = (pi) => traces.paths[pi].weight;
+      if (target.paths.length === 1 && target.kind === 'flow') {
+        const pi = target.paths[0];
+        return `<b>${esc(pathName(pi))}</b><div><b>${fmtValue(weight(pi))}</b> ${unit} · ${share(weight(pi))} of all</div>` +
+          '<div class="muted">Hold Ctrl/⌘ to trace every pathway through this strand</div>';
+      }
+      const where = target.kind === 'flow'
+        ? `${esc(nodeDisplayName(layout.nodes[layout.flows[target.index].from]))} → ${esc(nodeDisplayName(layout.nodes[layout.flows[target.index].to]))}`
+        : esc(nodeDisplayName(layout.nodes[target.index]));
+      const total = target.paths.reduce((t, pi) => t + weight(pi), 0);
+      const top = target.paths.slice().sort((a, b) => weight(b) - weight(a)).slice(0, 6);
+      return `<b>${where}</b><div>${target.paths.length} pathway${target.paths.length === 1 ? '' : 's'} · ` +
+        `<b>${fmtValue(total)}</b> ${unit} (${share(total)} of all)</div>` +
+        top.map((pi) => `<div class="path-row">${esc(pathName(pi))} <b>${fmtValue(weight(pi))}</b></div>`).join('') +
+        (target.paths.length > top.length ? `<div class="muted">… and ${target.paths.length - top.length} more</div>` : '');
+    }
     if (target.kind === 'flow') {
       const f = layout.flows[target.index];
       const a = layout.nodes[f.from];
@@ -1077,8 +1172,11 @@
     tooltip.style.top = `${y}px`;
   }
 
-  function setHover(target, event) {
-    const same = target && hover && target.kind === hover.kind && target.index === hover.index;
+  function setHover(rawTarget, event) {
+    const paths = tracedPaths(rawTarget, event);
+    const target = rawTarget ? Object.assign({}, rawTarget, { paths }) : null;
+    const pathKey = (t) => (t && t.paths ? t.paths.join(',') : '');
+    const same = target && hover && target.kind === hover.kind && target.index === hover.index && pathKey(target) === pathKey(hover);
     hover = target;
     if (!same) applyHighlight();
     if (target) {
@@ -1264,6 +1362,7 @@
   function bindPlotEvents() {
     svg.addEventListener('pointerdown', startDrag);
     svg.addEventListener('pointermove', (event) => {
+      lastPointer = { clientX: event.clientX, clientY: event.clientY, ctrlKey: event.ctrlKey, metaKey: event.metaKey };
       if (drag) {
         moveDrag(event);
         return;
@@ -1310,6 +1409,7 @@
       host.innerHTML = '<h2>Inspector</h2><p class="muted">Hover a strand or node for details; click to select and edit it.</p>' +
         '<ul class="tips"><li>Drag a node to move it (Shift: vertical only, Alt: horizontal only).</li>' +
         '<li>Drag a strand up or down to reorder it in the stack at its nearer end.</li>' +
+        (traces ? '<li>Hover a strand to trace one pathway end to end; hold Ctrl/⌘ to trace every pathway through a strand or node.</li>' : '') +
         '<li>Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo, F fit view, Esc deselect.</li></ul>';
       return;
     }
@@ -1423,7 +1523,7 @@
   function exportSvgText() {
     if (!layout) throw new L.SankeyError('Nothing to export: the current data does not produce a plot.');
     const clone = svg.cloneNode(true);
-    clone.querySelectorAll('.layer-hits').forEach((el) => el.remove());
+    clone.querySelectorAll('.layer-hits, .layer-traces').forEach((el) => el.remove());
     clone.removeAttribute('class');
     clone.removeAttribute('id');
     clone.querySelectorAll('[class]').forEach((el) => {
@@ -1763,6 +1863,7 @@
     });
     $('#mode-select').addEventListener('change', (e) => {
       state.mode = e.target.value;
+      state.paths = null;
       clearKeyedEdits();
       update({ fit: true, commit: true });
     });
@@ -1819,7 +1920,15 @@
       });
     });
 
+    // Holding or releasing Ctrl/⌘ switches between one traced pathway and all of them.
+    const retrace = (e) => {
+      if (!hover || !lastPointer || drag || !['Control', 'Meta'].includes(e.key)) return;
+      lastPointer = Object.assign({}, lastPointer, { ctrlKey: e.ctrlKey, metaKey: e.metaKey });
+      setHover({ kind: hover.kind, index: hover.index }, lastPointer);
+    };
+    document.addEventListener('keyup', retrace);
     document.addEventListener('keydown', (e) => {
+      retrace(e);
       const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'z' && !typing) {

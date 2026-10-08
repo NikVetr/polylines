@@ -150,6 +150,8 @@
     const w = spec.weight ? colIndex(table, spec.weight, 'weight') : -1;
     const sets = columns.map(() => new Map());
     const counts = columns.slice(1).map(() => new Map());
+    // Whole trajectories (one node per stage) are kept so individual pathways can be traced.
+    const pathWeights = new Map();
     let used = 0;
     let dropped = 0;
     table.rows.forEach((r, i) => {
@@ -167,6 +169,8 @@
         const key = cats[k] + SEP + cats[k + 1];
         counts[k].set(key, (counts[k].get(key) || 0) + v);
       }
+      const pathKey = cats.map((c, k) => sets[k].get(c)).join(',');
+      pathWeights.set(pathKey, (pathWeights.get(pathKey) || 0) + v);
       used++;
     });
     if (!used) fail('No rows remain: every row has a missing value in a chosen stage column.');
@@ -180,7 +184,9 @@
       return mat;
     });
     const stageNames = columns.slice(0, -1).map((c, k) => `${c} → ${columns[k + 1]}`);
-    return { mode: 'layered', sets: names, matrices, stageNames, rowsUsed: used, rowsDropped: dropped };
+    const paths = [...pathWeights].filter(([, weight]) => weight > 0)
+      .map(([key, weight]) => ({ nodes: key.split(',').map(Number), weight }));
+    return { mode: 'layered', sets: names, matrices, stageNames, paths, rowsUsed: used, rowsDropped: dropped };
   }
 
   // Long: one row per (item, stage) with the item's category at that stage.
@@ -411,6 +417,15 @@
       return out;
     });
     result.sets = newSets;
+    if (result.paths) {
+      // Re-index trajectories to the grouped/ordered nodes and merge any that now coincide.
+      const merged = new Map();
+      result.paths.forEach((p) => {
+        const key = p.nodes.map((n, k) => mapping[k][n]).join(',');
+        merged.set(key, (merged.get(key) || 0) + p.weight);
+      });
+      result.paths = [...merged].map(([key, weight]) => ({ nodes: key.split(',').map(Number), weight }));
+    }
     return result;
   }
 
@@ -432,6 +447,8 @@
         : spec.format === 'links' ? fromLinks(table, spec)
           : fromCrosstab(table);
     const result = postProcess(raw, options);
+    // What path weights count, for tooltips: the weight column, else rows (wide) or items (long).
+    result.unit = spec.weight || (spec.format === 'long' ? 'items' : 'rows');
     result.dimnames = result.mode === 'graph'
       ? [{ rows: result.nodes, cols: result.nodes }]
       : result.matrices.map((_, k) => ({ rows: result.sets[k], cols: result.sets[k + 1] }));

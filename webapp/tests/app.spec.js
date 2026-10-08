@@ -262,9 +262,11 @@ test('the table importer builds a Sankey from a pasted wide table', async ({ pag
   expect(s.stageNames).toEqual(['region → plan', 'plan → outcome']);
   expect(s.valueScale).not.toBe(1);
   expect(s.loc.every((r) => r.width === 0)).toBe(true);
+  // Imported tables carry pathways, so hovering a strand traces the pathway under the pointer.
   const p = await ribbonCenter(page, 0);
   await page.mouse.move(p.x, p.y);
-  await expect(page.locator('#tooltip')).toContainText('value 120');
+  await expect(page.locator('#tooltip')).toContainText('North → Basic → Renewed');
+  await expect(page.locator('#tooltip')).toContainText('120 customers');
 });
 
 test('opening a long table file starts the importer, which flags bad mappings', async ({ page }, testInfo) => {
@@ -408,6 +410,41 @@ test('labeled node bodies tuck under the merge band so no seam shows', async ({ 
     return Math.min(body.x + body.width, band.x + band.width) - Math.max(body.x, band.x);
   });
   expect(overlap).toBeGreaterThan(1);
+});
+
+test('hovering a strand traces one pathway; Ctrl traces every pathway through a strand or node', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const point = await page.evaluate(() => {
+    const L = window.SankeyApp.layout;
+    const f = L.flows.find((x) => x.stage === 0 && L.nodes[x.from].label === 'Stage II' && L.nodes[x.to].label === 'Chemotherapy');
+    const c = f.centerline[Math.floor(f.centerline.length * 0.45)];
+    const box = document.querySelector('#plot').getBoundingClientRect();
+    return { x: box.left + 18 + c[0], y: box.top + (box.height - 18) - c[1] - f.w * 0.3 };
+  });
+  await page.mouse.move(point.x, point.y);
+  await expect(page.locator('#plot .trace')).toHaveCount(1);
+  await expect(page.locator('#tooltip')).toContainText('Stage II → Chemotherapy → Remission');
+  await expect(page.locator('#tooltip')).toContainText('41 patients');
+  await page.keyboard.down('Control');
+  await expect(page.locator('#plot .trace')).toHaveCount(2);
+  await expect(page.locator('#tooltip')).toContainText('2 pathways · 63 patients');
+  const node = await nodeAt(page, 'Remission');
+  await page.mouse.move(node.x, node.y);
+  await expect(page.locator('#plot .trace')).toHaveCount(5);
+  await expect(page.locator('#tooltip')).toContainText('5 pathways · 288 patients');
+  await page.keyboard.up('Control');
+  await expect(page.locator('#plot .trace')).toHaveCount(0);
+});
+
+test('pathway tracing turns off with a warning once flow values no longer match the data', async ({ page }) => {
+  await page.evaluate(() => {
+    window.SankeyApp.loadExample('pathways');
+    window.SankeyApp.state.matrices[0][0][0] += 1;
+    window.SankeyApp.update();
+  });
+  await expect(page.locator('#warnings')).toContainText('pathway tracing is off');
+  const exported = await page.evaluate(() => window.SankeyApp.exportSvgText());
+  expect(exported).not.toContain('layer-traces');
 });
 
 test('works when opened directly from disk', async ({ browser }) => {

@@ -49,6 +49,8 @@ Imported values stay as counts. A **value scale** (Layout section) turns them in
 - Click to select; the inspector edits strand values and colors (including three-way mid colors), node labels, positions, widths, heights, fonts, and node or trunk colors.
 - Drag a node to move it (Shift: vertical only, Alt: horizontal only).
 - Drag a strand up or down to reorder it within the stack at its nearer end.
+- Dragging a node into a neighbour stops at an invisible wall, or (Canvas & dragging → "pushes them") shoves the neighbour along; a node can never be dropped into an invalid layout.
+- **Pathway tracing** (wide and long table imports, which keep each item's trajectory): hovering a strand traces the pathway under the pointer through every stage, e.g. one patient group's diagnosis → treatment → outcome. Hold Ctrl/⌘ to trace every pathway through a strand or node, e.g. which stages and treatments feed Remission. Each strand is split into substrands, one per pathway, ordered by where pathways arrive at the strand's source node, and traces curve through nodes from band edge to band edge. Tracing switches off (with a warning) if flow values are edited away from the imported data.
 - Undo/redo (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z), fit view (F), deselect (Esc). Sessions autosave to the browser.
 
 All `sankey_ribbons()` layout options are available in the sidebar, including per-stage routing and ordering ("Apply to: stage k"), `adjust_loc`, `adjust_node_height`, boundary routing and compensation, plus graph-mode `require_forward` and `balance`.
@@ -64,6 +66,7 @@ SVG, PNG (2×), `loc.csv`, a project JSON, and an **R bundle** zip containing th
 - `js/render.js`: color resolution and SVG markup.
 - `js/app.js`: state, controls, file loading, interactions, inspector, history and exports.
 - `js/transform.js` and `js/importer.js`: table import converters (wide, long, links, crosstab) and the import dialog.
+- `js/paths.js`: substrand stacking and pathway trace geometry for item-level data.
 - `js/csv.js`, `js/color.js`, `js/zip.js`, `js/examples.js`: parsing, color math, a store-only zip writer and the bundled examples.
 
 ## Tests
@@ -71,7 +74,7 @@ SVG, PNG (2×), `loc.csv`, a project JSON, and an **R bundle** zip containing th
 ```sh
 cd webapp
 npm install                 # Playwright test runner
-npm run test:unit           # geometry parity with R, layout, CSV parsing and table import (node:test)
+npm run test:unit           # geometry parity with R, layout, CSV parsing, table import and pathways (node:test)
 npm run test:e2e            # browser tests (Playwright, Chromium)
 ```
 
