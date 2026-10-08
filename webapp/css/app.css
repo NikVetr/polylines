@@ -166,20 +166,16 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .banner.warn { background: #fffaeb; border: 1px solid #fedf89; color: var(--warn); }
 .banner.info { background: var(--accent-soft); border: 1px solid #c3d4ea; color: #1d4f8a; }
 
-.tooltip {
-  position: absolute;
-  z-index: 10;
-  max-width: 300px;
-  padding: 7px 9px;
-  background: rgba(17, 24, 39, 0.94);
-  color: #f9fafb;
-  border-radius: 6px;
-  pointer-events: none;
-  line-height: 1.45;
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.25);
-}
-.tooltip .muted { color: #c7ccd4; }
-.tooltip .warn-text { color: #fcd34d; }
+.hover-info { line-height: 1.45; }
+.hover-info .warn-text { color: var(--warn); }
+.focus-head { margin: 12px 0 4px; font-size: 13px; }
+.focus-table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 12px; }
+.focus-table th, .focus-table td { padding: 2px 4px; text-align: left; vertical-align: top; }
+.focus-table thead th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
+.focus-table .group th { padding-top: 6px; font-weight: 600; }
+.focus-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.focus-table td.pct { background: linear-gradient(90deg, var(--accent-soft) var(--p), transparent var(--p)); }
+.focus-table .note td { color: var(--muted); font-style: italic; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 
@@ -204,14 +200,13 @@ button, select, input, textarea { font: inherit; color: inherit; }
 #plot .trunk, #plot .node-dot, #plot .node-label { cursor: move; }
 #plot.dragging, #plot.dragging * { cursor: grabbing !important; }
 #plot .ribbon, #plot .trunk, #plot .strand-border, #plot .node-outline, #plot .node-border { transition: opacity 120ms ease; }
-#plot.dimmed .ribbon:not(.hl), #plot.dimmed .strand-border:not(.hl) { opacity: 0.16; }
+#plot.dimmed .ribbon:not(.hl), #plot.dimmed .strand-border:not(.hl), #plot.dimmed .substrand-lines:not(.hl) { opacity: 0.16; }
 #plot.dimmed .trunk:not(.hl), #plot.dimmed .node-outline:not(.hl), #plot.dimmed .node-border:not(.hl) { opacity: 0.35; }
 #plot.dimmed .node-label:not(.hl) { opacity: 0.5; }
 #plot .ribbon.selected, #plot .trunk.selected { stroke: #111827; stroke-width: 1.4; stroke-dasharray: 4 3; }
 #plot .node-dot.selected { stroke-width: 3.5; }
 #plot.stale { opacity: 0.3; filter: grayscale(0.7); pointer-events: none; }
-#plot .layer-traces { pointer-events: none; }
-.tooltip .path-row { font-size: 12px; color: #e5e7eb; }
+#plot .layer-traces, #plot .layer-substrands { pointer-events: none; }
 .banner-action { margin-left: 8px; color: var(--error); border-color: #fecdca; }
 
 dialog {
@@ -274,4 +269,17 @@ dialog.import { width: min(880px, 94vw); max-width: none; }
 @media (max-width: 1100px) {
   .layout { grid-template-columns: 260px minmax(0, 1fr); }
   .inspector { display: none; }
+  /* Without the side panel, hover details float in the corner instead. */
+  .inspector.hovering {
+    display: block;
+    position: fixed;
+    right: 10px;
+    bottom: 10px;
+    width: 300px;
+    max-height: 60vh;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+    pointer-events: none;
+  }
 }

@@ -128,9 +128,52 @@
     return [[m, start], [2 * m, thread], [1 - 2 * m, thread], [1 - m, end]];
   }
 
+  // A node's fill colors at absolute x across its bands, faces and body (unflattened), or null.
+  // Interior nodes are drawn from these; endpoint trunks and bodies below use the same colors.
+  function nodeStops(layout, n, colors, style) {
+    const node = colors.node[n.id];
+    const merge = colors.merge[n.id];
+    const clear = C.withAlpha(merge, 0);
+    if (S.nodeRole(n) === 'interior') {
+      const shape = S.interiorTrunk(layout, n);
+      if (!shape) return null;
+      const inX = shape.inFaceX <= shape.outFaceX ? shape.x0 : shape.x1;
+      const outX = inX === shape.x0 ? shape.x1 : shape.x0;
+      // The fade to a transparent centre is a label body, so it needs a node with width.
+      const labelBody = n.hasLabel && n.widthPx > 0 && shape.x1 - shape.x0 > 1e-9;
+      if (!style.gradient) return labelBody ? [[inX, merge], [n.X, clear], [outX, merge]] : [[inX, merge], [outX, merge]];
+      // Node color at the band edges (where strands arrive), trunk color across the node faces.
+      return [[inX, node], [shape.inFaceX, merge]].concat(labelBody ? [[n.X, clear]] : [], [[shape.outFaceX, merge], [outX, node]]);
+    }
+    const side = n.outFlows.length ? 'start' : 'end';
+    const b = S.bundle(layout, n, side);
+    if (!b) return null;
+    const inward = b.faceX + (side === 'start' ? b.dir : -b.dir) * Math.max(layout.mergeLength, 0);
+    const body = S.endpointBody(layout, n, side, 0);
+    const stops = [[inward, style.gradient ? node : merge], [b.faceX, merge]];
+    if (body) stops.push(n.hasLabel ? [n.X, clear] : [body.outerX, merge]);
+    return stops;
+  }
+
+  // Colors at absolute x along a pathway through consecutive strands: each node's own colors and
+  // each strand's colors between its band edges, so a trace looks like what it passes through.
+  function traceStops(layout, colors, style, flows) {
+    const stops = [];
+    const addNode = (id) => stops.push(...(nodeStops(layout, layout.nodes[id], colors, style) || []));
+    addNode(flows[0].from);
+    flows.forEach((f) => {
+      const m = Math.min(Math.max(layout.mergeLength, 0) / Math.abs(f.endX - f.startX), 0.25);
+      const own = style.gradient ? strandStops(layout, f, colors, style) : [[m, colors.flow[f.index]], [1 - m, colors.flow[f.index]]];
+      own.forEach(([t, c]) => stops.push([f.startX + (f.endX - f.startX) * t, c]));
+      addNode(f.to);
+    });
+    return stops;
+  }
+
   // ---------- main render ----------
 
-  function render(layout, colors, style, frame) {
+  // extras.substrandLines: per flow, polylines between substrands (paths.boundaryLines).
+  function render(layout, colors, style, frame, extras) {
     const map = makeFrame(layout, frame);
     const defs = [];
     const ribbons = [];
@@ -172,6 +215,16 @@
       }
     });
 
+    const lines = [];
+    if (extras && extras.substrandLines) {
+      const linePaint = C.paint(colors.flatBg);
+      extras.substrandLines.forEach((polylines, k) => {
+        if (!polylines.length) return;
+        lines.push(`<path class="substrand-lines" data-flow="${k}" d="${polylines.map((line) => pathD(line, map, false)).join('')}" ` +
+          `fill="none" stroke="${linePaint.color}" stroke-opacity="0.6" stroke-width="0.6"/>`);
+      });
+    }
+
     const nodeFill = (n, id, polygon, x0, x1, stops) => {
       const gid = `gn${n.id}_${id}`;
       defs.push(linearGradient(gid, map.x(x0), map.x(x1), stops.map(([t, c]) => [t, flat(c)])));
@@ -208,18 +261,10 @@
         const shape = S.interiorTrunk(layout, n);
         if (!shape) return;
         const span = shape.x1 - shape.x0;
-        const at = (x) => (x - shape.x0) / span;
-        // The fade to a transparent centre is a label body, so it needs a node with width.
         const labelBody = n.hasLabel && n.widthPx > 0 && span > 1e-9;
-        if (style.gradient && span > 1e-9) {
-          // Node color at the band edges (where strands arrive), trunk color across the node faces.
-          const inEdge = at(shape.inFaceX) <= at(shape.outFaceX) ? 0 : 1;
-          const stops = [[inEdge, nodeColor], [at(shape.inFaceX), mergeColor], [at(shape.outFaceX), mergeColor], [1 - inEdge, nodeColor]];
-          if (labelBody) stops.push([at(n.X), C.withAlpha(mergeColor, 0)]);
+        if ((style.gradient || labelBody) && span > 1e-9) {
+          const stops = nodeStops(layout, n, colors, style).map(([x, c]) => [(x - shape.x0) / span, c]);
           nodeFill(n, 'i', shape.polygon, shape.x0, shape.x1, stops.sort((a, b) => a[0] - b[0]));
-        } else if (labelBody) {
-          nodeFill(n, 'i', shape.polygon, shape.x0, shape.x1,
-            [[0, mergeColor], [at(n.X), C.withAlpha(mergeColor, 0)], [1, mergeColor]]);
         } else {
           solidNode(n, shape.polygon, mergeColor);
         }
@@ -326,6 +371,7 @@
       : '';
     return `<defs>${defs.join('')}</defs>${bg}` +
       `<g class="layer-ribbons">${ribbons.join('')}</g>` +
+      (lines.length ? `<g class="layer-substrands">${lines.join('')}</g>` : '') +
       `<g class="layer-trunks">${trunks.join('')}</g>` +
       `<g class="layer-borders">${borders.join('')}</g>` +
       `<g class="layer-node-borders">${nodeBorders.join('')}</g>` +
@@ -348,6 +394,6 @@
     };
   }
 
-  SK.render = { render, resolveColors, makeMeasure, FONT_FAMILY };
+  SK.render = { render, resolveColors, makeMeasure, traceStops, FONT_FAMILY };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

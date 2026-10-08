@@ -25,14 +25,18 @@ test('renders the default example without errors', async ({ page }) => {
   await expect(page.locator('#banner')).toBeHidden();
 });
 
-test('hovering a strand shows its details and dims the others', async ({ page }) => {
+test('hovering a strand shows its details in the inspector and dims the others', async ({ page }) => {
   const p = await ribbonCenter(page, 0);
   await page.mouse.move(p.x, p.y);
-  await expect(page.locator('#tooltip')).toBeVisible();
-  await expect(page.locator('#tooltip')).toContainText('→');
-  await expect(page.locator('#tooltip')).toContainText('of source outflow');
+  await expect(page.locator('#hover-info')).toBeVisible();
+  await expect(page.locator('#hover-info')).toContainText('→');
+  await expect(page.locator('#hover-info')).toContainText('of source outflow');
+  await expect(page.locator('#inspector-main')).toBeHidden();
   await expect(page.locator('#plot')).toHaveClass(/dimmed/);
   expect(await page.locator('#plot .ribbon.hl').count()).toBe(1);
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#hover-info')).toBeHidden();
+  await expect(page.locator('#inspector-main')).toContainText('Inspector');
 });
 
 test('dragging a node moves it and undo restores it', async ({ page }) => {
@@ -83,7 +87,7 @@ test('selecting a strand lets you edit its color and value', async ({ page }) =>
   });
   const p = await ribbonCenter(page, 2);
   await page.mouse.click(p.x, p.y);
-  await expect(page.locator('#inspector h2')).toHaveText('Strand');
+  await expect(page.locator('#inspector-main h2')).toHaveText('Strand');
   const color = page.locator('#inspector [data-color="flow"] input[type="color"]');
   await color.evaluate((el) => {
     el.value = '#ff0000';
@@ -166,7 +170,7 @@ test('undo after hovering a strand that no longer exists does not crash', async 
   await page.evaluate(() => window.SankeyApp.loadExample('gradients'));
   const p = await ribbonCenter(page, 27);
   await page.mouse.move(p.x, p.y);
-  await expect(page.locator('#tooltip')).toBeVisible();
+  await expect(page.locator('#hover-info')).toBeVisible();
   await page.keyboard.press('Control+z');
   await expect(page.locator('#plot .ribbon')).toHaveCount(14);
   await expect(page.locator('#stage-list li')).toHaveCount(2);
@@ -262,11 +266,11 @@ test('the table importer builds a Sankey from a pasted wide table', async ({ pag
   expect(s.stageNames).toEqual(['region → plan', 'plan → outcome']);
   expect(s.valueScale).not.toBe(1);
   expect(s.loc.every((r) => r.width === 0)).toBe(true);
-  // Imported tables carry pathways, so hovering a strand traces the pathway under the pointer.
+  // Imported tables carry pathways, so hovering a strand traces the pathways through it.
   const p = await ribbonCenter(page, 0);
   await page.mouse.move(p.x, p.y);
-  await expect(page.locator('#tooltip')).toContainText('North → Basic → Renewed');
-  await expect(page.locator('#tooltip')).toContainText('120 customers');
+  await expect(page.locator('#hover-info')).toContainText('North → Basic → Renewed');
+  await expect(page.locator('#hover-info')).toContainText('120 customers');
 });
 
 test('opening a long table file starts the importer, which flags bad mappings', async ({ page }, testInfo) => {
@@ -412,7 +416,7 @@ test('labeled node bodies tuck under the merge band so no seam shows', async ({ 
   expect(overlap).toBeGreaterThan(1);
 });
 
-test('hovering a strand traces one pathway; Ctrl traces every pathway through a strand or node', async ({ page }) => {
+test('hovering traces every pathway through a strand or node; Ctrl traces the one under the pointer', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const point = await page.evaluate(() => {
     const L = window.SankeyApp.layout;
@@ -422,18 +426,53 @@ test('hovering a strand traces one pathway; Ctrl traces every pathway through a 
     return { x: box.left + 18 + c[0], y: box.top + (box.height - 18) - c[1] - f.w * 0.3 };
   });
   await page.mouse.move(point.x, point.y);
-  await expect(page.locator('#plot .trace')).toHaveCount(1);
-  await expect(page.locator('#tooltip')).toContainText('Stage II → Chemotherapy → Remission');
-  await expect(page.locator('#tooltip')).toContainText('41 patients');
-  await page.keyboard.down('Control');
   await expect(page.locator('#plot .trace')).toHaveCount(2);
-  await expect(page.locator('#tooltip')).toContainText('2 pathways · 63 patients');
+  await expect(page.locator('#hover-info')).toContainText('2 pathways · 63 patients');
+  await expect(page.locator('#hover-info .focus-table').first()).toContainText('none via Stage I, Stage III, Stage IV');
+  await page.keyboard.down('Control');
+  await expect(page.locator('#plot .trace')).toHaveCount(1);
+  await expect(page.locator('#hover-info')).toContainText('41 patients on this pathway');
+  await expect(page.locator('#hover-info')).toContainText('Remission');
+  await page.keyboard.up('Control');
   const node = await nodeAt(page, 'Remission');
   await page.mouse.move(node.x, node.y);
   await expect(page.locator('#plot .trace')).toHaveCount(5);
-  await expect(page.locator('#tooltip')).toContainText('5 pathways · 288 patients');
-  await page.keyboard.up('Control');
+  await expect(page.locator('#hover-info')).toContainText('5 pathways · 288 patients');
+  await expect(page.locator('#hover-info')).toContainText('none via Stage IV');
+  // Traced nodes fade like the rest; only their labels stay in focus.
+  await expect(page.locator('#plot .trunk.hl')).toHaveCount(0);
+  await expect(page.locator('#plot .node-label.hl')).toHaveCount(7);
+  // Traces run on into the sink's label body, fading out at its centre.
+  const reach = await page.evaluate(() => {
+    const n = window.SankeyApp.layout.nodes.find((x) => x.label === 'Remission');
+    const right = Math.max(...[...document.querySelectorAll('#plot .trace')].map((el) => { const b = el.getBBox(); return b.x + b.width; }));
+    return right - (18 + n.X);
+  });
+  expect(Math.abs(reach)).toBeLessThan(1);
+  await page.mouse.move(5, 5);
   await expect(page.locator('#plot .trace')).toHaveCount(0);
+});
+
+test('one-row-per-patient data traces single patients and draws substrand lines', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  await expect(page.locator('#plot .substrand-lines').first()).toBeAttached();
+  const s = await state(page);
+  expect(s.paths.reduce((t, p) => t + p.members.length, 0)).toBe(200);
+  expect(s.pathUnit).toBe('patients');
+  const p = await ribbonCenter(page, 0);
+  await page.mouse.move(p.x, p.y);
+  expect(await page.locator('#plot .trace').count()).toBeGreaterThan(1);
+  await page.keyboard.down('Control');
+  await expect(page.locator('#plot .trace')).toHaveCount(1);
+  await expect(page.locator('#hover-info h3')).toHaveText(/^P\d{3}$/);
+  await expect(page.locator('#hover-info')).toContainText(/patients? on this pathway/);
+  const node = await nodeAt(page, 'Complete response');
+  await page.mouse.move(node.x - 10, node.y);
+  await expect(page.locator('#plot .trace')).toHaveCount(1);
+  await expect(page.locator('#hover-info h3')).toHaveText(/^P\d{3}$/);
+  await page.keyboard.up('Control');
+  const exported = await page.evaluate(() => window.SankeyApp.exportSvgText());
+  expect(exported).toContain('substrand-lines');
 });
 
 test('pathway tracing turns off with a warning once flow values no longer match the data', async ({ page }) => {

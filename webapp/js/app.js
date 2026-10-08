@@ -31,12 +31,12 @@
     canvasWidth: null,
     canvasHeight: null,
     collision: 'wall',
-    tracePaths: true
+    tracePaths: true,
+    substrands: false
   };
 
   const svg = $('#plot');
   const stageEl = $('#stage');
-  const tooltip = $('#tooltip');
 
   let state = blankState();
   let layout = null;
@@ -77,6 +77,7 @@
       trustedNames: false,
       paths: null,
       pathUnit: null,
+      setNames: [],
       view: null
     };
   }
@@ -252,18 +253,19 @@
         if (opts.fit || !state.view) state.view = fitView();
         layout = L.computeLayout(model(), viewFor(state.view), { measure: measure() });
         colors = R.resolveColors(layout, colorData(), state.style);
-        svg.innerHTML = R.render(layout, colors, state.style, frame);
-        svg.classList.remove('stale');
-        showError(null);
         const warnings = layout.warnings.slice();
         traces = null;
+        let subs = null;
         if (state.paths && P.consistent(layout, state.paths)) {
-          if (state.style.tracePaths) {
-            traces = { subs: P.substrands(layout, state.paths), paths: state.paths, total: state.paths.reduce((t, x) => t + x.weight, 0) };
-          }
+          if (state.style.tracePaths || state.style.substrands) subs = P.substrands(layout, state.paths);
+          if (state.style.tracePaths) traces = { subs, paths: state.paths, total: state.paths.reduce((t, x) => t + x.weight, 0) };
         } else if (state.paths) {
           warnings.push('The pathway data no longer matches the flow values, so pathway tracing is off.');
         }
+        const extras = { substrandLines: subs && state.style.substrands ? P.boundaryLines(layout, subs) : null };
+        svg.innerHTML = R.render(layout, colors, state.style, frame, extras);
+        svg.classList.remove('stale');
+        showError(null);
         showWarnings(warnings);
       }
     } catch (err) {
@@ -278,7 +280,7 @@
     if (hover && hover.paths && !traces) hover = Object.assign({}, hover, { paths: null });
     if (hover && !(layout && (hover.kind === 'flow' ? layout.flows : layout.nodes)[hover.index])) {
       hover = null;
-      tooltip.hidden = true;
+      showHoverInfo(null);
     }
     applyHighlight();
     refreshControls();
@@ -405,7 +407,10 @@
       title: 'Canvas & dragging',
       items: [
         { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover',
-          help: 'Hover a strand to trace one item-level pathway; hold Ctrl/⌘ to trace every pathway through a strand or node.',
+          help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ to trace the single pathway or item under the pointer.',
+          showIf: () => !!state.paths },
+        { key: 'substrands', target: 'style', type: 'checkbox', label: 'Substrand lines',
+          help: 'Thin lines dividing each strand into its pathways, or into single items when the data has item ids.',
           showIf: () => !!state.paths },
         { key: 'collision', target: 'style', type: 'select', label: 'Dragged node hits',
           options: [['wall', 'a wall (stops)'], ['push', 'neighbours (pushes them)']],
@@ -991,6 +996,7 @@
     state.stageNames = result.stageNames;
     state.paths = result.paths || null;
     state.pathUnit = result.unit || null;
+    state.setNames = result.setNames || [];
     state.trustedNames = true;
     state.valueScale = autoValueScale();
     autoLocate({ labels: opts.labels });
@@ -1032,59 +1038,72 @@
     return { kind: 'node', index: Number(el.dataset.node) };
   }
 
-  // Pathways to trace for a hover target: the one under the pointer on a strand, or with Ctrl/⌘
-  // every pathway through the strand or node. Null when tracing does not apply.
+  // Pathways to trace for a hover target: every pathway through the strand or node, or with
+  // Ctrl/⌘ the single pathway (or item) under the pointer. Null when tracing does not apply.
   function tracedPaths(target, event) {
     if (!traces || !target || !event) return null;
-    const all = event.ctrlKey || event.metaKey;
-    if (target.kind === 'flow') {
-      if (all) return traces.subs.byFlow[target.index].map((e) => e.path);
+    if (event.ctrlKey || event.metaKey) {
       const p = plotPoint(event);
-      const pi = P.pathAt(layout, traces.subs, target.index, p.X, p.Y);
-      return pi >= 0 ? [pi] : null;
+      const hit = target.kind === 'flow'
+        ? P.pathAt(layout, traces.subs, target.index, p.X, p.Y)
+        : P.pathAtNode(layout, traces.subs, layout.nodes[target.index], p.X, p.Y);
+      return hit ? { paths: [hit.path], member: hit.member, single: true } : null;
     }
-    if (!all) return null;
-    const n = layout.nodes[target.index];
-    const list = traces.paths.map((path, pi) => (path.nodes[n.set - 1] === n.node - 1 ? pi : -1)).filter((pi) => pi >= 0);
-    return list.length ? list : null;
+    const n = target.kind === 'node' ? layout.nodes[target.index] : null;
+    const list = n
+      ? traces.paths.map((path, pi) => (path.nodes[n.set - 1] === n.node - 1 ? pi : -1)).filter((pi) => pi >= 0)
+      : traces.subs.byFlow[target.index].map((e) => e.path);
+    return list.length ? { paths: list, member: -1, single: false } : null;
   }
 
   const nodeAtStage = (s, i) => layout.nodes.find((n) => n.set === s + 1 && n.node === i + 1);
   const pathName = (pi) => traces.paths[pi].nodes.map((ni, s) => nodeDisplayName(nodeAtStage(s, ni))).join(' → ');
 
-  // Overlay shapes for traced pathways, colored like the strands they pass through.
-  function traceMarkup(list) {
+  // Overlay shapes for traced pathways, colored like the strands and nodes they pass through
+  // (flattened, so a trace reads as its own strand at full strength). Outlines run along the
+  // sides only and fade where the fill fades, so traces open smoothly into node bodies. A single
+  // traced item too thin to see is widened around its slice instead of outlined.
+  const MIN_SINGLE_PX = 4;
+  function traceMarkup(target) {
     const h = layout.view.height;
     const sx = (X) => Math.round((MARGIN + X) * 100) / 100;
     const sy = (Y) => Math.round((MARGIN + h - Y) * 100) / 100;
+    const line = (pts) => pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p[0])} ${sy(p[1])}`).join('');
+    const stopTag = (offset, color, opacity) => `<stop offset="${(offset * 100).toFixed(2)}%" stop-color="${color}" stop-opacity="${opacity}"/>`;
     let defs = '';
     let body = '';
-    list.forEach((pi, n) => {
-      const t = P.tracePolygon(layout, traces.subs, pi);
+    target.paths.forEach((pi, n) => {
+      const t = P.tracePolygon(layout, traces.subs, pi, target.single ? target.member : -1);
       const xs = t.polygon.map((p) => p[0]);
       const x0 = Math.min(...xs);
       const x1 = Math.max(...xs);
-      const stops = t.flows.map((f, s) => {
-        const c = colors.flow[f.index];
-        const paint = C.paint(C.withAlpha(c, Math.max(c.a, 0.92)));
-        const offset = x1 > x0 ? ((t.spans[s][0] + t.spans[s][1]) / 2 - x0) / (x1 - x0) : 0.5;
-        return [offset, `<stop offset="${(offset * 100).toFixed(2)}%" stop-color="${paint.color}" stop-opacity="${paint.opacity}"/>`];
-      }).sort((a, b) => a[0] - b[0]).map((e) => e[1]).join('');
-      defs += `<linearGradient id="trace${n}" gradientUnits="userSpaceOnUse" x1="${sx(x0)}" y1="0" x2="${sx(x1)}" y2="0">${stops}</linearGradient>`;
-      body += `<path class="trace" data-path="${pi}" d="M${t.polygon.map((p) => `${sx(p[0])} ${sy(p[1])}`).join('L')}Z" ` +
-        `fill="url(#trace${n})" stroke="#111827" stroke-opacity="0.55" stroke-width="0.7" stroke-linejoin="round"/>`;
+      const at = (x) => (x1 > x0 ? Math.min(Math.max((x - x0) / (x1 - x0), 0), 1) : 0);
+      const stops = R.traceStops(layout, colors, state.style, t.flows).sort((a, b) => a[0] - b[0]);
+      const fill = stops.map(([x, c]) => stopTag(at(x), C.paint(C.flatten(c, colors.flatBg)).color, 1)).join('');
+      const edge = stops.map(([x, c]) => stopTag(at(x), '#111827', (0.45 * Math.min(1, 2 * c.a)).toFixed(3))).join('');
+      const grad = (id, tags) => `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${sx(x0)}" y1="0" x2="${sx(x1)}" y2="0">${tags}</linearGradient>`;
+      defs += grad(`trace${n}`, fill) + grad(`trace-edge${n}`, edge);
+      if (target.single && t.thickness < MIN_SINGLE_PX) {
+        body += `<path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})" stroke="url(#trace${n})" ` +
+          `stroke-width="${(MIN_SINGLE_PX - t.thickness).toFixed(2)}" stroke-linejoin="round"/>`;
+        return;
+      }
+      body += `<path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})"/>` +
+        `<path class="trace-edge" d="${line(t.upper)}${line(t.lower)}" fill="none" stroke="url(#trace-edge${n})" stroke-width="0.6"/>`;
     });
     return `<defs>${defs}</defs>${body}`;
   }
 
+  // Elements to keep in focus. Traced pathways replace their strands with overlays, so only the
+  // labels of the nodes they pass through stay at full strength.
   function highlightSets(target) {
     const flows = new Set();
     const nodes = new Set();
-    if (!target || !layout) return { flows, nodes };
+    if (!target || !layout) return { flows, nodes, labels: nodes };
     if (target.paths) {
-      // Traced pathways replace their strands with overlays; keep their nodes in focus.
-      target.paths.forEach((pi) => traces.paths[pi].nodes.forEach((ni, s) => nodes.add(nodeAtStage(s, ni).id)));
-      return { flows, nodes };
+      const labels = new Set();
+      target.paths.forEach((pi) => traces.paths[pi].nodes.forEach((ni, s) => labels.add(nodeAtStage(s, ni).id)));
+      return { flows, nodes, labels };
     }
     if (target.kind === 'flow') {
       const f = layout.flows[target.index];
@@ -1096,7 +1115,7 @@
       nodes.add(n.id);
       n.inFlows.concat(n.outFlows).forEach((k) => flows.add(k));
     }
-    return { flows, nodes };
+    return { flows, nodes, labels: nodes };
   }
 
   function selectionTarget() {
@@ -1110,9 +1129,12 @@
     const sets = highlightSets(active);
     svg.classList.toggle('dimmed', !!active);
     const traceLayer = svg.querySelector('.layer-traces');
-    if (traceLayer) traceLayer.innerHTML = active && active.paths && traces ? traceMarkup(active.paths) : '';
+    if (traceLayer) traceLayer.innerHTML = active && active.paths && traces ? traceMarkup(active) : '';
     svg.querySelectorAll('[data-flow]').forEach((el) => el.classList.toggle('hl', sets.flows.has(Number(el.dataset.flow))));
-    svg.querySelectorAll('[data-node]').forEach((el) => el.classList.toggle('hl', sets.nodes.has(Number(el.dataset.node))));
+    svg.querySelectorAll('[data-node]').forEach((el) => {
+      const set = el.classList.contains('node-label') ? sets.labels : sets.nodes;
+      el.classList.toggle('hl', set.has(Number(el.dataset.node)));
+    });
     const sel = selectionTarget();
     svg.querySelectorAll('.selected').forEach((el) => el.classList.remove('selected'));
     if (sel) {
@@ -1122,70 +1144,111 @@
     }
   }
 
-  function tooltipHtml(target) {
-    if (target.paths) {
-      const unit = esc(state.pathUnit || 'items');
-      const share = (w) => `${(100 * w / traces.total).toFixed(1)}%`;
-      const weight = (pi) => traces.paths[pi].weight;
-      if (target.paths.length === 1 && target.kind === 'flow') {
-        const pi = target.paths[0];
-        return `<b>${esc(pathName(pi))}</b><div><b>${fmtValue(weight(pi))}</b> ${unit} · ${share(weight(pi))} of all</div>` +
-          '<div class="muted">Hold Ctrl/⌘ to trace every pathway through this strand</div>';
-      }
-      const where = target.kind === 'flow'
-        ? `${esc(nodeDisplayName(layout.nodes[layout.flows[target.index].from]))} → ${esc(nodeDisplayName(layout.nodes[layout.flows[target.index].to]))}`
-        : esc(nodeDisplayName(layout.nodes[target.index]));
-      const total = target.paths.reduce((t, pi) => t + weight(pi), 0);
-      const top = target.paths.slice().sort((a, b) => weight(b) - weight(a)).slice(0, 6);
-      return `<b>${where}</b><div>${target.paths.length} pathway${target.paths.length === 1 ? '' : 's'} · ` +
-        `<b>${fmtValue(total)}</b> ${unit} (${share(total)} of all)</div>` +
-        top.map((pi) => `<div class="path-row">${esc(pathName(pi))} <b>${fmtValue(weight(pi))}</b></div>`).join('') +
-        (target.paths.length > top.length ? `<div class="muted">… and ${target.paths.length - top.length} more</div>` : '');
-    }
+  const pct = (v, total) => (total > 0 ? `${(100 * v / total).toFixed(1)}%` : '–');
+  const setName = (s) => state.setNames[s] || `Set ${s + 1}`;
+  const unitOf = (w) => esc(w === 1 ? (state.pathUnit || 'items').replace(/s$/, '') : (state.pathUnit || 'items'));
+
+  // Hover details: the strand or node, then the traced pathways, if any.
+  function hoverHtml(target) {
+    let html;
     if (target.kind === 'flow') {
       const f = layout.flows[target.index];
       const a = layout.nodes[f.from];
       const b = layout.nodes[f.to];
-      const share = (v, total) => (total > 0 ? `${(100 * v / total).toFixed(1)}%` : '–');
-      return `<b>${esc(nodeDisplayName(a))} → ${esc(nodeDisplayName(b))}</b>` +
+      html = `<h2>${esc(nodeDisplayName(a))} → ${esc(nodeDisplayName(b))}</h2>` +
         `<div>value <b>${fmtValue(f.value)}</b></div>` +
-        `<div>${share(f.value, a.outValue)} of source outflow · ${share(f.value, b.inValue)} of target inflow</div>` +
+        `<div>${pct(f.value, a.outValue)} of source outflow · ${pct(f.value, b.inValue)} of target inflow</div>` +
         `<div class="muted">${state.mode === 'graph' ? 'graph' : `stage ${f.stage + 1}`} · matrix [${f.i + 1}, ${f.j + 1}]</div>`;
+    } else {
+      const n = layout.nodes[target.index];
+      const balance = n.inValue > 0 && n.outValue > 0 && Math.abs(n.inValue - n.outValue) > 1e-9
+        ? `<div class="warn-text">in − out = ${fmtValue(n.inValue - n.outValue)}</div>` : '';
+      html = `<h2>${esc(nodeDisplayName(n))}</h2>` +
+        `<div>in <b>${fmtValue(n.inValue)}</b> (${n.inFlows.length}) · out <b>${fmtValue(n.outValue)}</b> (${n.outFlows.length})</div>` +
+        balance + `<div class="muted">set ${n.set} · node ${n.node} · x ${round(n.x, 4)}, y ${round(n.y, 4)}</div>`;
     }
-    const n = layout.nodes[target.index];
-    const balance = n.inValue > 0 && n.outValue > 0 && Math.abs(n.inValue - n.outValue) > 1e-9
-      ? `<div class="warn-text">in − out = ${fmtValue(n.inValue - n.outValue)}</div>` : '';
-    return `<b>${esc(nodeDisplayName(n))}</b>` +
-      `<div>in <b>${fmtValue(n.inValue)}</b> (${n.inFlows.length}) · out <b>${fmtValue(n.outValue)}</b> (${n.outFlows.length})</div>` +
-      balance + `<div class="muted">set ${n.set} · node ${n.node} · x ${round(n.x, 4)}, y ${round(n.y, 4)}</div>`;
+    if (!target.paths) return html;
+    return html + (target.single ? itemHtml(target) : focusHtml(target));
   }
 
-  function moveTooltip(event) {
-    const box = stageEl.getBoundingClientRect();
-    let x = event.clientX - box.left + stageEl.scrollLeft + 14;
-    let y = event.clientY - box.top + stageEl.scrollTop + 14;
-    const w = tooltip.offsetWidth;
-    const h = tooltip.offsetHeight;
-    if (x + w > stageEl.scrollLeft + box.width - 6) x -= w + 28;
-    if (y + h > stageEl.scrollTop + box.height - 6) y -= h + 28;
-    tooltip.style.left = `${x}px`;
-    tooltip.style.top = `${y}px`;
+  // One traced pathway, or one item on it.
+  function itemHtml(target) {
+    const path = traces.paths[target.paths[0]];
+    const item = target.member >= 0 && path.members ? path.members[target.member] : null;
+    const rows = path.nodes.map((ni, s) => `<tr><td>${esc(setName(s))}</td><td>${esc(nodeDisplayName(nodeAtStage(s, ni)))}</td></tr>`).join('');
+    const count = `<b>${fmtValue(path.weight)}</b> ${unitOf(path.weight)} on this pathway (${pct(path.weight, traces.total)} of all)` +
+      (item && item.weight !== 1 ? ` · this one weighs <b>${fmtValue(item.weight)}</b>` : '');
+    return `<h3 class="focus-head">${item ? esc(item.id) : 'One pathway'}</h3><table class="focus-table">${rows}</table>` +
+      `<p>${count}</p><p class="muted small">Release Ctrl/⌘ to trace every pathway through this ${target.kind === 'flow' ? 'strand' : 'node'}.</p>`;
+  }
+
+  // Where the traced pathways run: their weight through each node and strand, as counts and as
+  // shares of the traced total, plus the largest pathways.
+  function focusHtml(target) {
+    const TOP = 8;
+    const list = target.paths;
+    const unit = esc(state.pathUnit || 'items');
+    const weight = (pi) => traces.paths[pi].weight;
+    const total = list.reduce((t, pi) => t + weight(pi), 0);
+    const stages = layout.stageCount;
+    const nodeW = Array.from({ length: stages + 1 }, () => new Map());
+    const strandW = Array.from({ length: stages }, () => new Map());
+    const add = (map, key, w) => map.set(key, (map.get(key) || 0) + w);
+    list.forEach((pi) => traces.paths[pi].nodes.forEach((ni, s, nodes) => {
+      add(nodeW[s], ni, weight(pi));
+      if (s < stages) add(strandW[s], `${ni},${nodes[s + 1]}`, weight(pi));
+    }));
+    const head = (title) => `<thead><tr><th>${title}</th><th class="num">${unit}</th><th class="num">share</th></tr></thead>`;
+    const group = (title) => `<tr class="group"><th colspan="3">${esc(title)}</th></tr>`;
+    const row = (label, w) => `<tr><td>${label}</td><td class="num">${fmtValue(w)}</td>` +
+      `<td class="num pct" style="--p:${(100 * w / total).toFixed(1)}%">${pct(w, total)}</td></tr>`;
+    const note = (text) => `<tr class="note"><td colspan="3">${text}</td></tr>`;
+    const more = (n) => (n > 0 ? note(`… and ${n} more`) : '');
+    const name = (s, i) => esc(nodeDisplayName(nodeAtStage(s, i)));
+
+    let nodes = head('Node');
+    for (let s = 0; s <= stages; s++) {
+      const set = layout.nodes.filter((n) => n.set === s + 1).sort((a, b) => b.Y - a.Y);
+      const missed = set.filter((n) => !nodeW[s].has(n.node - 1));
+      nodes += group(setName(s)) +
+        set.filter((n) => nodeW[s].has(n.node - 1)).map((n) => row(name(s, n.node - 1), nodeW[s].get(n.node - 1))).join('') +
+        (missed.length ? note(`none via ${missed.map((n) => name(s, n.node - 1)).join(', ')}`) : '');
+    }
+    let strands = head('Strand');
+    strandW.forEach((map, s) => {
+      const sorted = [...map].sort((a, b) => b[1] - a[1]);
+      strands += group(state.stageNames[s] || `Stage ${s + 1}`) + sorted.slice(0, TOP).map(([key, w]) => {
+        const [i, j] = key.split(',').map(Number);
+        return row(`${name(s, i)} → ${name(s + 1, j)}`, w);
+      }).join('') + more(sorted.length - TOP);
+    });
+    const top = list.slice().sort((a, b) => weight(b) - weight(a));
+    const pathways = head('Pathway') + top.slice(0, TOP).map((pi) => row(esc(pathName(pi)), weight(pi))).join('') + more(top.length - TOP);
+    const single = list.some((pi) => traces.paths[pi].members) ? unitOf(1) : 'pathway';
+    return `<h3 class="focus-head">${list.length} pathway${list.length === 1 ? '' : 's'} · ${fmtValue(total)} ${unitOf(total)} ` +
+      `<span class="muted">(${pct(total, traces.total)} of all)</span></h3>` +
+      `<table class="focus-table">${nodes}</table><table class="focus-table">${strands}</table><table class="focus-table">${pathways}</table>` +
+      `<p class="muted small">Hold Ctrl/⌘ to trace the single ${single} under the pointer.</p>`;
+  }
+
+  // Hover details replace the inspector's content until the pointer leaves the plot, so nothing
+  // covers the strands being looked at.
+  function showHoverInfo(target) {
+    const info = $('#hover-info');
+    info.hidden = !target;
+    $('#inspector-main').hidden = !!target;
+    $('#inspector').classList.toggle('hovering', !!target);
+    info.innerHTML = target ? hoverHtml(target) : '';
   }
 
   function setHover(rawTarget, event) {
-    const paths = tracedPaths(rawTarget, event);
-    const target = rawTarget ? Object.assign({}, rawTarget, { paths }) : null;
-    const pathKey = (t) => (t && t.paths ? t.paths.join(',') : '');
-    const same = target && hover && target.kind === hover.kind && target.index === hover.index && pathKey(target) === pathKey(hover);
+    const target = rawTarget ? Object.assign({ paths: null, member: -1, single: false }, rawTarget, tracedPaths(rawTarget, event)) : null;
+    const key = (t) => (t ? `${t.kind}:${t.index}:${t.paths ? t.paths.join(',') : ''}:${t.member}:${t.single}` : '');
+    const same = key(target) === key(hover);
     hover = target;
-    if (!same) applyHighlight();
-    if (target) {
-      if (!same) tooltip.innerHTML = tooltipHtml(target);
-      tooltip.hidden = false;
-      moveTooltip(event);
-    } else {
-      tooltip.hidden = true;
-    }
+    if (same) return;
+    applyHighlight();
+    showHoverInfo(target);
   }
 
   const plotPoint = (event) => {
@@ -1209,7 +1272,7 @@
     }
     event.preventDefault();
     svg.setPointerCapture(event.pointerId);
-    tooltip.hidden = true;
+    showHoverInfo(null);
     const base = { target, x0: event.clientX, y0: event.clientY, moved: false };
     if (target.kind === 'node') {
       const n = layout.nodes[target.index];
@@ -1402,14 +1465,14 @@
   };
 
   function refreshInspector() {
-    const host = $('#inspector');
+    const host = $('#inspector-main');
     if (drag) return;
     const sel = findSelected();
     if (!sel) {
       host.innerHTML = '<h2>Inspector</h2><p class="muted">Hover a strand or node for details; click to select and edit it.</p>' +
         '<ul class="tips"><li>Drag a node to move it (Shift: vertical only, Alt: horizontal only).</li>' +
         '<li>Drag a strand up or down to reorder it in the stack at its nearer end.</li>' +
-        (traces ? '<li>Hover a strand to trace one pathway end to end; hold Ctrl/⌘ to trace every pathway through a strand or node.</li>' : '') +
+        (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Ctrl/⌘ to trace the single pathway or item under the pointer.</li>' : '') +
         '<li>Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo, F fit view, Esc deselect.</li></ul>';
       return;
     }
@@ -1827,7 +1890,7 @@
     history.index = index;
     state = JSON.parse(history.stack[index]);
     hover = null;
-    tooltip.hidden = true;
+    showHoverInfo(null);
     update();
   }
 

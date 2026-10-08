@@ -25,6 +25,40 @@
     return `${rows.join('\n')}\n`;
   }
 
+  // Deterministic cohort of fictitious patients, one row each, followed from diagnosis to two
+  // years. Rows are sorted by trajectory, so node order (first appearance) runs best to worst.
+  function cohortTable() {
+    let seed = 11;
+    const next = () => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    const pick = (probs) => {
+      let u = next();
+      const i = probs.findIndex((p) => (u -= p) < 0);
+      return i < 0 ? probs.length - 1 : i;
+    };
+    const stages = ['Stage I', 'Stage II', 'Stage III', 'Stage IV'];
+    const treatments = ['Surgery', 'Radiation', 'Chemotherapy', 'Immunotherapy', 'Palliative care'];
+    const responses = ['Complete response', 'Partial response', 'Stable disease', 'Progression'];
+    const statuses = ['Disease-free', 'Living with disease', 'Deceased'];
+    const treatmentByStage = [[0.7, 0.3, 0, 0, 0], [0.45, 0.2, 0.35, 0, 0], [0.2, 0.25, 0.55, 0, 0], [0, 0, 0.4, 0.35, 0.25]];
+    const responseByTreatment = [[0.65, 0.15, 0.12, 0.08], [0.45, 0.25, 0.18, 0.12], [0.25, 0.3, 0.25, 0.2],
+      [0.2, 0.3, 0.25, 0.25], [0, 0.1, 0.45, 0.45]];
+    const statusByResponse = [[0.85, 0.1, 0.05], [0.4, 0.45, 0.15], [0.15, 0.55, 0.3], [0.03, 0.32, 0.65]];
+    const patients = Array.from({ length: 200 }, (_, k) => {
+      const stage = pick([0.3, 0.3, 0.25, 0.15]);
+      const treatment = pick(treatmentByStage[stage]);
+      let response = pick(responseByTreatment[treatment]);
+      // Later stages respond a step worse more often.
+      if (response < 3 && next() < 0.1 * stage) response++;
+      return { id: `P${String(k + 1).padStart(3, '0')}`, path: [stage, treatment, response, pick(statusByResponse[response])] };
+    });
+    patients.sort((a, b) => a.path.reduce((d, v, s) => d || v - b.path[s], 0));
+    const rows = patients.map((p) => [p.id, stages[p.path[0]], treatments[p.path[1]], responses[p.path[2]], statuses[p.path[3]]].join(','));
+    return `patient_id,diagnosis,first treatment,response at 6 months,status at 2 years\n${rows.join('\n')}\n`;
+  }
+
   SK.examples = [
     {
       id: 'labeled',
@@ -77,6 +111,20 @@
           'Stage IV,Palliative,Progression,26', 'Stage IV,Palliative,Stable,5'
         ].join('\n') + '\n'
       }
+    },
+    {
+      id: 'cohort',
+      title: 'Patient cohort, one row per patient (wide table import)',
+      table: 'patient_cohort.csv',
+      importSpec: {
+        format: 'wide', id: 'patient_id', weight: null, missing: 'drop',
+        columns: ['diagnosis', 'first treatment', 'response at 6 months', 'status at 2 years']
+      },
+      importOptions: { order: 'appearance' },
+      labels: 'inside',
+      params: { node_label_pad: 0.02 },
+      style: { colorBy: 'source', palette: 'tableau', opacity: 0.8, gradient: true, gradientMode: 'path', substrands: true },
+      files: { 'patient_cohort.csv': cohortTable() }
     },
     {
       id: 'survey',

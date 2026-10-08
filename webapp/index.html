@@ -88,11 +88,13 @@
         <div id="notice" class="banner info" role="status" hidden></div>
       </div>
       <svg id="plot" xmlns="http://www.w3.org/2000/svg"></svg>
-      <div id="tooltip" class="tooltip" hidden></div>
       <div id="drop-overlay" class="drop-overlay" hidden>Drop CSV or project files to load them</div>
     </section>
 
-    <aside id="inspector" class="inspector"></aside>
+    <aside id="inspector" class="inspector">
+      <div id="hover-info" class="hover-info" hidden></div>
+      <div id="inspector-main"></div>
+    </aside>
   </main>
 
   <dialog id="help-dialog">
@@ -120,11 +122,12 @@
         (files whose names contain “mid” are mid colors). Stage order follows file names; reorder with the arrows.</p>
       <h3>Interaction</h3>
       <ul>
-        <li>Hover strands or nodes for values and shares; click to edit them in the inspector.</li>
+        <li>Hover strands or nodes for values and shares, shown in the inspector panel; click to edit them there.</li>
         <li>Drag nodes to move them (Shift: vertical only, Alt: horizontal only).</li>
         <li>Drag a strand up or down to reorder it within the stack at its nearer end.</li>
-        <li>For data imported from a wide or long table, hovering a strand traces the individual pathway under
-          the pointer through every stage; hold Ctrl/⌘ to trace every pathway through a strand or node.</li>
+        <li>For data imported from a wide or long table, hovering a strand or node traces every pathway through it
+          and breaks them down by node and strand in the inspector; hold Ctrl/⌘ to trace the single pathway, or
+          the single item when the table has item ids, under the pointer.</li>
         <li>Dragging a node into a neighbour stops at a wall, or pushes it along (Canvas &amp; dragging).</li>
         <li>Ctrl/⌘+Z and Ctrl/⌘+Shift+Z undo and redo; F fits the view; Esc clears the selection.</li>
       </ul>

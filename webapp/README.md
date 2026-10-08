@@ -28,7 +28,7 @@ Drop files anywhere or use **Open files…**. Roles are inferred from content an
 
 | Layout | Expected columns | Result |
 | --- | --- | --- |
-| wide | one row per item or item group, one column per stage, optional weight | transitions counted between consecutive chosen columns |
+| wide | one row per item or item group, one column per stage, optional weight and item id | transitions counted between consecutive chosen columns |
 | long | item id, stage, category, optional weight | pivoted to one row per item, then as wide |
 | links | source, target, optional value and stage | one matrix per stage; without a stage column, layers are inferred and links that skip layers produce graph mode |
 | crosstab | row labels, then one numeric column per target | a single stage |
@@ -41,16 +41,18 @@ The layout and column roles are guessed from names and types, and everything can
 
 Errors (cycles, duplicated item/stage pairs, non-numeric weights) are shown before anything is built.
 
-Imported values stay as counts. A **value scale** (Layout section) turns them into strand thickness and is chosen so node columns sit one x unit apart. Tooltips show raw values, and the R bundle multiplies the exported matrices by the same `value_scale`.
+Imported values stay as counts. A **value scale** (Layout section) turns them into strand thickness and is chosen so node columns sit one x unit apart. Hover details show raw values, and the R bundle multiplies the exported matrices by the same `value_scale`.
+
+Wide and long imports also keep every trajectory (the sequence of nodes an item visits), merged into weighted pathways. With an item id (always present in long tables, optional in wide ones, guessed from names like `patient_id` that are unique per row), each pathway also lists its items, so single items can be traced.
 
 ## Interaction
 
-- Hover a strand or node for values and shares of source outflow / target inflow; other strands dim.
+- Hover a strand or node for values and shares of source outflow / target inflow; other strands dim. Hover details appear in the inspector panel (or a corner card in narrow windows), not at the pointer, so they never cover the plot.
 - Click to select; the inspector edits strand values and colors (including three-way mid colors), node labels, positions, widths, heights, fonts, and node or trunk colors.
 - Drag a node to move it (Shift: vertical only, Alt: horizontal only).
 - Drag a strand up or down to reorder it within the stack at its nearer end.
 - Dragging a node into a neighbour stops at an invisible wall, or (Canvas & dragging → "pushes them") shoves the neighbour along; a node can never be dropped into an invalid layout.
-- **Pathway tracing** (wide and long table imports, which keep each item's trajectory): hovering a strand traces the pathway under the pointer through every stage, e.g. one patient group's diagnosis → treatment → outcome. Hold Ctrl/⌘ to trace every pathway through a strand or node, e.g. which stages and treatments feed Remission. Each strand is split into substrands, one per pathway, ordered by where pathways arrive at the strand's source node, and traces curve through nodes from band edge to band edge. Tracing switches off (with a warning) if flow values are edited away from the imported data.
+- **Pathway tracing** (wide and long table imports): hovering a strand or node traces every pathway through it end to end, e.g. which stages and treatments feed Remission, and the inspector breaks the traced items down by node and by strand (counts and shares of the traced total) and lists the largest pathways. Hold Ctrl/⌘ to trace only the substrand under the pointer: one pathway, or one item (e.g. patient P091) when the data has item ids. Each strand is split into substrands, one per pathway and then one per item, ordered by where they arrive at the strand's source node. Traces are colored like the strands and nodes they cross, curve through interior nodes from band edge to band edge, run into end-node bodies, and fade with the node bodies (through white at labeled node centres); the traced nodes dim like the rest, keeping their labels. A single traced item thinner than 4 px is drawn 4 px wide around its slice. **Substrand lines** (Canvas & dragging) draw the substrand divisions permanently. Tracing switches off (with a warning) if flow values are edited away from the imported data.
 - Undo/redo (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z), fit view (F), deselect (Esc). Sessions autosave to the browser.
 
 All `sankey_ribbons()` layout options are available in the sidebar, including per-stage routing and ordering ("Apply to: stage k"), `adjust_loc`, `adjust_node_height`, boundary routing and compensation, plus graph-mode `require_forward` and `balance`.
@@ -66,8 +68,8 @@ SVG, PNG (2×), `loc.csv`, a project JSON, and an **R bundle** zip containing th
 - `js/render.js`: color resolution and SVG markup.
 - `js/app.js`: state, controls, file loading, interactions, inspector, history and exports.
 - `js/transform.js` and `js/importer.js`: table import converters (wide, long, links, crosstab) and the import dialog.
-- `js/paths.js`: substrand stacking and pathway trace geometry for item-level data.
-- `js/csv.js`, `js/color.js`, `js/zip.js`, `js/examples.js`: parsing, color math, a store-only zip writer and the bundled examples.
+- `js/paths.js`: substrand and item-slice stacking, pathway trace geometry, hit-testing and substrand lines for item-level data.
+- `js/csv.js`, `js/color.js`, `js/zip.js`, `js/examples.js`: parsing, color math, a store-only zip writer and the bundled examples (matrix sets, aggregated patient pathways, a generated cohort of 200 patients with one row each, and long-format survey waves).
 
 ## Tests
 
