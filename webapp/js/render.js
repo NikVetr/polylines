@@ -272,7 +272,8 @@
     };
     const nodeBorderColor = (n) => {
       if (style.nodeBorder === 'none') return null;
-      if (style.nodeBorder === 'auto') return n.hasLabel ? C.opaque(colors.node[n.id]) : null;
+      // Auto borders outline label bodies, which only fade (and need outlining) with labels inside.
+      if (style.nodeBorder === 'auto') return labelFades(n, style) ? C.opaque(colors.node[n.id]) : null;
       return C.parse(style.nodeBorder);
     };
     const sine = (t) => Math.sin(Math.PI * t);

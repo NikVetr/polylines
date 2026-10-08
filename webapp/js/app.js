@@ -34,7 +34,7 @@
     canvasHeight: null,
     collision: 'wall',
     tracePaths: true,
-    gatherTraces: true,
+    gatherTraces: false,
     substrands: false
   };
 
