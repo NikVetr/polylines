@@ -1180,17 +1180,19 @@
     return w;
   }
 
-  // Under each node the selection passes through, a small bar: the share of the node it fills in
-  // the node's color, the rest in a faded node color, with both percentages beside it.
+  // Under every node, a small bar: the share of the node the selection fills in the node's color
+  // (none for nodes it misses), the rest in a faded node color, with both percentages beside it.
   const FILL_BAR = { width: 60, height: 8, gap: 7, font: 10.5 };
   function fillMarkup(target) {
     const h = layout.view.height;
     const f2 = (v) => Math.round(v * 100) / 100;
     let out = '';
-    focusWeights(target).forEach((v, id) => {
-      const n = layout.nodes[id];
+    const weights = focusWeights(target);
+    layout.nodes.forEach((n) => {
+      const id = n.id;
+      const v = weights.get(id) || 0;
       const total = Math.max(n.inValue, n.outValue);
-      if (!(total > 0 && v > 0)) return;
+      if (!(total > 0)) return;
       const t = Math.min(v / total, 1);
       // Both shares get one decimal when the smaller one is under 10%, so they add up to 100%.
       const digits = t > 0 && t < 1 && Math.min(t, 1 - t) < 0.0995 ? 1 : 0;
@@ -1208,7 +1210,7 @@
       out += `<g class="node-fill" data-fill="${id}"><clipPath id="fill-clip${id}">` +
         `<rect x="${f2(x0)}" y="${f2(y0)}" width="${width}" height="${height}" rx="2.5"/></clipPath>` +
         `<g clip-path="url(#fill-clip${id})"><rect x="${f2(x0)}" y="${f2(y0)}" width="${width}" height="${height}" fill="${faded}"/>` +
-        `<rect class="node-fill-solid" x="${f2(x0)}" y="${f2(y0)}" width="${f2(Math.max(width * t, 1))}" height="${height}" fill="${solid}"/></g>` +
+        (t > 0 ? `<rect class="node-fill-solid" x="${f2(x0)}" y="${f2(y0)}" width="${f2(Math.max(width * t, 1))}" height="${height}" fill="${solid}"/>` : '') + '</g>' +
         label(x0 - 4, 'end', share(t)) + label(x0 + width + 4, 'start', share(1 - t)) + '</g>';
     });
     return out;

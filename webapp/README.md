@@ -47,7 +47,7 @@ Wide and long imports also keep every trajectory (the sequence of nodes an item 
 
 ## Interaction
 
-- Hover a strand or node for values and shares of source outflow / target inflow; other strands dim, and other nodes fade towards the background while staying opaque, so a node's band and body keep one color. Hover details appear in the inspector panel (or a corner card in narrow windows), not at the pointer, so they never cover the plot. A small bar under each node the hovered strand, node or traced pathways pass through shows the share of that node they fill (node color) against the rest (faded node color), with both percentages beside it.
+- Hover a strand or node for values and shares of source outflow / target inflow; other strands dim, and other nodes fade towards the background while staying opaque, so a node's band and body keep one color. Hover details appear in the inspector panel (or a corner card in narrow windows), not at the pointer, so they never cover the plot. A small bar under every node shows the share of that node the hovered strand, node or traced pathways fill (node color) against the rest (faded node color), with both percentages beside it; nodes they miss show an empty bar at 0%.
 - Click to select; the inspector edits strand values and colors (including three-way mid colors), node labels, positions, widths, heights, fonts, and node or trunk colors.
 - Drag a node to move it (Shift: vertical only, Alt: horizontal only).
 - Drag a strand up or down to reorder it within the stack at its nearer end.
