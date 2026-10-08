@@ -97,7 +97,9 @@
   }
 
   // Body of a source-only or sink-only node with positive width (R endpoint_node_body_polygon).
-  function endpointBody(layout, node, side) {
+  // overlap (px) pushes the body's face edge under the merge band so the two antialiased edges
+  // do not leave a light seam; borders stay at the true face.
+  function endpointBody(layout, node, side, overlap) {
     if (!(node.widthPx > 0)) return null;
     const b = bundle(layout, node, side);
     if (!b) return null;
@@ -111,9 +113,10 @@
     const half = node.bodyHeightPx > 0 ? labelBodyHalfWidth(node) : node.widthPx / 2;
     const towardFace = b.faceX > node.X ? 1 : -1;
     const transitionX = clamp(node.X + towardFace * half, Math.min(b.faceX, outerX), Math.max(b.faceX, outerX));
+    const fillFaceX = b.faceX + towardFace * Math.max(overlap || 0, 0);
     const polygon = [
-      [outerX, lo], [transitionX, lo], [b.faceX, b.lowerY],
-      [b.faceX, b.upperY], [transitionX, hi], [outerX, hi]
+      [outerX, lo], [transitionX, lo], [b.faceX, b.lowerY], [fillFaceX, b.lowerY],
+      [fillFaceX, b.upperY], [b.faceX, b.upperY], [transitionX, hi], [outerX, hi]
     ];
     const lowerBorder = bridgeCurve([b.faceX, b.lowerY], [transitionX, lo], 16).concat([[outerX, lo]]);
     const upperBorder = bridgeCurve([b.faceX, b.upperY], [transitionX, hi], 16).concat([[outerX, hi]]);

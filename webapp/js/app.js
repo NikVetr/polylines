@@ -29,7 +29,8 @@
     fontSize: 13,
     labelColor: '#1F2937',
     canvasWidth: null,
-    canvasHeight: null
+    canvasHeight: null,
+    collision: 'wall'
   };
 
   const svg = $('#plot');
@@ -97,10 +98,21 @@
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
-  function showError(message) {
+  function showError(message, offerUndo) {
     const el = $('#banner');
     el.hidden = !message;
     el.textContent = message || '';
+    const canUndo = history.index > 0 || (history.index === 0 && history.stack[0] !== JSON.stringify(state));
+    if (message && offerUndo && canUndo) {
+      const undo = document.createElement('button');
+      undo.className = 'mini-btn banner-action';
+      undo.textContent = 'Undo last change';
+      // Committed bad edits are the top history entry; uncommitted ones revert to it.
+      undo.addEventListener('click', () => {
+        restore(history.stack[history.index] === JSON.stringify(state) ? history.index - 1 : history.index);
+      });
+      el.append(' ', undo);
+    }
   }
 
   let noticeTimer = null;
@@ -228,19 +240,22 @@
       if (!state.matrices.length || !state.loc.length) {
         layout = null;
         svg.innerHTML = '';
+        svg.classList.remove('stale');
         showError(state.matrices.length ? 'Load node locations (loc) or use "Auto-layout nodes".' : '');
       } else {
         if (opts.fit || !state.view) state.view = fitView();
         layout = L.computeLayout(model(), viewFor(state.view), { measure: measure() });
         colors = R.resolveColors(layout, colorData(), state.style);
         svg.innerHTML = R.render(layout, colors, state.style, frame);
+        svg.classList.remove('stale');
         showError(null);
         showWarnings(layout.warnings);
       }
     } catch (err) {
+      // Keep the last good drawing visible (dimmed, inert) so there is context for undoing.
       layout = null;
-      svg.innerHTML = '';
-      showError(err instanceof L.SankeyError ? err.message : `Unexpected error: ${err.message}`);
+      svg.classList.add('stale');
+      showError(err instanceof L.SankeyError ? err.message : `Unexpected error: ${err.message}`, true);
       if (!(err instanceof L.SankeyError)) console.error(err);
     }
     if (selection && layout && !findSelected()) selection = null;
@@ -267,6 +282,10 @@
       const keep = queuedKeepInspector;
       renderQueued = false;
       queuedKeepInspector = true;
+      if (drag && drag.goal) {
+        placeNode(drag, drag.goal);
+        drag.goal = null;
+      }
       update({ keepInspector: keep });
     });
   }
@@ -367,8 +386,11 @@
       ]
     },
     {
-      title: 'Canvas',
+      title: 'Canvas & dragging',
       items: [
+        { key: 'collision', target: 'style', type: 'select', label: 'Dragged node hits',
+          options: [['wall', 'a wall (stops)'], ['push', 'neighbours (pushes them)']],
+          help: 'What happens when a dragged node would leave a strand no horizontal room.' },
         { key: 'canvasWidth', target: 'style', type: 'number', label: 'Width (px)', min: 200, step: 10, nullable: true, placeholder: 'fit', integer: true },
         { key: 'canvasHeight', target: 'style', type: 'number', label: 'Height (px)', min: 150, step: 10, nullable: true, placeholder: 'fit', integer: true },
         { key: 'xlim', target: 'view', type: 'pair', label: 'x limits' },
@@ -416,7 +438,7 @@
     CONTROL_SECTIONS.forEach((section) => {
       const details = document.createElement('details');
       details.className = 'section';
-      details.open = section.title !== 'Canvas';
+      details.open = true;
       details.innerHTML = `<summary>${section.title}</summary>`;
       if (section.scoped) {
         const row = document.createElement('div');
@@ -439,7 +461,7 @@
         details.appendChild(clear);
       }
       section.items.forEach((item) => details.appendChild(buildControl(item)));
-      if (section.title === 'Canvas') {
+      if (section.title === 'Canvas & dragging') {
         const fit = document.createElement('button');
         fit.className = 'mini-btn wide';
         fit.textContent = 'Fit view to content';
@@ -1093,7 +1115,10 @@
     const base = { target, x0: event.clientX, y0: event.clientY, moved: false };
     if (target.kind === 'node') {
       const n = layout.nodes[target.index];
-      drag = Object.assign(base, { row: n.id, locX: state.loc[n.id].x, locY: state.loc[n.id].y, sx: layout.tf.sx, sy: layout.tf.sy });
+      drag = Object.assign(base, {
+        row: n.id, locX: state.loc[n.id].x, locY: state.loc[n.id].y, sx: layout.tf.sx, sy: layout.tf.sy,
+        layout0: layout, startX: state.loc.map((r) => r.x)
+      });
     } else {
       const f = layout.flows[target.index];
       const p = plotPoint(event);
@@ -1121,9 +1146,11 @@
     if (!drag.moved && Math.hypot(dx, dy) < 3) return;
     drag.moved = true;
     if (drag.target.kind === 'node') {
-      const row = state.loc[drag.row];
-      row.x = event.shiftKey ? drag.locX : round(drag.locX + dx / drag.sx);
-      row.y = event.altKey ? drag.locY : round(drag.locY - dy / drag.sy);
+      // Placed once per frame in requestRender(), since collision checks run test layouts.
+      drag.goal = {
+        x: event.shiftKey ? drag.locX : drag.locX + dx / drag.sx,
+        y: event.altKey ? drag.locY : drag.locY - dy / drag.sy
+      };
       requestRender();
       return;
     }
@@ -1139,8 +1166,86 @@
     }
   }
 
+  const MIN_RUN_PX = 16;
+
+  // A quick, low-resolution layout tells whether a candidate drag position is drawable, keeps every
+  // strand's direction, and leaves each strand a minimum horizontal run (or its run at drag start).
+  function dragIsValid(d) {
+    let lay;
+    try {
+      lay = L.computeLayout(Object.assign(model(), { params: Object.assign({}, state.params, { n: 4 }) }),
+        viewFor(state.view), { measure: measure() });
+    } catch (err) {
+      if (err instanceof L.SankeyError) return false;
+      throw err;
+    }
+    return lay.flows.every((f, k) => {
+      const f0 = d.layout0.flows[k];
+      return f.dir === f0.dir &&
+        f.dir * (f.endX - f.startX) >= Math.min(MIN_RUN_PX, f0.dir * (f0.endX - f0.startX)) - 1e-9;
+    });
+  }
+
+  // Push mode: shove nodes along each strand's direction until every strand touching a moved node
+  // keeps a minimum horizontal run between node faces (positions relative to the drag start).
+  function pushNeighbours(d) {
+    const L0 = d.layout0;
+    const halfWidth = L0.nodes.map((n) => n.widthPx / 2 / L0.tf.sx);
+    const minRun = MIN_RUN_PX / L0.tf.sx;
+    const queue = [d.row];
+    let budget = 20 * L0.flows.length;
+    while (queue.length && budget-- > 0) {
+      const u = queue.shift();
+      L0.flows.forEach((f) => {
+        if (f.from !== u && f.to !== u) return;
+        const v = f.from === u ? f.to : f.from;
+        if (v === d.row) return;
+        const dir = f.dir;
+        const need = halfWidth[f.from] + halfWidth[f.to] + 1.02 * minRun;
+        const run = dir * (state.loc[f.to].x - state.loc[f.from].x);
+        if (run >= need) return;
+        if (v === f.to) state.loc[v].x = round(state.loc[f.from].x + dir * need);
+        else state.loc[v].x = round(state.loc[f.to].x - dir * need);
+        queue.push(v);
+      });
+    }
+  }
+
+  // Move the dragged node toward goal without ever producing an invalid layout. In push mode
+  // colliding neighbours move along; otherwise, or if it is still invalid, the node stops at the
+  // last valid point on the way there (an invisible wall).
+  function placeNode(d, goal) {
+    const row = state.loc[d.row];
+    const from = { x: row.x, y: row.y };
+    const tryAt = (p) => {
+      state.loc.forEach((r, i) => { r.x = d.startX[i]; });
+      row.x = round(p.x);
+      row.y = round(p.y);
+      if (state.style.collision === 'push') pushNeighbours(d);
+      return dragIsValid(d);
+    };
+    // Furthest valid point on the segment a -> b, given that a is valid.
+    const approach = (a, b) => {
+      if (tryAt(b)) return b;
+      let lo = 0;
+      let hi = 1;
+      for (let i = 0; i < 12; i++) {
+        const mid = (lo + hi) / 2;
+        if (tryAt({ x: a.x + (b.x - a.x) * mid, y: a.y + (b.y - a.y) * mid })) lo = mid;
+        else hi = mid;
+      }
+      return { x: a.x + (b.x - a.x) * lo, y: a.y + (b.y - a.y) * lo };
+    };
+    if (tryAt(goal)) return;
+    // Blocked: slide along the wall by settling y first, then x.
+    let p = approach(from, { x: from.x, y: goal.y });
+    p = approach(p, { x: goal.x, y: p.y });
+    tryAt(p);
+  }
+
   function endDrag(event) {
     const finished = drag;
+    if (finished.goal) placeNode(finished, finished.goal);
     drag = null;
     svg.classList.remove('dragging');
     if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);

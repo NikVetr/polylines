@@ -338,6 +338,78 @@ test('path gradients reach their node colors where strands meet the merge band',
   });
 });
 
+const nodeAt = (page, label) => page.evaluate((l) => {
+  const n = window.SankeyApp.layout.nodes.find((x) => x.label === l);
+  const box = document.querySelector('#plot').getBoundingClientRect();
+  return { x: box.left + 18 + n.X, y: box.top + (box.height - 18) - n.Y, dataX: n.x };
+}, label);
+
+test('dragging a node into its neighbour stops at a wall by default', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('graph'));
+  const relay = await nodeAt(page, 'Relay');
+  const sink = await nodeAt(page, 'Sink');
+  await page.mouse.move(relay.x, relay.y);
+  await page.mouse.down();
+  await page.mouse.move(sink.x + 80, relay.y, { steps: 15 });
+  await page.mouse.up();
+  await expect(page.locator('#banner')).toBeHidden();
+  await expect(page.locator('#plot')).not.toHaveClass(/stale/);
+  const relayAfter = await nodeAt(page, 'Relay');
+  const sinkAfter = await nodeAt(page, 'Sink');
+  expect(relayAfter.dataX).toBeGreaterThan(relay.dataX + 0.2);
+  expect(relayAfter.dataX).toBeLessThan(sinkAfter.dataX);
+  expect(sinkAfter.dataX).toBeCloseTo(sink.dataX, 6);
+  // The node can still be picked up and dragged back.
+  await page.mouse.move(relayAfter.x, relayAfter.y);
+  await page.mouse.down();
+  await page.mouse.move(relayAfter.x - 100, relayAfter.y, { steps: 5 });
+  await page.mouse.up();
+  expect((await nodeAt(page, 'Relay')).dataX).toBeLessThan(relayAfter.dataX);
+});
+
+test('push mode shoves colliding neighbours along instead', async ({ page }) => {
+  await page.evaluate(() => {
+    window.SankeyApp.loadExample('graph');
+    window.SankeyApp.state.style.collision = 'push';
+    window.SankeyApp.update();
+  });
+  const relay = await nodeAt(page, 'Relay');
+  const sink = await nodeAt(page, 'Sink');
+  await page.mouse.move(relay.x, relay.y);
+  await page.mouse.down();
+  await page.mouse.move(sink.x + 40, relay.y, { steps: 15 });
+  await page.mouse.up();
+  await expect(page.locator('#banner')).toBeHidden();
+  const relayAfter = await nodeAt(page, 'Relay');
+  const sinkAfter = await nodeAt(page, 'Sink');
+  expect(relayAfter.dataX).toBeGreaterThan(sink.dataX);
+  expect(sinkAfter.dataX).toBeGreaterThan(relayAfter.dataX);
+});
+
+test('an invalid edit keeps the last plot dimmed and offers undo', async ({ page }) => {
+  await page.evaluate(() => {
+    const s = window.SankeyApp.state;
+    s.loc[4].x = s.loc[0].x;
+    window.SankeyApp.update({ commit: true });
+  });
+  await expect(page.locator('#plot')).toHaveClass(/stale/);
+  await expect(page.locator('#plot .ribbon').first()).toBeAttached();
+  await page.locator('#banner .banner-action').click();
+  await expect(page.locator('#plot')).not.toHaveClass(/stale/);
+  await expect(page.locator('#banner')).toBeHidden();
+});
+
+test('labeled node bodies tuck under the merge band so no seam shows', async ({ page }) => {
+  const overlap = await page.evaluate(() => {
+    const L = window.SankeyApp.layout;
+    const n = L.nodes.find((x) => x.label === 'Outcome 1');
+    const body = document.querySelector(`path[fill="url(#gn${n.id}_b)"]`).getBBox();
+    const band = document.querySelector(`path[fill="url(#gn${n.id}_t)"]`).getBBox();
+    return Math.min(body.x + body.width, band.x + band.width) - Math.max(body.x, band.x);
+  });
+  expect(overlap).toBeGreaterThan(1);
+});
+
 test('works when opened directly from disk', async ({ browser }) => {
   const page = await browser.newPage();
   await page.goto(`file://${path.resolve(__dirname, '..', 'index.html')}`);

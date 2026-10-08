@@ -250,7 +250,8 @@
           solidNode(n, trunk.polygon, mergeColor);
         }
       }
-      const body = S.endpointBody(layout, n, side);
+      // Opaque trunks can hide a small body overlap; translucent ones would show it as a darker line.
+      const body = S.endpointBody(layout, n, side, style.flatten && trunk ? Math.min(1.5, layout.mergeLength) : 0);
       if (body) {
         const tc = Math.abs(n.X - body.faceX) / Math.abs(body.outerX - body.faceX);
         // The trunk meets the body at the face in the trunk (merge) color, so the body starts there too.
