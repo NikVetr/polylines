@@ -69,7 +69,7 @@ SVG, PNG (2×), `loc.csv`, a project JSON, and an **R bundle** zip containing th
 - `js/app.js`: state, controls, file loading, interactions, inspector, history and exports.
 - `js/transform.js` and `js/importer.js`: table import converters (wide, long, links, crosstab) and the import dialog.
 - `js/paths.js`: substrand and item-slice stacking, pathway trace geometry, hit-testing and substrand lines for item-level data.
-- `js/csv.js`, `js/color.js`, `js/zip.js`, `js/examples.js`: parsing, color math, a store-only zip writer and the bundled examples (matrix sets, aggregated patient pathways, a generated cohort of 200 patients with one row each, and long-format survey waves).
+- `js/csv.js`, `js/color.js`, `js/zip.js`, `js/examples.js`: parsing, color math, a store-only zip writer and the bundled examples (matrix sets, aggregated patient pathways, the same patients one row each with patient ids, and long-format survey waves).
 
 ## Tests
 

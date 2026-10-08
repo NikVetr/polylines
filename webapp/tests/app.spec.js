@@ -489,12 +489,19 @@ test('imported tables label nodes above solid bodies in darker node colors', asy
   expect(check.clear).toBe(false);
 });
 
-test('one-row-per-patient data traces single patients and draws substrand lines', async ({ page }) => {
+test('one-row-per-patient data traces single patients and can draw substrand lines', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
-  await expect(page.locator('#plot .substrand-lines').first()).toBeAttached();
+  // The same patients as the aggregated pathways example, one row each.
   const s = await state(page);
-  expect(s.paths.reduce((t, p) => t + p.members.length, 0)).toBe(200);
+  expect(s.paths.reduce((t, p) => t + p.members.length, 0)).toBe(560);
+  expect(s.matrices).toEqual(await page.evaluate(() => {
+    window.SankeyApp.loadExample('pathways');
+    const m = window.SankeyApp.state.matrices;
+    window.SankeyApp.loadExample('cohort');
+    return m;
+  }));
   expect(s.pathUnit).toBe('patients');
+  await expect(page.locator('#plot .substrand-lines')).toHaveCount(0);
   const p = await ribbonCenter(page, 0);
   await page.mouse.move(p.x, p.y);
   expect(await page.locator('#plot .trace').count()).toBeGreaterThan(1);
@@ -507,11 +514,13 @@ test('one-row-per-patient data traces single patients and draws substrand lines'
   await expect(page.locator('#plot .trace')).toHaveCount(1);
   await expect(page.locator('#hover-info h3')).toHaveText(/^P\d{3}$/);
   await expect(page.locator('#hover-info')).toContainText(/patients? on this pathway/);
-  const node = await nodeAt(page, 'Complete response');
+  const node = await nodeAt(page, 'Remission');
   await page.mouse.move(node.x - 10, node.y);
   await expect(page.locator('#plot .trace')).toHaveCount(1);
   await expect(page.locator('#hover-info h3')).toHaveText(/^P\d{3}$/);
   await page.keyboard.up('Shift');
+  await page.evaluate(() => { window.SankeyApp.state.style.substrands = true; window.SankeyApp.update(); });
+  await expect(page.locator('#plot .substrand-lines').first()).toBeAttached();
   const exported = await page.evaluate(() => window.SankeyApp.exportSvgText());
   expect(exported).toContain('substrand-lines');
 });
