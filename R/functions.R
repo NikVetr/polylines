@@ -3699,7 +3699,8 @@ draw_multi_stage_interior_trunks <- function(sankey, node_cols, merge_cols,
         next
       }
       node_row <- interior_node_row(prev_segment, next_segment, node)
-      if(!is.null(node_row) && node_has_user_label(node_row)) {
+      # The fade to a transparent centre is a label body, so it needs a node with width.
+      if(!is.null(node_row) && node_has_user_label(node_row) && isTRUE(node_row$node_width[1] > 0)) {
         prev_inds <- which(prev_segment$flows$to == node)
         next_inds <- which(next_segment$flows$from == node)
         left_col <- if(!is.null(merge_cols)) {
@@ -3907,7 +3908,7 @@ draw_graph_interior_trunks <- function(sankey, flow_cols, merge_cols,
           next
         }
         t <- (i - 0.5) / gradient_slices
-        col <- if(nrow(node) == 1 && node_has_user_label(node)) {
+        col <- if(nrow(node) == 1 && node_has_user_label(node) && isTRUE(node$node_width[1] > 0)) {
           x_mid <- node$x[1]
           x_pos <- (breaks[i] + breaks[i + 1]) / 2
           if(x_pos <= x_mid) {

@@ -661,6 +661,23 @@ expected_cols <- vapply(expected_t, function(t) {
 }, character(1))
 stopifnot(identical(slice_cols, expected_cols), abs(expected_t[1] - 0.125) > 0.02)
 
+# Zero-width labeled interior nodes get a solid trunk, not a label-body fade.
+beside_pdf <- tempfile(fileext = ".pdf")
+grDevices::pdf(beside_pdf, width = 5, height = 3)
+plot.new()
+plot.window(xlim = c(-0.2, 3.2), ylim = c(0, 1))
+beside_loc <- data.frame(set = multi_loc[, 1], node = multi_loc[, 2], x = multi_loc[, 3], y = multi_loc[, 4],
+                         label = paste("node", seq_len(nrow(multi_loc))), width = 0)
+beside <- sankey_ribbons(list(thic, thic2), beside_loc, xyr = 1)
+trunk_polygons <- 0
+polygon <- function(...) trunk_polygons <<- trunk_polygons + 1
+draw_multi_stage_interior_trunks(beside, node_cols = NULL, merge_cols = multi_stage_merge_cols(beside, "#5B8CBA"),
+                                 merge_length = beside$merge_length, gradient_slices = 20)
+rm(polygon)
+grDevices::dev.off()
+unlink(beside_pdf)
+stopifnot(trunk_polygons == beside$node_counts[2])
+
 # stack_order fixes strand order per node side; unlisted strands stay above listed ones.
 stack_rows <- function(s, to) {
   f <- s$flows[s$flows$to == to, ]

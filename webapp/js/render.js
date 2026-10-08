@@ -205,7 +205,8 @@
       if (role === 'interior') {
         const shape = S.interiorTrunk(layout, n);
         if (!shape) return;
-        if (n.hasLabel && shape.x1 - shape.x0 > 1e-9) {
+        // The fade to a transparent centre is a label body, so it needs a node with width.
+        if (n.hasLabel && n.widthPx > 0 && shape.x1 - shape.x0 > 1e-9) {
           const tc = (n.X - shape.x0) / (shape.x1 - shape.x0);
           nodeFill(n, 'i', shape.polygon, shape.x0, shape.x1,
             [[0, mergeColor], [tc, C.withAlpha(mergeColor, 0)], [1, mergeColor]]);
