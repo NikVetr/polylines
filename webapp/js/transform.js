@@ -110,7 +110,9 @@
     // Ids and other many-valued columns would make one node per row, so they are not stages.
     const idLike = (c) => ID_RE.test(c.name) || (!c.numeric && c.distinct > Math.max(12, table.rows.length / 2));
     const columns = info.filter((c) => c.name !== weight && !idLike(c) && (!c.numeric || c.distinct <= 12)).map((c) => c.name);
-    return { format: 'wide', columns, weight };
+    // A named id that is unique per row means one row per item, so items can be traced one by one.
+    const itemId = (info.find((c) => ID_RE.test(c.name) && c.distinct === table.rows.length && !c.missing) || {}).name || null;
+    return { format: 'wide', columns, weight, id: itemId };
   }
 
   // True when column names mark a data table (link list, long table, a named weight column or a
@@ -148,13 +150,22 @@
     if (columns.length < 2) fail('Choose at least two stage columns.');
     const idx = columns.map((c) => colIndex(table, c, 'stage'));
     const w = spec.weight ? colIndex(table, spec.weight, 'weight') : -1;
+    const iId = spec.id ? colIndex(table, spec.id, 'item id') : -1;
+    if (iId >= 0 && idx.includes(iId)) fail('The item id column cannot also be a stage column.');
     const sets = columns.map(() => new Map());
     const counts = columns.slice(1).map(() => new Map());
-    // Whole trajectories (one node per stage) are kept so individual pathways can be traced.
-    const pathWeights = new Map();
+    // Whole trajectories (one node per stage) are kept so pathways can be traced; with an id
+    // column, each pathway also lists its items (members) so single items can be traced too.
+    const pathways = new Map();
+    const ids = new Set();
     let used = 0;
     let dropped = 0;
     table.rows.forEach((r, i) => {
+      if (iId >= 0) {
+        if (isNA(r[iId])) fail(`Row ${i + 2} has no item id.`);
+        if (ids.has(r[iId])) fail(`Item "${r[iId]}" appears on more than one row.`);
+        ids.add(r[iId]);
+      }
       let cats = idx.map((j) => r[j]);
       if (cats.some(isNA)) {
         if (spec.missing !== 'keep') {
@@ -169,8 +180,12 @@
         const key = cats[k] + SEP + cats[k + 1];
         counts[k].set(key, (counts[k].get(key) || 0) + v);
       }
-      const pathKey = cats.map((c, k) => sets[k].get(c)).join(',');
-      pathWeights.set(pathKey, (pathWeights.get(pathKey) || 0) + v);
+      const nodes = cats.map((c, k) => sets[k].get(c));
+      const key = nodes.join(',');
+      if (!pathways.has(key)) pathways.set(key, iId >= 0 ? { nodes, weight: 0, members: [] } : { nodes, weight: 0 });
+      const path = pathways.get(key);
+      path.weight += v;
+      if (path.members && v > 0) path.members.push({ id: r[iId], weight: v });
       used++;
     });
     if (!used) fail('No rows remain: every row has a missing value in a chosen stage column.');
@@ -184,9 +199,8 @@
       return mat;
     });
     const stageNames = columns.slice(0, -1).map((c, k) => `${c} → ${columns[k + 1]}`);
-    const paths = [...pathWeights].filter(([, weight]) => weight > 0)
-      .map(([key, weight]) => ({ nodes: key.split(',').map(Number), weight }));
-    return { mode: 'layered', sets: names, matrices, stageNames, paths, rowsUsed: used, rowsDropped: dropped };
+    const paths = [...pathways.values()].filter((p) => p.weight > 0);
+    return { mode: 'layered', sets: names, setNames: columns.slice(), matrices, stageNames, paths, rowsUsed: used, rowsDropped: dropped };
   }
 
   // Long: one row per (item, stage) with the item's category at that stage.
@@ -215,13 +229,15 @@
     const stages = stageOrder(table.rows.filter((r) => !isNA(r[iId]) && !isNA(r[iStage])).map((r) => r[iStage]), spec.stageOrder);
     if (stages.length < 2) fail('The stage column needs at least two distinct stages.');
     const wide = {
-      columns: stages.concat(w >= 0 ? ['\u0001weight'] : []),
-      rows: [...items.values()].map((item) => stages.map((s) => (item.cats.has(s) ? item.cats.get(s) : ''))
-        .concat(w >= 0 ? [String(item.weight)] : []))
+      columns: ['\u0001id'].concat(stages, w >= 0 ? ['\u0001weight'] : []),
+      rows: [...items].map(([id, item]) => [id].concat(stages.map((s) => (item.cats.has(s) ? item.cats.get(s) : '')),
+        w >= 0 ? [String(item.weight)] : []))
     };
-    const out = fromWide(wide, { columns: stages, weight: w >= 0 ? '\u0001weight' : null, missing: spec.missing });
+    const out = fromWide(wide, { columns: stages, id: '\u0001id', weight: w >= 0 ? '\u0001weight' : null, missing: spec.missing });
     out.rowsDropped += dropped;
     out.itemCount = items.size;
+    out.setNames = stages.map((s) => (isNum(s) ? `${spec.stage} ${s}` : s));
+    out.stageNames = out.setNames.slice(0, -1).map((name, k) => `${name} → ${out.setNames[k + 1]}`);
     return out;
   }
 
@@ -421,10 +437,14 @@
       // Re-index trajectories to the grouped/ordered nodes and merge any that now coincide.
       const merged = new Map();
       result.paths.forEach((p) => {
-        const key = p.nodes.map((n, k) => mapping[k][n]).join(',');
-        merged.set(key, (merged.get(key) || 0) + p.weight);
+        const nodes = p.nodes.map((n, k) => mapping[k][n]);
+        const key = nodes.join(',');
+        if (!merged.has(key)) merged.set(key, p.members ? { nodes, weight: 0, members: [] } : { nodes, weight: 0 });
+        const m = merged.get(key);
+        m.weight += p.weight;
+        if (p.members) m.members.push(...p.members);
       });
-      result.paths = [...merged].map(([key, weight]) => ({ nodes: key.split(',').map(Number), weight }));
+      result.paths = [...merged.values()];
     }
     return result;
   }
@@ -439,6 +459,12 @@
     return { stages: result.matrices.length, nodes, strands, total, rowsUsed: result.rowsUsed, rowsDropped: result.rowsDropped };
   }
 
+  // "patient_id" → "patients", "respondent" → "respondents", "id" → "items".
+  function itemUnit(idColumn) {
+    const base = idColumn.replace(/([\s_.-]+id|(?<=[a-z])Id)$/, '').replace(/^id$/i, '').trim();
+    return !base ? 'items' : /s$/i.test(base) ? base : `${base}s`;
+  }
+
   // spec: { format, ...column roles, missing, stageOrder }, options: { order, minShare, topN }.
   function build(table, spec, options) {
     if (!FORMATS.includes(spec.format)) fail(`Unknown table layout "${spec.format}".`);
@@ -447,8 +473,8 @@
         : spec.format === 'links' ? fromLinks(table, spec)
           : fromCrosstab(table);
     const result = postProcess(raw, options);
-    // What path weights count, for tooltips: the weight column, else rows (wide) or items (long).
-    result.unit = spec.weight || (spec.format === 'long' ? 'items' : 'rows');
+    // What path weights count: the weight column, else the items named by the id column, else rows.
+    result.unit = spec.weight || (spec.id ? itemUnit(spec.id) : 'rows');
     result.dimnames = result.mode === 'graph'
       ? [{ rows: result.nodes, cols: result.nodes }]
       : result.matrices.map((_, k) => ({ rows: result.sets[k], cols: result.sets[k + 1] }));

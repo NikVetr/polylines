@@ -34,7 +34,7 @@ test('wide tables sum a weight column and handle missing values as asked', () =>
 test('long tables pivot by item with numeric stages in numeric order', () => {
   const t = table('id,visit,status\n1,2,sick\n1,10,well\n2,2,sick\n2,10,sick\n3,2,well\n3,10,well\n');
   const r = T.build(t, { format: 'long', id: 'id', stage: 'visit', category: 'status' });
-  assert.deepStrictEqual(r.stageNames, ['2 → 10']);
+  assert.deepStrictEqual(r.stageNames, ['visit 2 → visit 10']);
   assert.deepStrictEqual(r.dimnames[0], { rows: ['sick', 'well'], cols: ['well', 'sick'] });
   assert.deepStrictEqual(r.matrices[0], [[1, 1], [1, 0]]);
   assert.throws(() => T.build(table('id,visit,status\n1,1,a\n1,1,b\n'), { format: 'long', id: 'id', stage: 'visit', category: 'status' }),
@@ -86,19 +86,20 @@ test('guesses the table layout from column names and types', () => {
   assert.deepStrictEqual(T.guess(table('id,year,state\n1,2020,a\n1,2021,b\n2,2020,a\n')),
     { format: 'long', id: 'id', stage: 'year', category: 'state', weight: null, stageOrder: 'auto' });
   assert.strictEqual(T.guess(table('from,X,Y\nA,1,2\n')).format, 'crosstab');
-  assert.deepStrictEqual(T.guess(table('q1,q2,q3,count\na,b,c,4\n')), { format: 'wide', columns: ['q1', 'q2', 'q3'], weight: 'count' });
+  assert.deepStrictEqual(T.guess(table('q1,q2,q3,count\na,b,c,4\n')), { format: 'wide', columns: ['q1', 'q2', 'q3'], weight: 'count', id: null });
   // An id column is recognised by name or by never repeating within a stage.
   const long = 'respondent,wave,answer\nR1,1,yes\nR1,2,no\nR2,1,no\nR2,2,no\nR3,1,yes\nR3,2,yes\n';
   assert.deepStrictEqual(T.guess(table(long)), { format: 'long', id: 'respondent', stage: 'wave', category: 'answer', weight: null, stageOrder: 'auto' });
   assert.strictEqual(T.guess(table(long.replace('respondent', 'who'))).id, 'who');
-  // Many-valued id-like columns are not proposed as wide stages, nor stage-named numbers as weights.
+  // Many-valued id-like columns are not proposed as wide stages, nor stage-named numbers as weights;
+  // a named id that is unique per row marks one row per item.
   const rows = Array.from({ length: 20 }, (_, i) => `u${i},${i % 2 ? 'a' : 'b'},${i % 3 ? 'x' : 'y'},${2000 + (i % 2)}`);
   assert.deepStrictEqual(T.guess(table(`user,before,after,year\n${rows.join('\n')}\n`)),
-    { format: 'wide', columns: ['before', 'after', 'year'], weight: null });
+    { format: 'wide', columns: ['before', 'after', 'year'], weight: null, id: 'user' });
   // An id column followed by numeric codes is a wide table, not a crosstab.
   const coded = Array.from({ length: 40 }, (_, i) => `P${i},${i % 3},${(i + 1) % 3},${i % 2}`);
   assert.deepStrictEqual(T.guess(table(`patient,t1,t2,t3\n${coded.join('\n')}\n`)),
-    { format: 'wide', columns: ['t1', 't2', 't3'], weight: null });
+    { format: 'wide', columns: ['t1', 't2', 't3'], weight: null, id: 'patient' });
   assert.strictEqual(T.guess(table('id,before,after\na,1,2\nb,2,2\nc,1,1\n')).format, 'wide');
 });
 

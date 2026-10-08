@@ -22,7 +22,7 @@
     const names = table.columns;
     const numeric = info.filter((c) => c.numeric).map((c) => c.name);
     const text = info.filter((c) => !c.numeric).map((c) => c.name);
-    if (format === 'wide') return { format, columns: text.length >= 2 ? text : names.slice(0, 2), weight: numeric[0] || null };
+    if (format === 'wide') return { format, columns: text.length >= 2 ? text : names.slice(0, 2), weight: numeric[0] || null, id: null };
     if (format === 'long') return { format, id: names[0], stage: names[1], category: names[2] || names[1], weight: null, stageOrder: 'auto' };
     if (format === 'links') {
       return { format, source: names[0], target: names[1], value: numeric.find((c) => c !== names[0] && c !== names[1]) || null, stage: null };
@@ -100,7 +100,8 @@
         return `<li class="${pos >= 0 ? 'on' : ''}"><label><input type="checkbox" data-col="${esc(c)}"${pos >= 0 ? ' checked' : ''}> ` +
           `${esc(c)}</label>${arrows}</li>`;
       }).join('') + '</ol></div>';
-      html += selectRow('imp-weight', 'Weight', none.concat(numeric), spec.weight);
+      html += selectRow('imp-weight', 'Weight', none.concat(numeric), spec.weight) +
+        selectRow('imp-id', 'Item id', [['', '— none (trace pathways only) —']].concat(cols), spec.id);
     } else if (spec.format === 'long') {
       html += selectRow('imp-id', 'Item id', cols, spec.id) +
         selectRow('imp-stage', 'Stage', cols, spec.stage) +
