@@ -661,4 +661,38 @@ expected_cols <- vapply(expected_t, function(t) {
 }, character(1))
 stopifnot(identical(slice_cols, expected_cols), abs(expected_t[1] - 0.125) > 0.02)
 
+# stack_order fixes strand order per node side; unlisted strands stay above listed ones.
+stack_rows <- function(s, to) {
+  f <- s$flows[s$flows$to == to, ]
+  f$from[order(f$end_offset)]
+}
+manual_single <- sankey_ribbons(thic, loc, xyr = 1,
+                                stack_order = data.frame(side = "end", from = c(1, 3), to = 1, rank = c(1, 2)))
+manual_multi <- sankey_ribbons(list(thic, thic2), multi_loc, xyr = 1,
+                               stack_order = data.frame(side = "start", stage = 1, from = 1, to = 1, rank = 1))
+auto_multi <- sankey_ribbons(list(thic, thic2), multi_loc, xyr = 1)
+source_stack <- function(s) {
+  f <- s$segments[[1]]$flows[s$segments[[1]]$flows$from == 1, ]
+  f$to[order(f$start_offset)]
+}
+manual_graph <- sankey_ribbons_graph(graph_thic, graph_loc, xyr = 1, target_order = "source_bezier",
+                                     stack_order = data.frame(side = "end", from = c(3, 1), to = 4, rank = 1:2))
+stopifnot(
+  identical(stack_rows(manual_single, 1), c(1L, 3L, 2L)),
+  identical(stack_rows(sankey_ribbons(thic, loc, xyr = 1), 1), c(3L, 2L, 1L)),
+  identical(source_stack(auto_multi), c(2L, 1L)),
+  identical(source_stack(manual_multi), c(1L, 2L)),
+  identical(manual_multi$segments[[2]]$flows, auto_multi$segments[[2]]$flows),
+  identical(stack_rows(manual_graph, 4), c(3L, 1L))
+)
+expect_error(
+  sankey_ribbons(thic, loc, xyr = 1, stack_order = data.frame(side = "end", from = 9, to = 1, rank = 1)),
+  "no positive flow"
+)
+expect_error(
+  sankey_ribbons(list(thic, thic2), multi_loc, xyr = 1,
+                 stack_order = data.frame(side = "end", from = 1, to = 1, rank = 1)),
+  "needs a stage column"
+)
+
 cat("sankey tests passed\n")

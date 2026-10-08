@@ -972,11 +972,80 @@ apply_bezier_stack_order <- function(sankey, geometry, source_order, target_orde
   sankey
 }
 
+# stack_order: NULL or a data frame with columns side ("start" = stack at the
+# source node, "end" = stack at the target node), from, to and rank (1 = bottom),
+# plus stage (1-based) for list-valued thic. In graph mode from/to are loc rows.
+validate_stack_order <- function(stack_order) {
+  if(is.null(stack_order)) {
+    return(NULL)
+  }
+  if(!is.data.frame(stack_order) || !all(c("side", "from", "to", "rank") %in% names(stack_order))) {
+    stop("`stack_order` must be NULL or a data frame with columns side, from, to and rank.", call. = FALSE)
+  }
+  stack_order$side <- as.character(stack_order$side)
+  if(any(!stack_order$side %in% c("start", "end"))) {
+    stop("`stack_order$side` must contain only \"start\" or \"end\".", call. = FALSE)
+  }
+  numeric_cols <- intersect(c("stage", "from", "to", "rank"), names(stack_order))
+  if(any(!vapply(stack_order[numeric_cols], function(x) is.numeric(x) && all(is.finite(x)), logical(1)))) {
+    stop("`stack_order` stage, from, to and rank columns must be finite numbers.", call. = FALSE)
+  }
+  key_cols <- intersect(c("side", "stage", "from", "to"), names(stack_order))
+  if(any(duplicated(stack_order[key_cols]))) {
+    stop("`stack_order` lists a strand more than once on the same side.", call. = FALSE)
+  }
+  stack_order
+}
+
+stage_stack_order <- function(stack_order, stage, n_stages) {
+  if(is.null(stack_order)) {
+    return(NULL)
+  }
+  if(!"stage" %in% names(stack_order)) {
+    stop("For list-valued `thic`, `stack_order` needs a stage column.", call. = FALSE)
+  }
+  if(any(!stack_order$stage %in% seq_len(n_stages))) {
+    stop(sprintf("`stack_order$stage` must be between 1 and %s.", n_stages), call. = FALSE)
+  }
+  stack_order[stack_order$stage == stage, setdiff(names(stack_order), "stage"), drop = FALSE]
+}
+
+# Listed strands stack bottom-to-top by rank at their node; unlisted strands at
+# that node keep their computed relative order above them.
+apply_manual_stack_order <- function(flows, stack_order) {
+  if(is.null(stack_order) || nrow(stack_order) == 0) {
+    return(flows)
+  }
+  flow_keys <- paste(flows$from, flows$to)
+  order_keys <- paste(stack_order$from, stack_order$to)
+  if(any(!order_keys %in% flow_keys)) {
+    stop(sprintf(
+      "`stack_order` lists strands with no positive flow: %s.",
+      paste(unique(order_keys[!order_keys %in% flow_keys]), collapse = ", ")
+    ), call. = FALSE)
+  }
+  for(side in c("start", "end")) {
+    rows <- stack_order[stack_order$side == side, , drop = FALSE]
+    node_col <- if(identical(side, "start")) "from" else "to"
+    offset_col <- paste0(side, "_offset")
+    for(node in unique(rows[[node_col]])) {
+      inds <- which(flows[[node_col]] == node)
+      listed <- rows[rows[[node_col]] == node, , drop = FALSE]
+      current <- inds[order(flows[[offset_col]][inds])]
+      rank <- listed$rank[match(flow_keys[current], paste(listed$from, listed$to))]
+      score <- ifelse(is.na(rank), max(listed$rank) + seq_along(current), rank)
+      flows[[offset_col]][inds] <- stack_offsets(flows$width[inds], match(current[order(score)], inds))
+    }
+  }
+  flows
+}
+
 build_sankey_flows <- function(thic, loc, from_set = 1, to_set = 2,
                                default_node_width = 0, node_label_pad = 0,
                                node_label_pad_frac = 0.04,
                                source_order = sankey_source_order_choices,
-                               target_order = sankey_target_order_choices) {
+                               target_order = sankey_target_order_choices,
+                               stack_order = NULL) {
   source_order <- validate_single_choice(source_order, sankey_source_order_choices, "`source_order`")
   target_order <- validate_single_choice(target_order, sankey_target_order_choices, "`target_order`")
   validate_sankey_inputs(
@@ -1045,6 +1114,7 @@ build_sankey_flows <- function(thic, loc, from_set = 1, to_set = 2,
   flows$end_node_x <- to_nodes$x[flows$to]
   flows$end_y <- to_nodes$y[flows$to]
   flows <- apply_projected_stack_order(flows, source_order, target_order)
+  flows <- apply_manual_stack_order(flows, stack_order)
 
   list(flows = flows, from_nodes = from_nodes, to_nodes = to_nodes)
 }
@@ -1702,10 +1772,12 @@ sankey_ribbons <- function(thic, loc, from_set = 1, to_set = 2, n = 120,
                            boundary_compensation = c("none", "full", "gap_budget"),
                            boundary_ease = 1,
                            source_order = sankey_source_order_choices,
-                           target_order = sankey_target_order_choices) {
+                           target_order = sankey_target_order_choices,
+                           stack_order = NULL) {
   if(!isTRUE(adjust_loc) && !identical(adjust_loc, FALSE)) {
     stop("`adjust_loc` must be TRUE or FALSE.", call. = FALSE)
   }
+  stack_order <- validate_stack_order(stack_order)
   adjust_node_height <- validate_single_choice(
     adjust_node_height,
     c("none", "label", "node"),
@@ -1772,7 +1844,8 @@ sankey_ribbons <- function(thic, loc, from_set = 1, to_set = 2, n = 120,
         ),
         boundary_ease = sankey_stage_param(boundary_ease, i, arg = "`boundary_ease`"),
         source_order = sankey_stage_param(source_order, i, sankey_source_order_choices, "`source_order`"),
-        target_order = sankey_stage_param(target_order, i, sankey_target_order_choices, "`target_order`")
+        target_order = sankey_stage_param(target_order, i, sankey_target_order_choices, "`target_order`"),
+        stack_order = stage_stack_order(stack_order, i, length(thic))
       )
     })
     path_lengths <- unlist(lapply(segments, `[[`, "path_lengths"), use.names = FALSE)
@@ -1808,7 +1881,8 @@ sankey_ribbons <- function(thic, loc, from_set = 1, to_set = 2, n = 120,
           ),
           boundary_ease = sankey_stage_param(boundary_ease, i, arg = "`boundary_ease`"),
           source_order = sankey_stage_param(source_order, i, sankey_source_order_choices, "`source_order`"),
-          target_order = sankey_stage_param(target_order, i, sankey_target_order_choices, "`target_order`")
+          target_order = sankey_stage_param(target_order, i, sankey_target_order_choices, "`target_order`"),
+          stack_order = stage_stack_order(stack_order, i, length(thic))
         )
       })
     }
@@ -1841,6 +1915,9 @@ sankey_ribbons <- function(thic, loc, from_set = 1, to_set = 2, n = 120,
   }
   source_order <- validate_single_choice(source_order, sankey_source_order_choices, "`source_order`")
   target_order <- validate_single_choice(target_order, sankey_target_order_choices, "`target_order`")
+  if(!is.null(stack_order) && "stage" %in% names(stack_order)) {
+    stack_order <- stage_stack_order(stack_order, 1, 1)
+  }
   if(!is.numeric(merge_frac) || length(merge_frac) != 1 || !is.finite(merge_frac) || merge_frac < 0) {
     stop("`merge_frac` must be a single non-negative finite number.", call. = FALSE)
   }
@@ -1886,7 +1963,8 @@ sankey_ribbons <- function(thic, loc, from_set = 1, to_set = 2, n = 120,
     node_label_pad = node_label_pad,
     node_label_pad_frac = node_label_pad_frac,
     source_order = source_order,
-    target_order = target_order
+    target_order = target_order,
+    stack_order = stack_order
   )
   flows <- sankey$flows
 
@@ -1906,6 +1984,7 @@ sankey_ribbons <- function(thic, loc, from_set = 1, to_set = 2, n = 120,
     geometry <- bezier_sankey_geometry(sankey, n = n, curvature = curvature, xyr = xyr)
     if(bezier_order_requested(source_order, target_order)) {
       sankey <- apply_bezier_stack_order(sankey, geometry, source_order, target_order)
+      sankey$flows <- apply_manual_stack_order(sankey$flows, stack_order)
       flows <- sankey$flows
       geometry <- bezier_sankey_geometry(sankey, n = n, curvature = curvature, xyr = xyr)
     }
@@ -1967,7 +2046,8 @@ build_sankey_graph_flows <- function(thic, loc, require_forward = TRUE,
                                      node_label_pad = 0,
                                      node_label_pad_frac = 0.04,
                                      source_order = sankey_source_order_choices,
-                                     target_order = sankey_target_order_choices) {
+                                     target_order = sankey_target_order_choices,
+                                     stack_order = NULL) {
   balance <- validate_single_choice(balance, c("allow", "warn", "error"), "`balance`")
   source_order <- validate_single_choice(source_order, sankey_source_order_choices, "`source_order`")
   target_order <- validate_single_choice(target_order, sankey_target_order_choices, "`target_order`")
@@ -2069,6 +2149,7 @@ build_sankey_graph_flows <- function(thic, loc, require_forward = TRUE,
     flows$end_offset[inds] <- stack_offsets(flows$width[inds], match(order, inds))
   }
   flows <- apply_projected_stack_order(flows, source_order, target_order)
+  flows <- apply_manual_stack_order(flows, stack_order)
 
   out <- list(
     flows = flows,
@@ -2109,8 +2190,13 @@ sankey_ribbons_graph <- function(thic, loc, n = 120, curvature = 0.45,
                                  balance = c("allow", "warn", "error"),
                                  balance_tol = 1e-8,
                                  source_order = sankey_source_order_choices,
-                                 target_order = sankey_target_order_choices) {
+                                 target_order = sankey_target_order_choices,
+                                 stack_order = NULL) {
   route <- validate_single_choice(route, c("bezier", "boundary"), "`route`")
+  stack_order <- validate_stack_order(stack_order)
+  if(!is.null(stack_order) && "stage" %in% names(stack_order)) {
+    stack_order <- stage_stack_order(stack_order, 1, 1)
+  }
   if(!is.numeric(merge_frac) || length(merge_frac) != 1 || !is.finite(merge_frac) || merge_frac < 0) {
     stop("`merge_frac` must be a single non-negative finite number.", call. = FALSE)
   }
@@ -2149,7 +2235,8 @@ sankey_ribbons_graph <- function(thic, loc, n = 120, curvature = 0.45,
     node_label_pad = node_label_pad,
     node_label_pad_frac = node_label_pad_frac,
     source_order = source_order,
-    target_order = target_order
+    target_order = target_order,
+    stack_order = stack_order
   )
   if(identical(route, "boundary")) {
     if(bezier_order_requested(source_order, target_order)) {
@@ -2167,6 +2254,7 @@ sankey_ribbons_graph <- function(thic, loc, n = 120, curvature = 0.45,
     geometry <- bezier_sankey_geometry(sankey, n = n, curvature = curvature, xyr = xyr)
     if(bezier_order_requested(source_order, target_order)) {
       sankey <- apply_bezier_stack_order(sankey, geometry, source_order, target_order)
+      sankey$flows <- apply_manual_stack_order(sankey$flows, stack_order)
       geometry <- bezier_sankey_geometry(sankey, n = n, curvature = curvature, xyr = xyr)
     }
   }
