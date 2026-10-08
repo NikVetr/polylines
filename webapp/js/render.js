@@ -199,7 +199,11 @@
   // extras.substrandLines: per flow, polylines between substrands (paths.boundaryLines).
   function render(layout, colors, style, frame, extras) {
     const map = makeFrame(layout, frame);
-    const defs = [];
+    // Dimmed nodes blend towards the background but stay opaque, so strands running under a node
+    // and the overlap of its band and body do not show through as a differently colored neck.
+    const bgFade = (c) => (0.65 * c / 255).toFixed(4);
+    const defs = [`<filter id="dim-node" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="` +
+      `0.35 0 0 0 ${bgFade(colors.flatBg.r)} 0 0.35 0 0 ${bgFade(colors.flatBg.g)} 0 0 0.35 0 ${bgFade(colors.flatBg.b)} 0 0 0 1 0"/></filter>`];
     const ribbons = [];
     const trunks = [];
     const borders = [];
@@ -257,8 +261,10 @@
     const solidNode = (n, polygon, c) => {
       trunks.push(`<path class="trunk" data-node="${n.id}" d="${pathD(polygon, map, true)}" ${fillAttrs(flat(c))}/>`);
     };
-    const fadeStroke = (n, id, line, c, alpha) => {
-      if (line.length < 2) return;
+    // Node borders sit just inside the node: inward = +1 for bottom edges, -1 for top edges.
+    const fadeStroke = (n, id, edge, c, alpha, inward) => {
+      if (edge.length < 2) return;
+      const line = edge.map(([x, y]) => [x, y + inward * style.nodeBorderWidth / 2]);
       const x0 = line[0][0];
       const x1 = line[line.length - 1][0];
       const gid = `gb${n.id}_${id}`;
@@ -304,8 +310,8 @@
             ? Math.abs(shape.lowerBridge[shape.lowerBridge.length - 1][0] - shape.lowerBridge[0][0]) : 0;
           const center = span > 0 ? Math.abs(n.X - shape.lowerBridge[0][0]) / span : 0.5;
           const alpha = borderOn ? (t) => Math.min(1, Math.abs(t - center) / Math.max(center, 1 - center, 1e-8)) : sine;
-          fadeStroke(n, 'l', shape.lowerBridge, bc, alpha);
-          fadeStroke(n, 'u', shape.upperBridge, bc, alpha);
+          fadeStroke(n, 'l', shape.lowerBridge, bc, alpha, 1);
+          fadeStroke(n, 'u', shape.upperBridge, bc, alpha, -1);
         }
         return;
       }
@@ -334,8 +340,8 @@
         const bc = nodeBorderColor(n);
         if (bc) {
           const alpha = borderOn ? (t) => 1 - t : sine;
-          fadeStroke(n, 'l', body.lowerBorder, bc, alpha);
-          fadeStroke(n, 'u', body.upperBorder, bc, alpha);
+          fadeStroke(n, 'l', body.lowerBorder, bc, alpha, 1);
+          fadeStroke(n, 'u', body.upperBorder, bc, alpha, -1);
         }
       }
       if (borderOn) {
@@ -393,6 +399,7 @@
       `<g class="layer-node-borders">${nodeBorders.join('')}</g>` +
       `<g class="layer-sums">${sums.join('')}</g>` +
       '<g class="layer-traces"></g>' +
+      '<g class="layer-selection"></g>' +
       `<g class="layer-hits">${hits.join('')}</g>` +
       `<g class="layer-dots">${dots.join('')}</g>` +
       `<g class="layer-labels">${labels.join('')}</g>` +

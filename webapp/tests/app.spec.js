@@ -494,6 +494,34 @@ test('clicking a node pins its traces and breakdown in the inspector until Esc',
   await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
 });
 
+test('a pinned node is outlined inside its edge, only while it is what the plot shows', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const node = await nodeAt(page, 'Stable');
+  await page.mouse.click(node.x, node.y);
+  await page.mouse.move(5, 5);
+  const outline = page.locator('#plot .layer-selection .selection-outline');
+  await expect(outline).toHaveCount(1);
+  expect(await outline.getAttribute('clip-path')).toBe('url(#selection-clip)');
+  // One outline around band and body together, so no dashed line runs through the node.
+  expect((await outline.getAttribute('d')).match(/M/g)).toHaveLength(1);
+  const p = await ribbonCenter(page, 0);
+  await page.mouse.move(p.x, p.y);
+  await expect(outline).toHaveCount(0);
+  await page.mouse.move(5, 5);
+  await expect(outline).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(outline).toHaveCount(0);
+});
+
+test('dimmed nodes stay opaque so their necks match their bodies', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const p = await ribbonCenter(page, 0);
+  await page.mouse.move(p.x, p.y);
+  const dimmed = page.locator('#plot .trunk:not(.hl)').first();
+  expect(await dimmed.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+  expect(await dimmed.evaluate((el) => getComputedStyle(el).filter)).toContain('dim-node');
+});
+
 test('autosave keeps only non-default style, so later default changes reach restored sessions', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   await page.waitForTimeout(600);
