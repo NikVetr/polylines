@@ -214,6 +214,8 @@ button, select, input, textarea { font: inherit; color: inherit; }
 #plot.dimmed .trunk:not(.hl) { filter: url(#dim-node); }
 #plot.dimmed .node-outline:not(.hl), #plot.dimmed .node-border:not(.hl) { opacity: 0.35; }
 #plot.dimmed .node-label:not(.hl) { opacity: 0.5; }
+/* Faded copies of nodes and strands fully covered by traces; still hoverable, just invisible. */
+#plot.dimmed .covered:not(.hit):not(.node-dot) { opacity: 0; }
 #plot .node-dot.selected { stroke-width: 3.5; }
 #plot.stale { opacity: 0.3; filter: grayscale(0.7); pointer-events: none; }
 #plot .layer-traces, #plot .layer-substrands, #plot .layer-fills, #plot .layer-selection { pointer-events: none; }

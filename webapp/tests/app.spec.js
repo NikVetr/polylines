@@ -549,6 +549,45 @@ test('autosave keeps only non-default style, so later default changes reach rest
   expect(style.labelPosition).toBe('above');
 });
 
+test('Alt-click adds and removes substrands from a pool traced and tabulated together', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const altClick = async (label) => {
+    const n = await nodeAt(page, label);
+    await page.mouse.move(n.x, n.y);
+    await page.keyboard.down('Alt');
+    await page.mouse.click(n.x, n.y);
+    await page.keyboard.up('Alt');
+  };
+  await altClick('Surgery');
+  await altClick('Radiation');
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace')).toHaveCount(8);
+  await expect(page.locator('#inspector-main h2').first()).toHaveText('Pool');
+  await expect(page.locator('#inspector-main')).toContainText('8 pathways · 308 patients');
+  await altClick('Surgery');
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#inspector-main')).toContainText('4 pathways · 76 patients');
+  await page.locator('#pool-clear').click();
+  await expect(page.locator('#plot .trace')).toHaveCount(0);
+});
+
+test('nodes and strands fully covered by traces hide their faded copies', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const node = await nodeAt(page, 'Remission');
+  await page.mouse.move(node.x, node.y);
+  const ids = await page.evaluate(() => {
+    const L = window.SankeyApp.layout;
+    const n = L.nodes.find((x) => x.label === 'Remission');
+    return { node: n.id, flow: n.inFlows[0], other: L.nodes.find((x) => x.label === 'Stable').id };
+  });
+  const opacity = (sel) => page.locator(sel).first().evaluate((el) => getComputedStyle(el).opacity);
+  await expect(page.locator(`#plot .trunk[data-node="${ids.node}"]`).first()).toHaveClass(/covered/);
+  await expect.poll(() => opacity(`#plot .trunk[data-node="${ids.node}"]`)).toBe('0');
+  await expect.poll(() => opacity(`#plot .ribbon[data-flow="${ids.flow}"]`)).toBe('0');
+  await expect(page.locator(`#plot .trunk[data-node="${ids.other}"]`).first()).not.toHaveClass(/covered/);
+  await expect(page.locator(`#plot .node-label[data-node="${ids.node}"]`)).not.toHaveClass(/covered/);
+});
+
 test('imported tables label nodes above solid bodies in darker node colors', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const s = await state(page);

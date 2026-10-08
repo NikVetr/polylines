@@ -1077,6 +1077,9 @@
   }
 
   const nodeAtStage = (s, i) => layout.nodes.find((n) => n.set === s + 1 && n.node === i + 1);
+  // What a traced target stands for: [path, member] units, member -1 for a whole pathway.
+  const unitsOf = (t) => t.units || t.paths.map((pi) => [pi, t.single && t.member >= 0 ? t.member : -1]);
+  const unitWeight = ([pi, mi]) => (mi >= 0 ? traces.paths[pi].members[mi].weight : traces.paths[pi].weight);
   const pathName = (pi) => traces.paths[pi].nodes.map((ni, s) => nodeDisplayName(nodeAtStage(s, ni))).join(' → ');
 
   // Overlay shapes for traced pathways, colored like the strands and nodes they pass through
@@ -1090,13 +1093,13 @@
     const sy = (Y) => Math.round((MARGIN + h - Y) * 100) / 100;
     const line = (pts) => pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p[0])} ${sy(p[1])}`).join('');
     const stopTag = (offset, color, opacity) => `<stop offset="${(offset * 100).toFixed(2)}%" stop-color="${color}" stop-opacity="${opacity}"/>`;
-    const slots = !target.single && state.style.gatherInNodes && target.paths.length > 1
-      ? P.gatherSlots(layout, traces.subs, target.paths) : null;
+    const units = unitsOf(target);
+    const slots = !target.single && state.style.gatherInNodes && units.length > 1 && units.every(([, mi]) => mi < 0)
+      ? P.gatherSlots(layout, traces.subs, units.map(([pi]) => pi)) : null;
     let defs = '';
     let body = '';
-    target.paths.forEach((pi, n) => {
-      const t = P.tracePolygon(layout, traces.subs, pi,
-        { member: target.single ? target.member : -1, slots, fadeLabels: state.style.labelPosition !== 'above' });
+    units.forEach(([pi, mi], n) => {
+      const t = P.tracePolygon(layout, traces.subs, pi, { member: mi, slots, fadeLabels: state.style.labelPosition !== 'above' });
       const xs = t.polygon.map((p) => p[0]);
       const x0 = Math.min(...xs);
       const x1 = Math.max(...xs);
@@ -1106,7 +1109,7 @@
       const edge = stops.map(([x, c]) => stopTag(at(x), '#111827', (0.45 * Math.min(1, 2 * c.a)).toFixed(3))).join('');
       const grad = (id, tags) => `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${sx(x0)}" y1="0" x2="${sx(x1)}" y2="0">${tags}</linearGradient>`;
       defs += grad(`trace${n}`, fill) + grad(`trace-edge${n}`, edge);
-      if (target.single && t.thickness < MIN_SINGLE_PX) {
+      if ((target.single || mi >= 0) && t.thickness < MIN_SINGLE_PX) {
         body += `<path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})" stroke="url(#trace${n})" ` +
           `stroke-width="${(MIN_SINGLE_PX - t.thickness).toFixed(2)}" stroke-linejoin="round"/>`;
         return;
@@ -1125,7 +1128,7 @@
     if (!target || !layout) return { flows, nodes, labels: nodes };
     if (target.paths) {
       const labels = new Set();
-      target.paths.forEach((pi) => traces.paths[pi].nodes.forEach((ni, s) => labels.add(nodeAtStage(s, ni).id)));
+      unitsOf(target).forEach(([pi]) => traces.paths[pi].nodes.forEach((ni, s) => labels.add(nodeAtStage(s, ni).id)));
       return { flows, nodes, labels };
     }
     if (target.kind === 'flow') {
@@ -1162,11 +1165,7 @@
     const w = new Map();
     const add = (id, v) => w.set(id, (w.get(id) || 0) + v);
     if (target.paths && traces) {
-      target.paths.forEach((pi) => {
-        const p = traces.paths[pi];
-        const v = target.single && target.member >= 0 && p.members ? p.members[target.member].weight : p.weight;
-        p.nodes.forEach((ni, s) => add(nodeAtStage(s, ni).id, v));
-      });
+      unitsOf(target).forEach((u) => traces.paths[u[0]].nodes.forEach((ni, s) => add(nodeAtStage(s, ni).id, unitWeight(u))));
     } else if (target.kind === 'flow') {
       const f = layout.flows[target.index];
       add(f.from, f.value);
@@ -1178,6 +1177,70 @@
       n.outFlows.forEach((k) => add(layout.flows[k].to, layout.flows[k].value));
     }
     return w;
+  }
+
+  // Nodes and strands made entirely of traced substrands: their faded copies are hidden, since the
+  // traces stand for all of them and the copies would only peek out between crossing traces.
+  function coverage(target) {
+    const nodes = new Set();
+    const flows = new Set();
+    if (!(target && target.paths && traces)) return { nodes, flows };
+    focusWeights(target).forEach((v, id) => {
+      const n = layout.nodes[id];
+      if (v >= Math.max(n.inValue, n.outValue) * (1 - 1e-9)) nodes.add(id);
+    });
+    const byFlow = new Map();
+    unitsOf(target).forEach((u) => traces.subs.pathFlows[u[0]].forEach((k) => byFlow.set(k, (byFlow.get(k) || 0) + unitWeight(u))));
+    byFlow.forEach((v, k) => { if (v >= layout.flows[k].value * (1 - 1e-9)) flows.add(k); });
+    return { nodes, flows };
+  }
+
+  // ---------- pool (Alt-click) ----------
+
+  // Substrands gathered with Alt-click across strands and nodes: per path index, null for the whole
+  // pathway or a Set of its items (member indices). It belongs to the pathway data it was built on.
+  let pool = new Map();
+  let poolPaths = null;
+
+  function poolTarget() {
+    if (!traces || !pool.size || poolPaths !== state.paths) return null;
+    const units = [];
+    pool.forEach((members, pi) => {
+      if (members === null) units.push([pi, -1]);
+      else members.forEach((mi) => units.push([pi, mi]));
+    });
+    return { kind: 'pool', index: -1, paths: [...pool.keys()], member: -1, single: false, units };
+  }
+
+  // Add a traced target's substrands to the pool, or remove them if all are in it already.
+  function togglePool(target) {
+    if (poolPaths !== state.paths) {
+      pool = new Map();
+      poolPaths = state.paths;
+    }
+    const has = (pi, mi) => pool.has(pi) && (pool.get(pi) === null || (mi >= 0 && pool.get(pi).has(mi)));
+    const units = unitsOf(target);
+    const remove = units.every(([pi, mi]) => has(pi, mi));
+    units.forEach(([pi, mi]) => {
+      if (mi < 0) {
+        if (remove) pool.delete(pi);
+        else pool.set(pi, null);
+        return;
+      }
+      // Items of a pathway are kept as a set; all of them together count as the whole pathway.
+      const all = traces.paths[pi].members.map((_, k) => k);
+      const set = pool.get(pi) === null ? new Set(all) : (pool.get(pi) || new Set());
+      if (remove) set.delete(mi);
+      else set.add(mi);
+      if (!set.size) pool.delete(pi);
+      else pool.set(pi, set.size === all.length ? null : set);
+    });
+  }
+
+  function clearPool() {
+    pool = new Map();
+    applyHighlight();
+    refreshInspector();
   }
 
   // Under every node, a small bar: the share of the node the selection fills in the node's color
@@ -1217,17 +1280,22 @@
   }
 
   function applyHighlight() {
-    const active = (drag && drag.target) || hover || pinnedTarget();
+    const active = (drag && drag.target) || hover || poolTarget() || pinnedTarget();
     const sets = highlightSets(active);
+    const covered = coverage(active);
     svg.classList.toggle('dimmed', !!active);
     const traceLayer = svg.querySelector('.layer-traces');
     if (traceLayer) traceLayer.innerHTML = active && active.paths && traces ? traceMarkup(active) : '';
     const fillLayer = svg.querySelector('.layer-fills');
     if (fillLayer) fillLayer.innerHTML = active && !drag ? fillMarkup(active) : '';
-    svg.querySelectorAll('[data-flow]').forEach((el) => el.classList.toggle('hl', sets.flows.has(Number(el.dataset.flow))));
+    svg.querySelectorAll('[data-flow]').forEach((el) => {
+      el.classList.toggle('hl', sets.flows.has(Number(el.dataset.flow)));
+      el.classList.toggle('covered', covered.flows.has(Number(el.dataset.flow)));
+    });
     svg.querySelectorAll('[data-node]').forEach((el) => {
-      const set = el.classList.contains('node-label') ? sets.labels : sets.nodes;
-      el.classList.toggle('hl', set.has(Number(el.dataset.node)));
+      const label = el.classList.contains('node-label');
+      el.classList.toggle('hl', (label ? sets.labels : sets.nodes).has(Number(el.dataset.node)));
+      el.classList.toggle('covered', !label && covered.nodes.has(Number(el.dataset.node)));
     });
     const sel = selectionTarget();
     svg.querySelectorAll('.selected').forEach((el) => el.classList.remove('selected'));
@@ -1264,6 +1332,11 @@
   // Hover details: the strand or node, then the traced pathways, if any.
   function hoverHtml(target) {
     let html;
+    if (target.kind === 'pool') {
+      return '<h2>Pool</h2><p class="muted small">Alt-click strands or nodes to add their substrands, or remove them when ' +
+        'they are all in already (with Ctrl/⌘ or Shift: one pathway or one item).</p>' + focusHtml(target) +
+        '<button class="mini-btn wide" id="pool-clear">Clear pool (Esc)</button>';
+    }
     if (target.kind === 'flow') {
       const f = layout.flows[target.index];
       const a = layout.nodes[f.from];
@@ -1300,9 +1373,11 @@
   // shares of the traced total, plus the largest pathways.
   function focusHtml(target) {
     const TOP = 8;
-    const list = target.paths;
+    const byPath = new Map();
+    unitsOf(target).forEach((u) => byPath.set(u[0], (byPath.get(u[0]) || 0) + unitWeight(u)));
+    const list = [...byPath.keys()];
     const unit = esc(state.pathUnit || 'items');
-    const weight = (pi) => traces.paths[pi].weight;
+    const weight = (pi) => byPath.get(pi);
     const total = list.reduce((t, pi) => t + weight(pi), 0);
     const stages = layout.stageCount;
     const nodeW = Array.from({ length: stages + 1 }, () => new Map());
@@ -1343,7 +1418,8 @@
     return `<h3 class="focus-head">${list.length} pathway${list.length === 1 ? '' : 's'} · ${fmtValue(total)} ${unitOf(total)} ` +
       `<span class="muted">(${pct(total, traces.total)} of all)</span></h3>` +
       `<table class="focus-table">${nodes}</table><table class="focus-table">${strands}</table><table class="focus-table">${pathways}</table>` +
-      `<p class="muted small">Hold Ctrl/⌘ to trace the single pathway under the pointer${items ? `, or Shift for the single ${unitOf(1)}` : ''}.</p>`;
+      (target.kind === 'pool' ? '' : `<p class="muted small">Hold Ctrl/⌘ to trace the single pathway under the pointer${items ? `, or Shift for the single ${unitOf(1)}` : ''}; ` +
+        'Alt-click to add these substrands to a pool.</p>');
   }
 
   // Hover details replace the inspector's content until the pointer leaves the plot, so nothing
@@ -1388,7 +1464,7 @@
     event.preventDefault();
     svg.setPointerCapture(event.pointerId);
     showHoverInfo(null);
-    const base = { target, x0: event.clientX, y0: event.clientY, moved: false };
+    const base = { target, x0: event.clientX, y0: event.clientY, moved: false, alt: event.altKey };
     if (target.kind === 'node') {
       const n = layout.nodes[target.index];
       drag = Object.assign(base, {
@@ -1528,6 +1604,14 @@
     if (!finished.moved) {
       const t = finished.target;
       const shown = hover && hover.kind === t.kind && hover.index === t.index ? hover : null;
+      if (finished.alt && shown && shown.paths && traces) {
+        togglePool(shown);
+        const units = poolTarget() ? poolTarget().units : [];
+        notify(units.length ? `Pool: ${fmtValue(units.reduce((sum, u) => sum + unitWeight(u), 0))} ${unitOf(2)} in ${new Set(units.map((u) => u[0])).size} pathways (Esc clears).` : 'Pool cleared.');
+        applyHighlight();
+        refreshInspector();
+        return;
+      }
       selection = {
         kind: t.kind,
         key: (t.kind === 'flow' ? layout.flows : layout.nodes)[t.index].key,
@@ -1587,10 +1671,22 @@
   // A selected strand or node keeps its hover details (and traced pathways) pinned above its editor.
   const pinnedHtml = () => `<p class="pin-note muted small">Pinned · click empty space or press Esc to release</p>${hoverHtml(pinnedTarget())}`;
 
+  const bindPool = (host) => {
+    const button = host.querySelector('#pool-clear');
+    if (button) button.addEventListener('click', clearPool);
+  };
+
   function refreshInspector() {
     const host = $('#inspector-main');
     if (drag) return;
     const sel = findSelected();
+    // A pool shows (and is highlighted) in place of the pinned selection's breakdown.
+    const head = () => (poolTarget() ? hoverHtml(poolTarget()) : pinnedHtml());
+    if (!sel && poolTarget()) {
+      host.innerHTML = hoverHtml(poolTarget());
+      bindPool(host);
+      return;
+    }
     if (!sel) {
       host.innerHTML = '<h2>Inspector</h2><p class="muted">Hover a strand or node for details; click to select and edit it.</p>' +
         '<ul class="tips"><li>Drag a node to move it (Shift: vertical only, Alt: horizontal only).</li>' +
@@ -1605,13 +1701,14 @@
       const b = layout.nodes[f.to];
       const mid = colors.mid[f.index];
       const midSet = Object.prototype.hasOwnProperty.call(state.midOverrides, f.key);
-      host.innerHTML = pinnedHtml() + '<h3 class="edit-head">Edit strand</h3>' +
+      host.innerHTML = head() + '<h3 class="edit-head">Edit strand</h3>' +
         `<div class="row"><label for="ins-value">Value</label><input id="ins-value" type="number" min="0" step="any" value="${f.value}"></div>` +
         colorEditor('flow', 'Color', colors.flow[f.index], !!state.flowOverrides[f.key]) +
         `<div class="row"><label for="ins-mid-on">Mid color</label><input id="ins-mid-on" type="checkbox"${mid.color ? ' checked' : ''}></div>` +
         (mid.color ? colorEditor('mid', '', mid.color, midSet) : '') +
         (state.style.gradient ? '' : '<p class="muted small">Mid colors show when gradients are on.</p>') +
         '<button class="mini-btn wide" id="ins-reset-order">Reset stack order at both ends</button>';
+      bindPool(host);
       host.querySelector('#ins-value').addEventListener('change', (e) => {
         const v = Number(e.target.value);
         if (!(Number.isFinite(v) && v >= 0)) {
@@ -1649,7 +1746,7 @@
     const n = sel;
     const row = state.loc[n.id];
     const num = (v) => (v === null || v === undefined || v === '' ? '' : v);
-    host.innerHTML = pinnedHtml() + '<h3 class="edit-head">Edit node</h3>' +
+    host.innerHTML = head() + '<h3 class="edit-head">Edit node</h3>' +
       `<div class="row"><label for="ins-label">Label</label><input id="ins-label" type="text" value="${esc(row.label || '')}"></div>` +
       ['x', 'y', 'width', 'height', 'cex'].map((k) => `<div class="row"><label for="ins-${k}">${k}</label>` +
         `<input id="ins-${k}" data-field="${k}" type="number" step="any" value="${num(row[k])}" ` +
@@ -1660,6 +1757,7 @@
       colorEditor('merge', 'Trunk color', colors.merge[n.id], !!(state.mergeColors[n.key] || row.merge_col)) +
       '<button class="mini-btn wide" id="ins-reset-order">Reset stack order at this node</button>' +
       (state.params.adjust_loc ? '<p class="muted small">y is adjusted by "Adjust node y positions"; edits change the requested y.</p>' : '');
+    bindPool(host);
     host.querySelector('#ins-label').addEventListener('change', (e) => {
       row.label = e.target.value;
       update({ commit: true });
@@ -1711,7 +1809,7 @@
     clone.removeAttribute('class');
     clone.removeAttribute('id');
     clone.querySelectorAll('[class]').forEach((el) => {
-      el.classList.remove('hl', 'selected');
+      el.classList.remove('hl', 'selected', 'covered');
     });
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
@@ -2134,8 +2232,9 @@
         restore(history.index + 1);
       } else if (!typing && !mod && e.key.toLowerCase() === 'f') {
         update({ fit: true, commit: true });
-      } else if (e.key === 'Escape' && selection) {
+      } else if (e.key === 'Escape' && (selection || pool.size)) {
         selection = null;
+        pool = new Map();
         applyHighlight();
         refreshInspector();
       } else if (!typing && e.key === '?') {
