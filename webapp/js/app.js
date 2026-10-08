@@ -32,6 +32,7 @@
     canvasHeight: null,
     collision: 'wall',
     tracePaths: true,
+    gatherTraces: true,
     substrands: false
   };
 
@@ -409,6 +410,9 @@
         { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover',
           help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ to trace the single pathway or item under the pointer.',
           showIf: () => !!state.paths },
+        { key: 'gatherTraces', target: 'style', type: 'checkbox', label: 'Gather traces in nodes',
+          help: 'Traced pathways close up into one contiguous bundle through each node they share, fanning back out to their strands at the node edges.',
+          showIf: () => !!state.paths && state.style.tracePaths },
         { key: 'substrands', target: 'style', type: 'checkbox', label: 'Substrand lines',
           help: 'Thin lines dividing each strand into its pathways, or into single items when the data has item ids.',
           showIf: () => !!state.paths },
@@ -1070,10 +1074,12 @@
     const sy = (Y) => Math.round((MARGIN + h - Y) * 100) / 100;
     const line = (pts) => pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p[0])} ${sy(p[1])}`).join('');
     const stopTag = (offset, color, opacity) => `<stop offset="${(offset * 100).toFixed(2)}%" stop-color="${color}" stop-opacity="${opacity}"/>`;
+    const slots = !target.single && state.style.gatherTraces && target.paths.length > 1
+      ? P.gatherSlots(layout, traces.subs, target.paths) : null;
     let defs = '';
     let body = '';
     target.paths.forEach((pi, n) => {
-      const t = P.tracePolygon(layout, traces.subs, pi, target.single ? target.member : -1);
+      const t = P.tracePolygon(layout, traces.subs, pi, target.single ? target.member : -1, slots);
       const xs = t.polygon.map((p) => p[0]);
       const x0 = Math.min(...xs);
       const x1 = Math.max(...xs);

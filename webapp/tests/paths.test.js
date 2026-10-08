@@ -129,3 +129,23 @@ test('members tile their substrand, can be hit and traced, and draw boundary lin
   const hit = SK.paths.pathAtNode(layout, subs, n, n.X + 1, f.startY + f.startOffset);
   assert.ok(hit && hit.path >= 0 && hit.member >= 0);
 });
+
+test('gathered traces sit flush at the centre of every node they share', () => {
+  const r = T.build(T.parseTable(perPatient), { format: 'wide', id: 'patient_id', columns: ['a', 'b', 'c'] });
+  const layout = buildLayout(r);
+  const subs = SK.paths.substrands(layout, r.paths);
+  // Trace the pathways leaving A: a subset of each later node's stack.
+  const list = r.paths.map((p, pi) => (p.nodes[0] === 0 ? pi : -1)).filter((pi) => pi >= 0);
+  const slots = SK.paths.gatherSlots(layout, subs, list);
+  slots.forEach((places) => {
+    const spans = [...places.values()].sort((a, b) => a[0] - b[0]);
+    spans.slice(1).forEach((span, i) => assert.ok(Math.abs(span[0] - spans[i][1]) < 1e-9));
+  });
+  list.forEach((pi) => {
+    const t = SK.paths.tracePolygon(layout, subs, pi, -1, slots);
+    const n = layout.nodes[t.flows[1].from];
+    const [lo, up] = slots.get(n.id).get(pi);
+    const near = (pts, y) => pts.filter((pt) => Math.abs(pt[1] - y) < 1e-9 && Math.abs(pt[0] - n.X) < 30).length;
+    assert.ok(near(t.upper, up) >= 2 && near(t.lower, lo) >= 2);
+  });
+});
