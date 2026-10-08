@@ -964,8 +964,8 @@
   }
 
   // Default loc: node sets in evenly spaced columns, stacked to fill most of the height.
-  // labels: "above" (labels above solid nodes a tenth of a column gap wide), "inside"
-  // (label-derived node bodies), "beside" (zero-width nodes) or "none".
+  // labels: "above" or "inside" (label-derived node widths; see style.labelPosition), "beside"
+  // (zero-width nodes) or "none".
   function autoLocate(options) {
     const labels = (options && options.labels) || 'inside';
     const sets = nodeSets();
@@ -989,7 +989,6 @@
         const row = { set: s + 1, node: k + 1, x: round(s * spacing), y: round(Y / H) };
         if (n.label && labels !== 'none') row.label = n.label;
         if (n.label && labels === 'beside') row.width = 0;
-        if (labels === 'above') row.width = round(0.1 * spacing);
         if (n.id !== undefined) rowsByGraphId[n.id] = row;
         else loc.push(row);
       });
@@ -1750,8 +1749,12 @@
       ...(scaled ? [`value_scale <- ${rValue(state.valueScale)}  # strand thickness (x units) per unit of value`] : []),
       `thic <- ${readThic}`,
       'loc <- read.csv("loc.csv", stringsAsFactors = FALSE)',
-      // Labels inside nodes fade their bodies in R too; labels above are drawn separately below.
-      ...(style.labelPosition === 'above' ? ['loc$label <- NA  # labels are drawn above the nodes, so node bodies stay solid'] : []),
+      // Labels inside nodes fade their bodies in R too, so labels drawn above are dropped from loc
+      // (and drawn separately below), keeping the label-derived widths measured here.
+      ...(style.labelPosition === 'above' ? [
+        `loc$width <- c(${layout.nodes.map((n) => rValue(round(n.widthPx / layout.tf.sx))).join(', ')})  # node widths (x units)`,
+        'loc$label <- NA  # labels are drawn above the nodes, so node bodies stay solid'
+      ] : []),
       graph ? 'col <- read_colors("colors.csv")' : `col <- lapply(c(${files.colors.map(rString).join(', ')}), read_colors)`
     ];
     if (files.mids.length) {
