@@ -500,4 +500,78 @@ expect_error(
   "unequal incoming and outgoing"
 )
 
+# Drawing helpers use the stored boundary edges, not normal offsets of the centerline.
+boundary_none <- sankey_ribbons(
+  dense_thic,
+  dense_loc,
+  n = 160,
+  xyr = 1,
+  route = "boundary",
+  boundary_group = "target",
+  boundary_compensation = "none"
+)
+for(k in seq_len(nrow(boundary_none$flows))) {
+  drawn <- sankey_centerline_edges(boundary_none, k)
+  stored <- ribbon_bounds(boundary_none, k)
+  stopifnot(
+    max(abs(drawn$left[, "y"] - stored$upper)) < 1e-12,
+    max(abs(drawn$right[, "y"] - stored$lower)) < 1e-12
+  )
+}
+
+# Gap-budget compensation runs on multi-strand groups and never overlaps them.
+gap_budget <- sankey_ribbons(
+  dense_thic,
+  dense_loc,
+  n = 160,
+  xyr = 1,
+  route = "boundary",
+  boundary_group = "target",
+  boundary_compensation = "gap_budget"
+)
+stopifnot(min_target_boundary_gap(gap_budget) >= -1e-10)
+
+# Right-to-left flows stack exactly like their mirrored left-to-right layout.
+mirror_loc <- loc
+mirror_loc[, 3] <- 2 - loc[, 3]
+mirrored <- sankey_ribbons(thic, mirror_loc, n = 80, xyr = 1)
+endpoint_y <- function(sankey, i) vapply(sankey$centerlines, function(cl) cl[i, "y"], numeric(1))
+stopifnot(
+  max(abs(endpoint_y(mirrored, 1) - endpoint_y(bezier, 1))) < 1e-12,
+  max(abs(endpoint_y(mirrored, 80) - endpoint_y(bezier, 80))) < 1e-12,
+  all(diff(path_segment_by_x(mirrored$edges[[1]]$left, 0.5, 1.5)[, "x"]) < 0)
+)
+
+# Location adjustment meets the requested spacing in range when it fits, and
+# otherwise leaves nodes that need no change alone.
+crowded_y <- c(0, 0.01, 0.5, 1)
+stopifnot(
+  max(abs(sankey_adjust_one_node_set(crowded_y, rep(0.1, 4), xyr = 1, allow_expand = FALSE) -
+            c(0, 0.1, 0.5, 1))) < 1e-12,
+  max(abs(sankey_adjust_one_node_set(crowded_y, rep(0.1, 4), xyr = 1, allow_expand = TRUE) -
+            c(-0.045, 0.055, 0.5, 1))) < 1e-12,
+  max(abs(sankey_adjust_one_node_set(c(0, 0.02, 0.2), rep(0.2, 3), xyr = 1, allow_expand = FALSE) -
+            c(0, 0.1, 0.2))) < 1e-12
+)
+
+# Raster fills draw on, and return to, the calling device when others are open.
+raster_other <- tempfile(fileext = ".png")
+raster_main <- tempfile(fileext = ".png")
+grDevices::png(raster_other, width = 200, height = 200)
+other_dev <- grDevices::dev.cur()
+plot.new()
+grDevices::png(raster_main, width = 200, height = 200)
+main_dev <- grDevices::dev.cur()
+plot.new()
+plot.window(xlim = c(-0.2, 2.2), ylim = c(0, 1))
+plot_sankey_ribbons(sankey_ribbons(thic, loc), raster_fill = TRUE, label_nodes = FALSE)
+stopifnot(grDevices::dev.cur() == main_dev, other_dev %in% grDevices::dev.list())
+grDevices::dev.off(main_dev)
+grDevices::dev.off(other_dev)
+stopifnot(
+  any(png::readPNG(raster_main)[, , 1:3] < 0.99),
+  all(png::readPNG(raster_other)[, , 1:3] > 0.99)
+)
+unlink(c(raster_other, raster_main))
+
 cat("sankey tests passed\n")

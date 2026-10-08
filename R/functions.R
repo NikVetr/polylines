@@ -857,6 +857,13 @@ sankey_target_order_choices <- c(
   "source_bezier", "source_bezier_desc"
 )
 
+# Opposite-side face x closest to the shared node, for either flow direction.
+nearest_face_x <- function(flows, inds, side = c("start", "end")) {
+  side <- match.arg(side)
+  nearest <- which.min(abs(flows$end_x[inds] - flows$start_x[inds]))
+  flows[[paste0(side, "_x")]][inds][nearest]
+}
+
 linear_flow_y_at_x <- function(flows, inds, x) {
   start_y <- flows$start_y[inds] + flows$start_offset[inds]
   end_y <- flows$end_y[inds] + flows$end_offset[inds]
@@ -873,7 +880,7 @@ apply_projected_stack_order <- function(flows, source_order, target_order) {
       if(length(inds) < 2) {
         next
       }
-      ref_x <- min(flows$end_x[inds])
+      ref_x <- nearest_face_x(flows, inds, "end")
       projected_y <- linear_flow_y_at_x(flows, inds, ref_x)
       ord <- inds[order(projected_y, flows$to[inds])]
       if(identical(source_order, "target_projected_desc")) {
@@ -889,7 +896,7 @@ apply_projected_stack_order <- function(flows, source_order, target_order) {
       if(length(inds) < 2) {
         next
       }
-      ref_x <- max(flows$start_x[inds])
+      ref_x <- nearest_face_x(flows, inds, "start")
       projected_y <- linear_flow_y_at_x(flows, inds, ref_x)
       ord <- inds[order(projected_y, flows$from[inds])]
       if(identical(target_order, "source_projected_desc")) {
@@ -916,7 +923,7 @@ apply_bezier_stack_order <- function(sankey, geometry, source_order, target_orde
       if(length(inds) < 2) {
         next
       }
-      ref_x <- min(flows$end_x[inds])
+      ref_x <- nearest_face_x(flows, inds, "end")
       sampled_y <- vapply(inds, function(k) {
         point_at_x(geometry$centerlines[[k]], ref_x)[1, "y"]
       }, numeric(1))
@@ -934,7 +941,7 @@ apply_bezier_stack_order <- function(sankey, geometry, source_order, target_orde
       if(length(inds) < 2) {
         next
       }
-      ref_x <- max(flows$start_x[inds])
+      ref_x <- nearest_face_x(flows, inds, "start")
       sampled_y <- vapply(inds, function(k) {
         point_at_x(geometry$centerlines[[k]], ref_x)[1, "y"]
       }, numeric(1))
@@ -1097,28 +1104,21 @@ sankey_adjust_one_node_set <- function(y, widths, xyr, min_node_gap = 0,
     return(y)
   }
   cumulative_spacing <- c(0, cumsum(required_spacing))
+  total_spacing <- cumulative_spacing[length(cumulative_spacing)]
+  old_min <- y_ord[1]
+  old_max <- y_ord[length(y_ord)]
 
-  residual <- y_ord - cumulative_spacing
-  fitted_residual <- stats::isoreg(seq_along(residual), residual)$yf
-  y_adj <- fitted_residual + cumulative_spacing
-
-  old_min <- min(y_ord)
-  old_max <- max(y_ord)
-  old_span <- old_max - old_min
-  old_center <- mean(c(old_min, old_max))
-  new_span <- max(y_adj) - min(y_adj)
-
-  if(isTRUE(allow_expand)) {
-    y_adj <- y_adj + old_center - mean(range(y_adj))
-  } else if(new_span <= old_span + .Machine$double.eps) {
-    shift_lower <- old_min - min(y_adj)
-    shift_upper <- old_max - max(y_adj)
-    shift <- min(max(0, shift_lower), shift_upper)
-    y_adj <- y_adj + shift
-  } else if(new_span > 0 && old_span > 0) {
-    y_adj <- old_min + (y_adj - min(y_adj)) / new_span * old_span
+  if(!isTRUE(allow_expand) && total_spacing > old_max - old_min) {
+    # Requested spacing cannot fit in range: pack at proportionally compressed spacing.
+    y_adj <- old_min + cumulative_spacing * (old_max - old_min) / total_spacing
   } else {
-    y_adj <- rep(old_center, length(y_adj))
+    fitted_residual <- stats::isoreg(seq_along(y_ord), y_ord - cumulative_spacing)$yf
+    if(!isTRUE(allow_expand)) {
+      # Bounds are constant across the monotone residuals, so clipping the
+      # isotonic fit gives the bounded least-squares solution.
+      fitted_residual <- pmin(pmax(fitted_residual, old_min), old_max - total_spacing)
+    }
+    y_adj <- fitted_residual + cumulative_spacing
   }
 
   out <- y
@@ -1424,15 +1424,20 @@ centerline_to_ribbon <- function(x, y, width, xyr = xyrat_local(), eps = 1e-10,
   coords
 }
 
+# Edges are stored at build time because boundary-routed ribbons are not
+# normal-offset expansions of their centerlines.
 sankey_centerline_edges <- function(sankey, flow_ind) {
-  centerline <- sankey$centerlines[[flow_ind]]
-  centerline_edges(
-    centerline[, "x"],
-    centerline[, "y"],
-    sankey$flows$width[flow_ind],
-    xyr = sankey$xyr,
-    endpoint_normals = "vertical"
-  )
+  if(is.null(sankey$edges)) {
+    stop("Sankey object has no stored ribbon edges; rebuild it with sankey_ribbons().", call. = FALSE)
+  }
+  sankey$edges[[flow_ind]]
+}
+
+edges_to_ribbon <- function(edges) {
+  n <- nrow(edges$left)
+  coords <- rbind(edges$left, edges$right[n:1, , drop = FALSE], edges$left[1, ])
+  colnames(coords) <- c("x", "y")
+  coords
 }
 
 validate_single_choice <- function(x, choices, arg) {
@@ -1481,6 +1486,7 @@ boundary_transport_geometry <- function(sankey, n, xyr,
   flows <- sankey$flows
   ribbons <- vector("list", nrow(flows))
   centerlines <- vector("list", nrow(flows))
+  edges <- vector("list", nrow(flows))
   t <- seq(0, 1, length.out = n)
   ease <- t * t * (3 - 2 * t)
   if(boundary_ease != 1) {
@@ -1559,7 +1565,8 @@ boundary_transport_geometry <- function(sankey, n, xyr,
 
       if(identical(boundary_compensation, "gap_budget")) {
         base_half <- matrix(rep(flows$width[ord] / 2, each = length(t)), nrow = length(t))
-        extra_half <- pmax(0, vwidth_mat / 2 - base_half)
+        # Matrix first: pmax() takes dims from its first argument.
+        extra_half <- pmax(vwidth_mat / 2 - base_half, 0)
         lambda <- rep(1, length(t))
         if(length(ord) > 1) {
           base_gaps <- lower_mat[, -1, drop = FALSE] - upper_mat[, -ncol(upper_mat), drop = FALSE]
@@ -1604,22 +1611,20 @@ boundary_transport_geometry <- function(sankey, n, xyr,
       upper <- upper_mat[, local_i]
       center <- (lower + upper) / 2
       centerlines[[k]] <- cbind(x = x, y = center / xyr)
-      ribbons[[k]] <- rbind(
-        cbind(x = x, y = upper / xyr),
-        cbind(x = rev(x), y = rev(lower / xyr)),
-        c(x = x[1], y = upper[1] / xyr)
-      )
+      edges[[k]] <- list(left = cbind(x = x, y = upper / xyr), right = cbind(x = x, y = lower / xyr))
+      ribbons[[k]] <- edges_to_ribbon(edges[[k]])
     }
   }
 
   names(ribbons) <- sprintf("from_%s_to_%s", flows$from, flows$to)
-  list(ribbons = ribbons, centerlines = centerlines)
+  list(ribbons = ribbons, centerlines = centerlines, edges = edges)
 }
 
 bezier_sankey_geometry <- function(sankey, n, curvature, xyr) {
   flows <- sankey$flows
   ribbons <- vector("list", nrow(flows))
   centerlines <- vector("list", nrow(flows))
+  edges <- vector("list", nrow(flows))
 
   for(k in seq_len(nrow(flows))) {
     flow <- flows[k, ]
@@ -1628,28 +1633,24 @@ bezier_sankey_geometry <- function(sankey, n, curvature, xyr) {
       stop("Sankey ribbons require from/to nodes to have different x positions.", call. = FALSE)
     }
 
-    start_tangent <- c(sign(dx), 0)
-    end_tangent <- c(sign(dx), 0)
-    p0 <- apply_visual_normal_offset(
-      flow$start_x, flow$start_y, flow$start_offset, start_tangent, xyr = xyr
-    )
-    p3 <- apply_visual_normal_offset(
-      flow$end_x, flow$end_y, flow$end_offset, end_tangent, xyr = xyr
-    )
+    # Stack offsets are vertical (positive = up) whichever way the flow travels.
+    p0 <- c(flow$start_x, flow$start_y + flow$start_offset / xyr)
+    p3 <- c(flow$end_x, flow$end_y + flow$end_offset / xyr)
     handle <- curvature * dx
     p1 <- c(p0[1] + handle, p0[2])
     p2 <- c(p3[1] - handle, p3[2])
     centerline <- cubic_bezier(p0, p1, p2, p3, n = n)
 
     centerlines[[k]] <- centerline
-    ribbons[[k]] <- centerline_to_ribbon(
+    edges[[k]] <- centerline_edges(
       centerline[, "x"], centerline[, "y"], flow$width, xyr = xyr,
       endpoint_normals = "vertical"
     )
+    ribbons[[k]] <- edges_to_ribbon(edges[[k]])
   }
 
   names(ribbons) <- sprintf("from_%s_to_%s", flows$from, flows$to)
-  list(ribbons = ribbons, centerlines = centerlines)
+  list(ribbons = ribbons, centerlines = centerlines, edges = edges)
 }
 
 # Build Sankey ribbon geometry.
@@ -1885,8 +1886,6 @@ sankey_ribbons <- function(thic, loc, from_set = 1, to_set = 2, n = 120,
       boundary_compensation = boundary_compensation,
       boundary_ease = boundary_ease
     )
-    ribbons <- geometry$ribbons
-    centerlines <- geometry$centerlines
   } else {
     geometry <- bezier_sankey_geometry(sankey, n = n, curvature = curvature, xyr = xyr)
     if(bezier_order_requested(source_order, target_order)) {
@@ -1894,9 +1893,9 @@ sankey_ribbons <- function(thic, loc, from_set = 1, to_set = 2, n = 120,
       flows <- sankey$flows
       geometry <- bezier_sankey_geometry(sankey, n = n, curvature = curvature, xyr = xyr)
     }
-    ribbons <- geometry$ribbons
-    centerlines <- geometry$centerlines
   }
+  ribbons <- geometry$ribbons
+  centerlines <- geometry$centerlines
 
   names(ribbons) <- sprintf("from_%s_to_%s", flows$from, flows$to)
   path_lengths <- vapply(centerlines, visual_path_length, numeric(1), xyr = xyr)
@@ -1906,6 +1905,7 @@ sankey_ribbons <- function(thic, loc, from_set = 1, to_set = 2, n = 120,
 
   sankey$ribbons <- ribbons
   sankey$centerlines <- centerlines
+  sankey$edges <- geometry$edges
   sankey$path_lengths <- path_lengths
   sankey$merge_length <- merge_length
   sankey$xyr <- xyr
@@ -2157,6 +2157,7 @@ sankey_ribbons_graph <- function(thic, loc, n = 120, curvature = 0.45,
 
   sankey$ribbons <- geometry$ribbons
   sankey$centerlines <- geometry$centerlines
+  sankey$edges <- geometry$edges
   sankey$path_lengths <- vapply(sankey$centerlines, visual_path_length, numeric(1), xyr = xyr)
   if(is.null(merge_length)) {
     merge_length <- merge_frac * min(sankey$path_lengths)
@@ -2821,7 +2822,7 @@ path_segment_by_x <- function(coords, start_x, end_x) {
   } else {
     out <- rbind(
       point_at_x(coords, hi),
-      coords[rev(interior), , drop = FALSE],
+      coords[interior, , drop = FALSE],
       point_at_x(coords, lo)
     )
   }
@@ -4052,23 +4053,13 @@ plotting_device_extent <- function() {
   )
 }
 
-draw_sankey_fill_raster <- function(sankey, fill_cols, combine, gradient_slices,
-                                    merge_length, fill_overlap, gradient_mode,
-                                    raster_res = 96,
-                                    interpolate = TRUE,
-                                    trunk_start = TRUE,
-                                    trunk_end = TRUE,
-                                    flatten_trunks = TRUE,
-                                    trunk_bg = par("bg"),
-                                    merge_cols = NULL,
-                                    mid_cols = NULL, ...) {
+render_raster_fill <- function(draw_fill, raster_res = 96, interpolate = TRUE) {
   if(!requireNamespace("png", quietly = TRUE)) {
     stop("Package `png` is required for rasterized Sankey fills.", call. = FALSE)
   }
 
   gr_usr <- plotting_device_extent()
   tmp <- tempfile(fileext = ".png")
-  on.exit(unlink(tmp), add = TRUE)
   main_dev <- grDevices::dev.cur()
 
   png_args <- list(
@@ -4083,32 +4074,21 @@ draw_sankey_fill_raster <- function(sankey, fill_cols, combine, gradient_slices,
     png_args$type <- "cairo"
   }
   do.call(grDevices::png, png_args)
+  raster_dev <- grDevices::dev.cur()
+  # dev.off() activates the next open device, which need not be the caller's.
   on.exit({
-    if(grDevices::dev.cur() != main_dev) {
-      grDevices::dev.off()
+    if(raster_dev %in% grDevices::dev.list()) {
+      grDevices::dev.off(raster_dev)
     }
+    grDevices::dev.set(main_dev)
+    unlink(tmp)
   }, add = TRUE)
   par(mar = c(0, 0, 0, 0), xpd = NA)
   plot.new()
   plot.window(xlim = gr_usr[1:2], ylim = gr_usr[3:4], xaxs = "i", yaxs = "i")
-  draw_sankey_fill_layer(
-    sankey,
-    fill_cols = fill_cols,
-    combine = combine,
-    gradient_slices = gradient_slices,
-    merge_length = merge_length,
-    fill_overlap = fill_overlap,
-    gradient_mode = gradient_mode,
-    fill_border = NA,
-    trunk_start = trunk_start,
-    trunk_end = trunk_end,
-    flatten_trunks = flatten_trunks,
-    trunk_bg = trunk_bg,
-    merge_cols = merge_cols,
-    mid_cols = mid_cols,
-    ...
-  )
-  grDevices::dev.off()
+  draw_fill()
+  grDevices::dev.off(raster_dev)
+  grDevices::dev.set(main_dev)
 
   rasterImage(
     png::readPNG(tmp),
@@ -4118,6 +4098,39 @@ draw_sankey_fill_raster <- function(sankey, fill_cols, combine, gradient_slices,
   )
 
   invisible(NULL)
+}
+
+draw_sankey_fill_raster <- function(sankey, fill_cols, combine, gradient_slices,
+                                    merge_length, fill_overlap, gradient_mode,
+                                    raster_res = 96,
+                                    interpolate = TRUE,
+                                    trunk_start = TRUE,
+                                    trunk_end = TRUE,
+                                    flatten_trunks = TRUE,
+                                    trunk_bg = par("bg"),
+                                    merge_cols = NULL,
+                                    mid_cols = NULL, ...) {
+  # Read the background from the calling device, not the temporary raster device.
+  force(trunk_bg)
+  render_raster_fill(function() {
+    draw_sankey_fill_layer(
+      sankey,
+      fill_cols = fill_cols,
+      combine = combine,
+      gradient_slices = gradient_slices,
+      merge_length = merge_length,
+      fill_overlap = fill_overlap,
+      gradient_mode = gradient_mode,
+      fill_border = NA,
+      trunk_start = trunk_start,
+      trunk_end = trunk_end,
+      flatten_trunks = flatten_trunks,
+      trunk_bg = trunk_bg,
+      merge_cols = merge_cols,
+      mid_cols = mid_cols,
+      ...
+    )
+  }, raster_res = raster_res, interpolate = interpolate)
 }
 
 draw_sankey_multi_fill_layer <- function(sankey, col, combine, gradient_slices,
@@ -4180,60 +4193,24 @@ draw_sankey_multi_fill_raster <- function(sankey, col, combine, gradient_slices,
                                           interpolate = TRUE,
                                           flatten_trunks = TRUE,
                                           trunk_bg = par("bg"), ...) {
-  if(!requireNamespace("png", quietly = TRUE)) {
-    stop("Package `png` is required for rasterized Sankey fills.", call. = FALSE)
-  }
-
-  gr_usr <- plotting_device_extent()
-  tmp <- tempfile(fileext = ".png")
-  on.exit(unlink(tmp), add = TRUE)
-  main_dev <- grDevices::dev.cur()
-
-  png_args <- list(
-    filename = tmp,
-    width = par("din")[1],
-    height = par("din")[2],
-    units = "in",
-    res = raster_res,
-    bg = "transparent"
-  )
-  if(capabilities("cairo")) {
-    png_args$type <- "cairo"
-  }
-  do.call(grDevices::png, png_args)
-  on.exit({
-    if(grDevices::dev.cur() != main_dev) {
-      grDevices::dev.off()
-    }
-  }, add = TRUE)
-  par(mar = c(0, 0, 0, 0), xpd = NA)
-  plot.new()
-  plot.window(xlim = gr_usr[1:2], ylim = gr_usr[3:4], xaxs = "i", yaxs = "i")
-  draw_sankey_multi_fill_layer(
-    sankey,
-    col = col,
-    combine = combine,
-    gradient_slices = gradient_slices,
-    merge_length = merge_length,
-    fill_overlap = fill_overlap,
-    gradient_mode = gradient_mode,
-    merge_cols = merge_cols,
-    node_cols = node_cols,
-    mid_col = mid_col,
-    flatten_trunks = flatten_trunks,
-    trunk_bg = trunk_bg,
-    ...
-  )
-  grDevices::dev.off()
-
-  rasterImage(
-    png::readPNG(tmp),
-    gr_usr[1], gr_usr[3], gr_usr[2], gr_usr[4],
-    interpolate = interpolate,
-    xpd = NA
-  )
-
-  invisible(NULL)
+  force(trunk_bg)
+  render_raster_fill(function() {
+    draw_sankey_multi_fill_layer(
+      sankey,
+      col = col,
+      combine = combine,
+      gradient_slices = gradient_slices,
+      merge_length = merge_length,
+      fill_overlap = fill_overlap,
+      gradient_mode = gradient_mode,
+      merge_cols = merge_cols,
+      node_cols = node_cols,
+      mid_col = mid_col,
+      flatten_trunks = flatten_trunks,
+      trunk_bg = trunk_bg,
+      ...
+    )
+  }, raster_res = raster_res, interpolate = interpolate)
 }
 
 is_sankey_multi <- function(sankey) {
