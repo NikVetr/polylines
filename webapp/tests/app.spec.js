@@ -587,6 +587,21 @@ test('SVG and PNG export in one click and keep the focused view', async ({ page 
   expect(svg).not.toContain('selection-outline');
 });
 
+test('totals can follow node labels', async ({ page }) => {
+  await page.evaluate(() => {
+    window.SankeyApp.loadExample('pathways');
+    window.SankeyApp.state.style.labelCounts = true;
+    window.SankeyApp.update({ fit: true });
+  });
+  const n = await page.evaluate(() => window.SankeyApp.layout.nodes.find((x) => x.label.startsWith('Surgery')).id);
+  await expect(page.locator(`#plot .node-label[data-node="${n}"]`)).toHaveText('Surgery (n = 232)');
+  const node = await nodeAt(page, 'Surgery (n = 232)');
+  await page.mouse.move(node.x, node.y);
+  await expect(page.locator('#hover-info h2')).toHaveText('Surgery');
+  const loc = await page.evaluate(() => window.SankeyApp.bundleFiles().find((f) => f.name === 'loc.csv').text);
+  expect(loc).toContain('Surgery (n = 232)');
+});
+
 test('nodes and strands fully covered by traces hide their faded copies', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const node = await nodeAt(page, 'Remission');

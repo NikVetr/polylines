@@ -30,6 +30,7 @@
     labelPosition: 'auto',
     labelColorBy: 'single',
     labelColor: '#1F2937',
+    labelCounts: false,
     canvasWidth: null,
     canvasHeight: null,
     collision: 'wall',
@@ -142,11 +143,25 @@
 
   // ---------- model plumbing ----------
 
+  // loc as drawn: with "Totals in labels", each label is followed by its node's total.
+  function labeledLoc() {
+    if (!state.style.labelCounts) return state.loc;
+    const sum = (a) => a.reduce((t, v) => t + (v || 0), 0);
+    const mats = state.matrices;
+    const total = (row, id) => {
+      if (state.mode === 'graph') return Math.max(sum(mats[0][id] || []), sum(mats[0].map((r) => r[id])));
+      const s = row.set - 1;
+      const i = row.node - 1;
+      return Math.max(s > 0 && mats[s - 1] ? sum(mats[s - 1].map((r) => r[i])) : 0, mats[s] && mats[s][i] ? sum(mats[s][i]) : 0);
+    };
+    return state.loc.map((row, id) => (row.label ? Object.assign({}, row, { label: `${row.label} (n = ${fmtValue(total(row, id))})` }) : row));
+  }
+
   function model() {
     return {
       mode: state.mode,
       matrices: state.matrices,
-      loc: state.loc,
+      loc: labeledLoc(),
       params: state.params,
       stageParams: state.stageParams,
       manualOrder: state.manualOrder,
@@ -410,6 +425,8 @@
         { key: 'labelColorBy', target: 'style', type: 'select', label: 'Label color by',
           options: [['single', 'one color'], ['node', 'darker node color']] },
         { key: 'labelColor', target: 'style', type: 'color', label: 'Label color', showIf: () => state.style.labelColorBy === 'single' },
+        { key: 'labelCounts', target: 'style', type: 'checkbox', label: 'Totals in labels',
+          help: 'Follow each label with its node total, e.g. "Surgery (n = 232)".' },
         { key: 'showPoints', target: 'style', type: 'checkbox', label: 'Node points' },
         { key: 'nodeSums', target: 'style', type: 'checkbox', label: 'Node total bars' }
       ]
@@ -1037,7 +1054,8 @@
   }
 
   function nodeDisplayName(n) {
-    if (n.hasLabel) return n.label;
+    // The label as entered (drawn labels may carry a total).
+    if (n.hasLabel) return (state.loc[n.id] && state.loc[n.id].label) || n.label;
     const dn = state.dimnames;
     let name = null;
     if (state.mode === 'graph') {
@@ -1845,8 +1863,7 @@
 
   // loc in R's data-frame form; widths are written for every row when any row sets one,
   // because R treats a width column as explicit for all nodes.
-  function locCsv() {
-    const rows = state.loc;
+  function locCsv(rows = state.loc) {
     const anyLabel = rows.some((r) => r.label);
     const anyWidth = rows.some((r) => Number.isFinite(r.width));
     const anyHeight = rows.some((r) => Number.isFinite(r.height));
@@ -2058,7 +2075,8 @@
         out.push({ name, text: matrixCsv(m) });
       });
     }
-    out.push({ name: 'loc.csv', text: locCsv() });
+    // R reads labels (with any totals) from loc, so it sizes label-width nodes as drawn here.
+    out.push({ name: 'loc.csv', text: locCsv(labeledLoc()) });
     const stackRows = stackOrderRows();
     if (stackRows.length) {
       names.stackOrder = true;
