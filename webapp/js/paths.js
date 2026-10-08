@@ -178,28 +178,29 @@
   }
 
   // Edges (plot pixels) tracing path pi, and the trace's smallest strand thickness. Options:
-  // member (>= 0: just that member's slice), slots (gatherSlots: ease into the path's place in each
-  // node's gathered bundle, hold it through the middle third, ease back out) and fadeLabels
+  // member (>= 0: just that member's slice), slots (gatherSlots: bend through the path's place in
+  // each node's gathered bundle at the node centre) and fadeLabels
   // (labeled end-node bodies fade out at their centre, so traces stop there).
   function tracePolygon(layout, subs, pi, opts) {
     const { member = -1, slots = null, fadeLabels = true } = opts || {};
     const ps = pieces(layout, subs, pi, member);
-    const ease = (from, to) => S.bridgeCurve(from, to, 18);
+    const ease = (from, to) => S.bridgeCurve(from, to, 25);
     const placeAt = (id, k) => (slots ? slots.get(id).get(pi)[k] : undefined);
-    // Points strictly between the band-edge points a and b of consecutive strands.
+    // Points strictly between the band-edge points a and b of consecutive strands: the eased
+    // bridge, pulled into the gathered place y by a weight that rises and falls smoothly (sin^2,
+    // 1 only at the node centre), so a trace bends once rather than holding a level stretch.
     const cross = (a, b, y) => {
-      if (y === undefined) return ease(a, b).slice(1, -1);
-      const xc = (a[0] + b[0]) / 2;
-      const hold = (b[0] - a[0]) / 6;
-      return ease(a, [xc - hold, y]).slice(1).concat(ease([xc + hold, y], b).slice(0, -1));
+      const bridge = S.bridgeCurve(a, b, 25);
+      if (y === undefined) return bridge.slice(1, -1);
+      const shift = y - (a[1] + b[1]) / 2;
+      return bridge.slice(1, -1).map(([x, yy], i) => [x, yy + shift * Math.sin(Math.PI * (i + 1) / 24) ** 2]);
     };
     // Points from a strand's end on to x = reach in the node body (excluding the end point): level,
-    // or eased into the gathered place by 40% of the way from the face to reach and level after.
-    // Without a body (reach at the face), a gathered trace eases into its place across the band.
+    // or eased all the way into the gathered place, so the bundle is flush only where the drawn
+    // body ends. Without a body (reach at the face), the ease runs across the merge band.
     const intoBody = (end, faceX, reach, y) => {
-      const level = reach !== faceX ? [[reach, y === undefined ? end[1] : y]] : [];
-      if (y === undefined) return level;
-      return ease(end, [faceX + (reach - faceX) * 0.4, y]).slice(1).concat(level);
+      if (y !== undefined) return ease(end, [reach, y]).slice(1);
+      return reach !== faceX ? [[reach, end[1]]] : [];
     };
     const from = layout.nodes[ps[0].f.from];
     const to = layout.nodes[last(ps).f.to];

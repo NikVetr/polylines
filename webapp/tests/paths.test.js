@@ -158,6 +158,6 @@ test('gathered traces sit flush against a node edge at the centre of every node 
     const n = layout.nodes[t.flows[1].from];
     const [lo, up] = slots.get(n.id).get(pi);
     const near = (pts, y) => pts.filter((pt) => Math.abs(pt[1] - y) < 1e-9 && Math.abs(pt[0] - n.X) < 30).length;
-    assert.ok(near(t.upper, up) >= 2 && near(t.lower, lo) >= 2);
+    assert.ok(near(t.upper, up) >= 1 && near(t.lower, lo) >= 1);
   });
 });
