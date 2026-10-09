@@ -102,6 +102,11 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const fmtValue = (v) => (Number.isInteger(v) ? v.toLocaleString()
     : Math.abs(v) >= 100 ? v.toFixed(1) : Number(v.toPrecision(4)).toString());
+  const fmtNodeCount = (v) => {
+    if (Math.abs(v) < 10000) return fmtValue(v);
+    const [mantissa, exponent] = v.toExponential(0).split('e');
+    return `${Number(mantissa)}E${Number(exponent).toString().padStart(2, '0')}`;
+  };
   const isDefaultName = (name) => !name || /^V?\d+$/.test(name);
   // Matrix dimnames like V1 or 1 are R defaults, but names from an imported table are real categories.
   const usableName = (name, data = state) => !!name && (data.trustedNames || !isDefaultName(name));
@@ -163,7 +168,7 @@
       const i = row.node - 1;
       return Math.max(s > 0 && mats[s - 1] ? sum(mats[s - 1].map((r) => r[i])) : 0, mats[s] && mats[s][i] ? sum(mats[s][i]) : 0);
     };
-    return data.loc.map((row, id) => (row.label ? Object.assign({}, row, { label: `${row.label} (n = ${fmtValue(total(row, id))})` }) : row));
+    return data.loc.map((row, id) => (row.label ? Object.assign({}, row, { label: `${row.label} (${fmtNodeCount(total(row, id))})` }) : row));
   }
 
   // Labels above nodes widen them only up to 40% of the narrowest gap between columns, so a long
@@ -524,8 +529,8 @@
         { key: 'labelColorBy', target: 'style', type: 'select', label: 'Label color by',
           options: [['single', 'one color'], ['node', 'darker node color']] },
         { key: 'labelColor', target: 'style', type: 'color', label: 'Label color', showIf: () => state.style.labelColorBy === 'single' },
-        { key: 'labelCounts', target: 'style', type: 'checkbox', label: 'Totals in labels',
-          help: 'Follow each label with its node total, e.g. "Surgery (n = 232)".' },
+        { key: 'labelCounts', target: 'style', type: 'checkbox', label: 'Totals in labels', fit: true,
+          help: 'Follow each label with its node total in parentheses, e.g. "Surgery (232)". Counts of 10,000 or more use compact scientific notation, e.g. "Cohort (1E04)"; hover details retain the full count.' },
         { key: 'showPoints', target: 'style', type: 'checkbox', label: 'Node points' },
         { key: 'nodeSums', target: 'style', type: 'checkbox', label: 'Node total bars' }
       ]

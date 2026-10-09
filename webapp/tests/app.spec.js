@@ -1250,12 +1250,39 @@ test('totals can follow node labels', async ({ page }) => {
     window.SankeyApp.update({ fit: true });
   });
   const n = await page.evaluate(() => window.SankeyApp.layout.nodes.find((x) => x.label.startsWith('Surgery')).id);
-  await expect(page.locator(`#plot .node-label[data-node="${n}"]`)).toHaveText('Surgery (n = 232)');
-  const node = await nodeAt(page, 'Surgery (n = 232)');
+  await expect(page.locator(`#plot .node-label[data-node="${n}"]`)).toHaveText('Surgery (232)');
+  const node = await nodeAt(page, 'Surgery (232)');
   await page.mouse.move(node.x, node.y);
   await expect(page.locator('#hover-info h2')).toHaveText('Surgery');
   const loc = await page.evaluate(() => window.SankeyApp.bundleFiles().find((f) => f.name === 'loc.csv').text);
-  expect(loc).toContain('Surgery (n = 232)');
+  expect(loc).toContain('Surgery (232)');
+});
+
+test('node label counts use compact scientific notation above four digits without changing data', async ({ page }) => {
+  const counts = [9999, 10000, 12345, 99999, 10000000, 1250000, 3.75];
+  const suffixes = ['9,999', '1E04', '1E04', '1E05', '1E07', '1E06', '3.75'];
+  await page.evaluate(counts => {
+    const T = window.SK.transform;
+    const table = T.parseTable('source,target,n\n' + counts.map((n, i) => `Count${i},All,${n}`).join('\n'));
+    window.SankeyApp.applyImport(T.build(table, { format: 'wide', columns: ['source', 'target'], weight: 'n' }), { labels: 'above' });
+  }, counts);
+  await page.locator('#ctl-labelCounts').check();
+  const labels = counts.map((_, i) => `Count${i} (${suffixes[i]})`);
+  for (const label of labels) await expect(page.locator('#plot .node-label').filter({ hasText: label })).toHaveText(label);
+  const exports = await page.evaluate(() => {
+    const app = window.SankeyApp;
+    return { svg: app.exportSvgText(), files: app.bundleFiles(), values: app.state.matrices[0].map(row => row[0]), labels: app.state.loc.map(row => row.label) };
+  });
+  expect(exports.values).toEqual(counts);
+  expect(exports.labels).toEqual([...counts.map((_, i) => `Count${i}`), 'All']);
+  for (const label of labels) {
+    expect(exports.svg).toContain(label);
+    expect(exports.files.find(f => f.name === 'loc.csv').text).toContain(label);
+    expect(exports.files.find(f => f.name === 'sankey.R').text).toContain(label);
+  }
+  await page.locator('#ctl-labelCounts').uncheck();
+  await expect(page.locator('#plot .node-label').filter({ hasText: 'Count0' })).toHaveText('Count0');
+  await expect(page.locator('#banner')).toBeHidden();
 });
 
 test('nodes and strands fully covered by traces hide their faded copies', async ({ page }) => {
