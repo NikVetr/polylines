@@ -17,6 +17,10 @@
       <select id="example-select" aria-label="Load an example"></select>
       <button id="undo" class="btn" title="Undo (Ctrl/⌘+Z)" aria-label="Undo">↶</button>
       <button id="redo" class="btn" title="Redo (Ctrl/⌘+Shift+Z)" aria-label="Redo">↷</button>
+      <button id="fit-panel" class="btn icon-btn" title="Fit the whole drawing inside the panel" aria-label="Fit plot to panel" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 7 3 3m-3 0h3V7m7 10-3-3m3 0h-3v3"/></svg></button>
+      <button id="fit-height" class="btn icon-btn" title="Fill the panel height and scroll horizontally" aria-label="Fit plot to height" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18m-4-4 4 4-4 4M7 8l-4 4 4 4M8 3h8M8 21h8"/></svg></button>
+      <button id="zoom-out" class="btn icon-btn" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8"/></svg></button>
+      <button id="zoom-in" class="btn icon-btn" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8m-4-4v8"/></svg></button>
       <button id="fit" class="btn" title="Fit the view to the content (F)">Fit view</button>
       <button id="merge-nodes" class="btn danger" hidden>Merge nodes</button>
       <button class="btn" data-export="svg" title="Download the plot as shown, focused substrands included, as an SVG image">SVG</button>
@@ -89,7 +93,7 @@
         <div id="warnings" class="banner warn" hidden></div>
         <div id="notice" class="banner info" role="status" hidden></div>
       </div>
-      <svg id="plot" xmlns="http://www.w3.org/2000/svg"></svg>
+      <svg id="plot" xmlns="http://www.w3.org/2000/svg" text-rendering="geometricPrecision"></svg>
       <div id="drop-overlay" class="drop-overlay" hidden>Drop CSV or project files to load them</div>
     </section>
 
@@ -140,9 +144,12 @@
         <li>Drag nodes to move them (Shift: vertical only, Alt: horizontal only).</li>
         <li>Drag a strand up or down to reorder it within the stack at its nearer end.</li>
         <li>For data imported from a wide or long table, hovering a strand or node traces every pathway through it
-          and breaks them down by node and strand in the inspector; hold Ctrl/⌘ to trace the single pathway, or
-          the single item when the table has item ids, under the pointer. Click to pin what is shown; Alt-click
+          and breaks them down by node and strand in the inspector; hold Alt or Ctrl/⌘ to trace one pathway, or
+          Shift for one item when the table has item ids. Ordinary hover pauses above 200 pathways by default;
+          adjust <b>Max substrands for hover</b> in Canvas &amp; dragging. Click to pin what is shown; Alt-click
           (⌥-click) to add or remove substrands from a pool that is traced and tabulated together.</li>
+        <li>The toolbar's fit-panel and fit-height buttons scale the whole drawing, including text. Fit-height
+          allows horizontal scrolling; the magnifier buttons zoom in and out.</li>
         <li>The SVG and PNG buttons export the plot as shown, including any focused substrands.</li>
         <li>Alt-click two or more nodes in one column to merge them with the <b>Merge</b> button that appears (Ctrl/⌘+Z undoes).</li>
         <li>Dragging a node into a neighbour stops at a wall, or pushes it along (Canvas &amp; dragging).</li>

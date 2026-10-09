@@ -174,3 +174,22 @@ test('subset captions wrap long values, escape SVG markup and bold column names'
   assert.strictEqual(header.lines.flat().map((p) => p.text).join(''), 'sex & group ∈ {Female <1>, ' + 'A'.repeat(140) + '}');
   assert.strictEqual(SK.tableControls.header(null, 200).height, 0);
 });
+
+test('single-value filters hide matching columns and expanding them restores their order', () => {
+  const result = T.build(T.parseTable('a,sex,b,c\nA,Female,B,C\nD,Male,E,F\n'),
+    { format: 'wide', columns: ['a', 'sex', 'b', 'c'] });
+  const original = SK.tableControls.create(result.source);
+  const filtered = SK.tableControls.withFilters(original, { sex: ['Female'] });
+  assert.deepStrictEqual(filtered.enabled, ['a', 'b', 'c']);
+  assert.deepStrictEqual(filtered.autoHidden, ['sex']);
+  assert.deepStrictEqual(SK.tableControls.build(filtered).result.setNames, ['a', 'b', 'c']);
+  const restored = SK.tableControls.withFilters(filtered, {});
+  assert.deepStrictEqual(SK.tableControls.build(restored).result.setNames, ['a', 'sex', 'b', 'c']);
+  assert.deepStrictEqual(restored.autoHidden, []);
+  // Already-hidden columns stay hidden, and the diagram keeps its minimum two columns.
+  const manual = Object.assign({}, original, { enabled: ['a', 'b'] });
+  const limited = SK.tableControls.withFilters(manual, { sex: ['Female'], a: ['A'] });
+  assert.deepStrictEqual(limited.enabled, ['a', 'b']);
+  assert.deepStrictEqual(SK.tableControls.withFilters(limited, {}).enabled, ['a', 'b']);
+  assert.deepStrictEqual(original.enabled, ['a', 'sex', 'b', 'c']);
+});

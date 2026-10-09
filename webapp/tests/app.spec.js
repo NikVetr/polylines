@@ -348,7 +348,7 @@ test('Data controls rebuild weighted flows from column order, visibility and row
   await expect(page.locator('#plot .layer-subset')).toHaveText('sex ∈ {Female}');
   await expect(page.locator('#plot .layer-subset [font-weight="600"]')).toHaveText('sex');
   await page.locator('[data-enable-column="TR01"]').uncheck();
-  await page.locator('[data-table-column="TR02"] [data-dir="-1"]').click();
+  await page.locator('[data-table-column="TR02"] .column-grip').dragTo(page.locator('[data-table-column="TR00"]'), { targetPosition: { x: 30, y: 2 } });
   s = await state(page);
   expect(s.setNames).toEqual(['TR02', 'TR00']);
   expect(s.matrices).toEqual([[[11, 0], [0, 6]]]);
@@ -374,7 +374,7 @@ test('Data controls rebuild weighted flows from column order, visibility and row
   expect(project.matrices).toEqual([[[11, 0], [0, 6]]]);
   expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).toContain('class="layer-subset"');
   await page.locator('[data-enable-column="TR01"]').check();
-  expect((await state(page)).setNames).toEqual(['TR02', 'TR01', 'TR00']);
+  expect((await state(page)).setNames).toEqual(['TR02', 'TR00', 'TR01']);
   await page.locator('[data-clear-filters]').click();
   expect((await state(page)).sourceTable.summary.total).toBe(23);
   await expect(page.locator('#plot .layer-subset')).toHaveCount(0);
@@ -411,7 +411,7 @@ test('true long tables can reorder and skip stages before checking missing visit
   await keepOnly(page, 'sex', 'Female');
   expect((await state(page)).sourceTable.summary.total).toBe(1);
   await page.locator('[data-enable-column="2"]').uncheck();
-  await page.locator('[data-table-column="3"] [data-dir="-1"]').click();
+  await page.locator('[data-table-column="3"] .column-grip').dragTo(page.locator('[data-table-column="1"]'), { targetPosition: { x: 30, y: 2 } });
   const s = await state(page);
   expect(s.setNames).toEqual(['visit 3', 'visit 1']);
   expect(s.sourceTable.summary.total).toBe(2);
@@ -1241,4 +1241,170 @@ test('works when opened directly from disk', async ({ browser }) => {
   await page.goto(`file://${path.resolve(__dirname, '..', 'index.html')}`);
   await expect(page.locator('#plot .ribbon').first()).toBeVisible();
   await page.close();
+});
+
+test('single-value filters hide their diagram column, restore it and allow a manual override', async ({ page }) => {
+  await importCohortTable(page);
+  await page.locator('[data-enable-column="sex"]').check();
+  await keepOnly(page, 'sex', 'Female');
+  await expect(page.locator('[data-enable-column="sex"]')).not.toBeChecked();
+  expect((await state(page)).setNames).toEqual(['TR00', 'TR01', 'TR02']);
+  expect((await state(page)).sourceTable.summary.total).toBe(17);
+  await page.locator('[data-filter-column="sex"] [data-keep-all]').click();
+  await expect(page.locator('[data-enable-column="sex"]')).toBeChecked();
+  expect((await state(page)).setNames).toEqual(['TR00', 'TR01', 'TR02', 'sex']);
+  await keepOnly(page, 'sex', 'Female');
+  await page.locator('[data-enable-column="sex"]').check();
+  await page.locator('[data-enable-column="sex"]').uncheck();
+  await page.locator('[data-clear-filters]').click();
+  await expect(page.locator('[data-enable-column="sex"]')).not.toBeChecked();
+  await page.locator('#undo').click();
+  expect((await state(page)).sourceTable.filters).toEqual({ sex: ['Female'] });
+});
+
+test('diagram columns support drag-and-drop and keyboard ordering, including disabled entries', async ({ page }) => {
+  await importCohortTable(page);
+  await expect(page.locator('#table-controls [data-column-move]')).toHaveCount(0);
+  await page.locator('[data-table-column="TR02"] .column-grip').dragTo(page.locator('[data-table-column="TR00"]'), { targetPosition: { x: 30, y: 2 } });
+  expect((await state(page)).setNames).toEqual(['TR02', 'TR00', 'TR01']);
+  await page.locator('[data-table-column="sex"] .column-grip').dragTo(page.locator('[data-table-column="TR00"]'), { targetPosition: { x: 30, y: 2 } });
+  expect((await state(page)).setNames).toEqual(['TR02', 'TR00', 'TR01']);
+  expect((await state(page)).sourceTable.order).toEqual(['TR02', 'sex', 'TR00', 'TR01']);
+  await page.locator('[data-enable-column="sex"]').check();
+  expect((await state(page)).setNames).toEqual(['TR02', 'sex', 'TR00', 'TR01']);
+  await page.locator('[data-table-column="sex"]').focus();
+  await page.keyboard.press('Alt+ArrowUp');
+  expect((await state(page)).setNames).toEqual(['sex', 'TR02', 'TR00', 'TR01']);
+  await expect(page.locator('[data-table-column="sex"]')).toBeFocused();
+  await page.locator('#undo').click();
+  expect((await state(page)).setNames).toEqual(['TR02', 'sex', 'TR00', 'TR01']);
+});
+
+const importManyPaths = (page) => page.evaluate(() => {
+  const T = window.SK.transform;
+  const columns = ['source', ...Array.from({ length: 8 }, (_, i) => `s${i}`), 'end'];
+  const rows = Array.from({ length: 201 }, (_, i) => ['A', ...Array.from({ length: 8 }, (_, b) => String((i >> b) & 1)), 'Z']);
+  window.SankeyApp.applyImport(T.build({ columns, rows }, { format: 'wide', columns }), { labels: 'above' });
+});
+
+const screenPoint = (page, point) => page.evaluate(({ X, Y }) => {
+  const plot = document.querySelector('#plot');
+  const app = window.SankeyApp;
+  // The bottom margin remains 18, including when a subset caption reserves extra top margin.
+  const p = new DOMPoint(X + 18, Number(plot.getAttribute('height')) - 18 - Y).matrixTransform(plot.getScreenCTM());
+  return { x: p.x, y: p.y };
+}, point);
+
+test('large pathway diagrams suppress ordinary hover but retain modifier hover and a configurable limit', async ({ page }) => {
+  await importManyPaths(page);
+  await page.locator('#fit-panel').click();
+  const point = await page.evaluate(() => {
+    const f = window.SankeyApp.layout.flows[0];
+    return { X: (f.startX + f.endX) / 2, Y: window.SK.layout.pointAtX(f.centerline, (f.startX + f.endX) / 2)[1] };
+  });
+  const p = await screenPoint(page, point);
+  await page.mouse.move(p.x, p.y);
+  await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
+  await expect(page.locator('#plot .trace')).toHaveCount(0);
+  await expect(page.locator('#plot .node-fill')).toHaveCount(0);
+  await expect(page.locator('#hover-info')).toBeHidden();
+  await expect(page.locator('#inspector-main')).toContainText('201 pathways (limit 200)');
+  await page.keyboard.down('Alt');
+  await expect(page.locator('#plot .trace')).toHaveCount(1);
+  await expect(page.locator('#hover-info h3')).toHaveText('One pathway');
+  await page.keyboard.up('Alt');
+  await expect(page.locator('#plot .trace')).toHaveCount(0);
+  await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
+  await page.keyboard.down('Control');
+  await expect(page.locator('#plot .trace')).toHaveCount(1);
+  await page.keyboard.up('Control');
+  await page.locator('#ctl-maxHoverSubstrands').fill('201');
+  await page.locator('#ctl-maxHoverSubstrands').dispatchEvent('change');
+  await page.mouse.move(p.x, p.y);
+  expect(await page.locator('#plot .trace').count()).toBeGreaterThan(1);
+  await page.mouse.move(5, 5);
+  const saved = await page.evaluate(() => JSON.parse(window.SankeyApp.bundleFiles().find(f => f.name === 'project.json').text));
+  expect(saved.style.maxHoverSubstrands).toBe(201);
+  await page.locator('#undo').click();
+  await expect(page.locator('#ctl-maxHoverSubstrands')).toHaveValue('200');
+});
+
+test('panel and height fits and zoom scale the entire drawing uniformly and persist', async ({ page }) => {
+  await importManyPaths(page);
+  const snapshot = await state(page);
+  const metrics = () => page.evaluate(() => {
+    const plot = document.querySelector('#plot');
+    const box = plot.getBoundingClientRect();
+    const label = plot.querySelector('.node-label').getBoundingClientRect();
+    const panel = document.querySelector('#stage');
+    return { width: box.width, height: box.height, labelWidth: label.width, labelHeight: label.height,
+      panelWidth: panel.clientWidth, panelHeight: panel.clientHeight, scrollWidth: panel.scrollWidth, scrollHeight: panel.scrollHeight };
+  });
+  await page.locator('#fit-panel').click();
+  const fit = await metrics();
+  expect(fit.width).toBeLessThanOrEqual(fit.panelWidth);
+  expect(fit.height).toBeLessThanOrEqual(fit.panelHeight);
+  await page.locator('#zoom-in').click();
+  const zoom = await metrics();
+  expect(zoom.width / fit.width).toBeCloseTo(1.25, 2);
+  expect(zoom.height / fit.height).toBeCloseTo(1.25, 2);
+  expect(zoom.labelWidth / fit.labelWidth).toBeCloseTo(1.25, 2);
+  expect(zoom.labelHeight / fit.labelHeight).toBeCloseTo(1.25, 2);
+  await page.locator('#zoom-out').click();
+  expect((await metrics()).width).toBeCloseTo(fit.width, 1);
+  await page.locator('#fit-height').click();
+  const height = await metrics();
+  expect(height.height).toBeLessThanOrEqual(height.panelHeight);
+  expect(height.panelHeight - height.height).toBeLessThanOrEqual(18);
+  expect(height.scrollWidth).toBeGreaterThan(height.panelWidth);
+  const s = await state(page);
+  expect(s.view).toEqual(snapshot.view);
+  expect(s.loc).toEqual(snapshot.loc);
+  expect(s.valueScale).toBe(snapshot.valueScale);
+  const exported = await page.evaluate(() => {
+    const doc = new DOMParser().parseFromString(window.SankeyApp.exportSvgText(), 'image/svg+xml');
+    return { width: doc.documentElement.style.width, height: doc.documentElement.style.height, text: doc.documentElement.getAttribute('text-rendering') };
+  });
+  expect(exported).toEqual({ width: '', height: '', text: 'geometricPrecision' });
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('polylines-sankey-v1'))?.presentation?.mode)).toBe('height');
+  await page.reload();
+  await expect(page.locator('#fit-height')).toHaveAttribute('aria-pressed', 'true');
+  expect((await state(page)).presentation).toEqual({ mode: 'height', zoom: 1 });
+});
+
+test('zoomed pointer coordinates and drags follow the displayed geometry', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  await page.locator('#fit-panel').click();
+  await page.locator('#zoom-in').click();
+  const point = await page.evaluate(() => {
+    const app = window.SankeyApp;
+    const pi = app.state.paths.findIndex(p => p.members.length >= 3);
+    const subs = window.SK.paths.substrands(app.layout, app.state.paths);
+    const trace = window.SK.paths.tracePolygon(app.layout, subs, pi, { member: 0, fadeLabels: false });
+    const f = trace.flows[0];
+    const X = (f.startX + f.endX) / 2;
+    const Y = (window.SK.layout.pointAtX(trace.lower, X)[1] + window.SK.layout.pointAtX(trace.upper, X)[1]) / 2;
+    return { X, Y, member: app.state.paths[pi].members[0].id };
+  });
+  const p = await screenPoint(page, point);
+  await page.keyboard.down('Shift');
+  await page.mouse.move(p.x, p.y);
+  await expect(page.locator('#hover-info h3')).toHaveText(point.member);
+  await page.keyboard.up('Shift');
+  const node = await page.evaluate(() => {
+    const n = window.SankeyApp.layout.nodes.find(n => n.set === 1);
+    return { X: n.X, Y: n.Y, row: n.id, before: n.y };
+  });
+  const n = await screenPoint(page, node);
+  const factor = await page.evaluate(() => {
+    const plot = document.querySelector('#plot');
+    return window.SankeyApp.layout.tf.sy * plot.getBoundingClientRect().height / Number(plot.getAttribute('height'));
+  });
+  await page.mouse.move(n.x, n.y);
+  await page.keyboard.down('Shift');
+  await page.mouse.down();
+  await page.mouse.move(n.x, n.y - 30, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  expect((await state(page)).loc[node.row].y - node.before).toBeCloseTo(30 / factor, 3);
 });

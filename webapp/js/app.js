@@ -37,6 +37,7 @@
     canvasHeight: null,
     collision: 'wall',
     tracePaths: true,
+    maxHoverSubstrands: 200,
     traceCounts: true,
     tracePercents: false,
     gatherInNodes: false,
@@ -50,6 +51,7 @@
   let layout = null;
   let colors = null;
   let frame = null;
+  let displayScale = 1;
   let traces = null; // { subs, paths, total } when item-level pathways can be traced
   let lastPointer = null;
   let selection = null; // { kind: 'flow' | 'node', key, paths, member, single }: traces pinned by the click
@@ -88,6 +90,7 @@
       pathUnit: null,
       setNames: [],
       sourceTable: null,
+      presentation: { mode: 'native', zoom: 1 },
       view: null
     };
   }
@@ -232,6 +235,33 @@
   const viewFor = (v) => ({ xlim: v.xlim, ylim: v.ylim, width: frame.width - 2 * MARGIN, height: frame.height - frame.margin.top - MARGIN });
   const measure = (data = state) => R.makeMeasure(data.style);
 
+  function scalePresentation() {
+    const { mode, zoom } = state.presentation;
+    const box = stageEl.getBoundingClientRect();
+    let base = 1;
+    if (mode === 'panel') base = Math.min((box.width - 1) / frame.width, (box.height - 1) / frame.height);
+    if (mode === 'height') {
+      const scrollbar = frame.width * box.height / frame.height > box.width ? 17 : 0;
+      base = (box.height - scrollbar - 1) / frame.height;
+    }
+    displayScale = base * zoom;
+    svg.style.width = `${frame.width * displayScale}px`;
+    svg.style.height = `${frame.height * displayScale}px`;
+    $('#fit-panel').setAttribute('aria-pressed', String(mode === 'panel'));
+    $('#fit-height').setAttribute('aria-pressed', String(mode === 'height'));
+    $('#zoom-out').disabled = zoom <= 0.1;
+    $('#zoom-in').disabled = zoom >= 10;
+  }
+
+  function changePresentation(mode, factor = 1) {
+    const previous = state.presentation;
+    state.presentation = { mode: mode || previous.mode, zoom: mode ? 1 : Math.max(0.1, Math.min(10, previous.zoom * factor)) };
+    scalePresentation();
+    stageEl.scrollTo(0, 0);
+    pushHistory();
+    scheduleSave();
+  }
+
   // Labels drawn outside node bodies, in plot pixels, for view fitting.
   function labelBoxes(lay, data = state) {
     const out = [];
@@ -334,6 +364,11 @@
       svg.classList.add('stale');
       showError(err instanceof L.SankeyError ? err.message : `Unexpected error: ${err.message}`, true);
       if (!(err instanceof L.SankeyError)) console.error(err);
+    }
+    scalePresentation();
+    if (hover && !hover.single && state.paths && state.paths.length > state.style.maxHoverSubstrands) {
+      hover = null;
+      showHoverInfo(null);
     }
     if (selection && layout && !findSelected()) selection = null;
     // Hover indices refer to the previous layout; drop them when that strand/node is gone.
@@ -476,7 +511,10 @@
       title: 'Canvas & dragging',
       items: [
         { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover', fit: true,
-          help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ for the single pathway under the pointer, or Shift for the single item.',
+          help: 'Hover a strand or node to trace every pathway through it; hold Alt or Ctrl/⌘ for a single pathway, or Shift for a single item. Above the hover limit, only single-substrand hover is enabled.',
+          showIf: () => !!state.paths },
+        { key: 'maxHoverSubstrands', target: 'style', type: 'number', label: 'Max substrands for hover', min: 0, step: 50, integer: true,
+          help: 'Disable ordinary hover effects above this many unique pathways (default 200). Alt, Ctrl/⌘ and Shift hover still work. Raising this can slow the browser.',
           showIf: () => !!state.paths },
         { key: 'traceCounts', target: 'style', type: 'checkbox', label: 'Substrand counts', fit: true,
           help: 'Show each traced pathway or item count to the right of its rightmost node.',
@@ -1113,6 +1151,7 @@
     }
     const next = blankState();
     next.style = style;
+    next.presentation = Object.assign({}, state.presentation);
     next.mode = result.mode;
     next.matrices = result.matrices;
     next.dimnames = result.dimnames;
@@ -1185,18 +1224,18 @@
   }
 
   function targetOf(event) {
-    const el = event.target.closest && event.target.closest('[data-flow], [data-node]');
+    const el = event.target && event.target.closest && event.target.closest('[data-flow], [data-node]');
     if (!el || !layout) return null;
     if (el.dataset.flow !== undefined) return { kind: 'flow', index: Number(el.dataset.flow) };
     return { kind: 'node', index: Number(el.dataset.node) };
   }
 
-  // Pathways to trace for a hover target: every pathway through the strand or node; with Ctrl/⌘
+  // Pathways to trace for a hover target: every pathway through the strand or node; with Alt or Ctrl/⌘
   // the single pathway under the pointer; with Shift the single item (when items have ids). Null
   // when tracing does not apply.
   function tracedPaths(target, event) {
     if (!traces || !target || !event) return null;
-    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
       const p = plotPoint(event);
       const hit = target.kind === 'flow'
         ? P.pathAt(layout, traces.subs, target.index, p.X, p.Y)
@@ -1717,6 +1756,8 @@
   }
 
   function setHover(rawTarget, event) {
+    if (state.paths && state.paths.length > state.style.maxHoverSubstrands &&
+        !(event && state.style.tracePaths && (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey))) rawTarget = null;
     const target = rawTarget ? Object.assign({ paths: null, member: -1, single: false }, rawTarget, tracedPaths(rawTarget, event)) : null;
     const key = (t) => (t ? `${t.kind}:${t.index}:${t.paths ? t.paths.join(',') : ''}:${t.member}:${t.single}` : '');
     const same = key(target) === key(hover);
@@ -1727,10 +1768,10 @@
   }
 
   const plotPoint = (event) => {
-    const box = svg.getBoundingClientRect();
+    const p = new DOMPoint(event.clientX, event.clientY).matrixTransform(svg.getScreenCTM().inverse());
     return {
-      X: event.clientX - box.left - MARGIN,
-      Y: (frame.height - MARGIN) - (event.clientY - box.top)
+      X: p.x - MARGIN,
+      Y: frame.height - MARGIN - p.y
     };
   };
 
@@ -1753,7 +1794,7 @@
     if (target.kind === 'node') {
       const n = layout.nodes[target.index];
       drag = Object.assign(base, {
-        row: n.id, locX: state.loc[n.id].x, locY: state.loc[n.id].y, sx: layout.tf.sx, sy: layout.tf.sy,
+        row: n.id, locX: state.loc[n.id].x, locY: state.loc[n.id].y, sx: layout.tf.sx * displayScale, sy: layout.tf.sy * displayScale,
         layout0: layout, startX: state.loc.map((r) => r.x)
       });
     } else {
@@ -1792,7 +1833,7 @@
       return;
     }
     if (drag.others.length === 0) return;
-    const goal = drag.center - dy;
+    const goal = drag.center - dy / displayScale;
     const index = drag.others.filter((o) => o.center < goal).length;
     const order = drag.others.map((o) => o.key);
     order.splice(index, 0, drag.flowKey);
@@ -1889,13 +1930,16 @@
     if (!finished.moved) {
       const t = finished.target;
       const shown = hover && hover.kind === t.kind && hover.index === t.index ? hover : null;
+      // Preserve ordinary Alt-click pooling below the limit; dense plots only pool the single slice.
+      const pooled = finished.alt && !finished.ctrl && !finished.shift && traces && traces.paths.length <= state.style.maxHoverSubstrands
+        ? Object.assign({}, t, tracedPaths(t, {})) : shown;
       // Alt-click: a plain one on a node picks it (e.g. for merging); with pathway data, the
       // substrands shown join or leave the pool.
       const pickNode = finished.alt && t.kind === 'node' && !finished.ctrl && !finished.shift;
-      const poolIt = finished.alt && shown && shown.paths && traces;
+      const poolIt = finished.alt && pooled && pooled.paths && traces;
       if (pickNode || poolIt) {
         if (pickNode) togglePicked(layout.nodes[t.index].key);
-        if (poolIt) togglePool(shown);
+        if (poolIt) togglePool(pooled);
         const units = poolTarget() ? poolTarget().units : [];
         const nodes = pickedNodes();
         notify([
@@ -1924,7 +1968,7 @@
   function bindPlotEvents() {
     svg.addEventListener('pointerdown', startDrag);
     svg.addEventListener('pointermove', (event) => {
-      lastPointer = { clientX: event.clientX, clientY: event.clientY, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey };
+      lastPointer = { clientX: event.clientX, clientY: event.clientY, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey };
       if (drag) {
         moveDrag(event);
         return;
@@ -1933,7 +1977,9 @@
     });
     svg.addEventListener('pointerup', (event) => { if (drag) endDrag(event); });
     svg.addEventListener('pointercancel', (event) => { if (drag) endDrag(event); });
-    svg.addEventListener('pointerleave', () => { if (!drag) setHover(null); });
+    svg.addEventListener('pointerleave', () => {
+      if (!drag) { lastPointer = null; setHover(null); }
+    });
   }
 
   // ---------- inspector ----------
@@ -1984,9 +2030,10 @@
     }
     if (!sel) {
       host.innerHTML = '<h2>Inspector</h2><p class="muted">Hover a strand or node for details; click to select and edit it.</p>' +
+        (state.paths && state.paths.length > state.style.maxHoverSubstrands ? `<p class="muted small">Ordinary hover is paused for ${state.paths.length.toLocaleString()} pathways (limit ${state.style.maxHoverSubstrands}). Hold Alt or Ctrl/⌘ for one pathway, or Shift for one item. Change “Max substrands for hover” in Canvas & dragging to raise the limit.</p>` : '') +
         '<ul class="tips"><li>Drag a node to move it (Shift: vertical only, Alt: horizontal only).</li>' +
         '<li>Drag a strand up or down to reorder it in the stack at its nearer end.</li>' +
-        (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Ctrl/⌘ to trace the single pathway under the pointer, or Shift for the single item. Click to pin the traces and breakdown.</li>' : '') +
+        (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Alt or Ctrl/⌘ for the single pathway under the pointer, or Shift for the single item. Click to pin the traces and breakdown.</li>' : '') +
         '<li>Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo, F fit view, Esc deselect.</li></ul>';
       return;
     }
@@ -2100,6 +2147,8 @@
   function exportSvgText() {
     if (!layout) throw new L.SankeyError('Nothing to export: the current data does not produce a plot.');
     const clone = svg.cloneNode(true);
+    clone.style.removeProperty('width');
+    clone.style.removeProperty('height');
     // The app's CSS dims or hides parts of the plot around a focus; copy those computed styles
     // onto the export so it shows the focused view, traces and fill bars included.
     const copies = clone.querySelectorAll('*');
@@ -2517,6 +2566,10 @@
     $('#undo').addEventListener('click', () => restore(history.index - 1));
     $('#redo').addEventListener('click', () => restore(history.index + 1));
     $('#fit').addEventListener('click', () => update({ fit: true, commit: true }));
+    $('#fit-panel').addEventListener('click', () => changePresentation('panel'));
+    $('#fit-height').addEventListener('click', () => changePresentation('height'));
+    $('#zoom-in').addEventListener('click', () => changePresentation(null, 1.25));
+    $('#zoom-out').addEventListener('click', () => changePresentation(null, 0.8));
     $('#merge-nodes').addEventListener('click', askMergeName);
     $('#merge-cancel').addEventListener('click', () => $('#merge-dialog').close('cancel'));
     // Only the Merge button submits (Cancel and Esc just close), and submitting merges at once.
@@ -2542,11 +2595,11 @@
       });
     });
 
-    // Holding or releasing Ctrl/⌘ or Shift switches between all traced pathways, one pathway and one item.
+    // Modifier keys also start a single trace when ordinary hover is paused.
     const retrace = (e) => {
-      if (!hover || !lastPointer || drag || !['Control', 'Meta', 'Shift'].includes(e.key)) return;
-      lastPointer = Object.assign({}, lastPointer, { ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey });
-      setHover({ kind: hover.kind, index: hover.index }, lastPointer);
+      if (!lastPointer || drag || !['Alt', 'Control', 'Meta', 'Shift'].includes(e.key)) return;
+      lastPointer = Object.assign({}, lastPointer, { altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey });
+      setHover(targetOf({ target: document.elementFromPoint(lastPointer.clientX, lastPointer.clientY) }), lastPointer);
     };
     document.addEventListener('keyup', retrace);
     document.addEventListener('keydown', (e) => {
