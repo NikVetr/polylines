@@ -563,7 +563,7 @@ test('Alt-click adds and removes substrands from a pool traced and tabulated tog
   await expect(page.locator('#plot .trace')).toHaveCount(0);
 });
 
-test('Alt-clicked nodes in one column merge into one node, and undo splits them again', async ({ page }) => {
+test('Alt-clicked nodes in one column merge into a renamed node, laid out as if imported that way', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const altClick = async (label) => {
     const n = await nodeAt(page, label);
@@ -573,25 +573,44 @@ test('Alt-clicked nodes in one column merge into one node, and undo splits them 
     await page.keyboard.up('Alt');
   };
   const merge = page.locator('#merge-nodes');
-  await expect(merge).toBeDisabled();
+  await expect(merge).toBeHidden();
   await altClick('Surgery');
   await altClick('Stage I');
-  await expect(merge).toBeDisabled(); // different columns
+  await expect(merge).toBeHidden(); // different columns
   await altClick('Stage I');
   await altClick('Radiation');
-  await expect(merge).toBeEnabled();
+  await expect(merge).toBeVisible();
   await expect(merge).toHaveText('Merge 2 nodes');
   await merge.click();
+  await expect(page.locator('#merge-dialog')).toBeVisible();
+  await expect(page.locator('#merge-name')).toHaveValue('Surgery + Radiation');
+  await page.locator('#merge-name').fill('Local therapy');
+  await page.locator('#merge-name').press('Enter');
+  await expect(page.locator('#merge-dialog')).toBeHidden();
   const after = await page.evaluate(() => ({
     labels: window.SankeyApp.layout.nodes.filter((n) => n.set === 2).map((n) => n.label),
+    loc: JSON.parse(JSON.stringify(window.SankeyApp.state.loc)),
     total: window.SankeyApp.state.paths.reduce((t, p) => t + p.weight, 0)
   }));
-  expect(after.labels).toEqual(['Surgery + Radiation', 'Chemotherapy', 'Palliative']);
+  expect(after.labels).toEqual(['Local therapy', 'Chemotherapy', 'Palliative']);
   expect(after.total).toBe(560);
+  // Same node positions as importing the table with both treatments renamed to one from the start.
+  const fresh = await page.evaluate(() => {
+    const ex = window.SK.examples.find((e) => e.id === 'pathways');
+    const text = ex.files[ex.table].replace(/,(Surgery|Radiation),/g, ',Local therapy,');
+    const table = window.SK.transform.parseTable(text);
+    const app = window.SankeyApp;
+    app.applyImport(window.SK.transform.build(table, ex.importSpec, ex.importOptions), { labels: ex.labels, params: ex.params });
+    const loc = JSON.parse(JSON.stringify(app.state.loc));
+    app.update();
+    return { loc };
+  });
+  expect(after.loc).toEqual(fresh.loc);
+  await page.keyboard.press('Control+z');
   await expect(page.locator('#warnings')).toBeHidden();
-  await expect(merge).toBeDisabled();
+  await expect(merge).toBeHidden();
   // Pathways still trace through the merged node; those that differed only there are now one.
-  const node = await nodeAt(page, 'Surgery + Radiation');
+  const node = await nodeAt(page, 'Local therapy');
   await page.mouse.move(node.x, node.y);
   await expect(page.locator('#hover-info')).toContainText('5 pathways · 308 patients');
   await page.mouse.move(5, 5);
@@ -599,7 +618,7 @@ test('Alt-clicked nodes in one column merge into one node, and undo splits them 
   expect(await page.evaluate(() => window.SankeyApp.layout.nodes.filter((n) => n.set === 2).length)).toBe(4);
 });
 
-test('nodes of matrix data can be picked and merged too', async ({ page }) => {
+test('nodes of matrix data can be picked and merged too, and merging can be cancelled', async ({ page }) => {
   const ids = await page.evaluate(() => window.SankeyApp.layout.nodes.filter((n) => n.set === 1).slice(0, 2).map((n) => n.label));
   for (const label of ids) {
     const n = await nodeAt(page, label);
@@ -611,8 +630,11 @@ test('nodes of matrix data can be picked and merged too', async ({ page }) => {
   await page.mouse.move(5, 5);
   await expect(page.locator('#inspector-main h2').first()).toHaveText('Picked nodes');
   await page.locator('#merge-nodes').click();
-  const sources = await page.evaluate(() => window.SankeyApp.state.matrices[0].length);
-  expect(sources).toBe(3);
+  await page.locator('#merge-cancel').click();
+  expect(await page.evaluate(() => window.SankeyApp.state.matrices[0].length)).toBe(4);
+  await page.locator('#merge-nodes').click();
+  await page.locator('#merge-dialog button[value="ok"]').click();
+  expect(await page.evaluate(() => window.SankeyApp.state.matrices[0].length)).toBe(3);
   await expect(page.locator('#plot .node-label', { hasText: `${ids[0]} + ${ids[1]}` })).toHaveCount(1);
 });
 

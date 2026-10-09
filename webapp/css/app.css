@@ -44,6 +44,10 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .btn:disabled { opacity: 0.4; cursor: default; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover { background: #285f9e; }
+.btn.danger { background: #dc2626; border-color: #dc2626; color: #fff; font-weight: 600; }
+.btn.danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+.btn[hidden] { display: none; }
+#merge-dialog .row { grid-template-columns: 120px minmax(0, 1fr); min-width: 380px; }
 .actions select { padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 
 .menu { position: relative; }

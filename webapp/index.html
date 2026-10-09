@@ -18,7 +18,7 @@
       <button id="undo" class="btn" title="Undo (Ctrl/⌘+Z)" aria-label="Undo">↶</button>
       <button id="redo" class="btn" title="Redo (Ctrl/⌘+Shift+Z)" aria-label="Redo">↷</button>
       <button id="fit" class="btn" title="Fit the view to the content (F)">Fit view</button>
-      <button id="merge-nodes" class="btn" disabled title="Alt-click two or more nodes in one column, then merge them into one node">Merge nodes</button>
+      <button id="merge-nodes" class="btn danger" hidden>Merge nodes</button>
       <button class="btn" data-export="svg" title="Download the plot as shown, focused substrands included, as an SVG image">SVG</button>
       <button class="btn" data-export="png" title="Download the plot as shown, focused substrands included, as a PNG image (2×)">PNG</button>
       <div class="menu">
@@ -98,6 +98,18 @@
     </aside>
   </main>
 
+  <dialog id="merge-dialog">
+    <form id="merge-form" method="dialog">
+      <h2>Merge nodes</h2>
+      <p id="merge-members" class="muted"></p>
+      <div class="row"><label for="merge-name">New node name</label><input id="merge-name" type="text" required></div>
+      <div class="dialog-actions">
+        <button type="button" id="merge-cancel" class="btn">Cancel</button>
+        <button value="ok" class="btn danger">Merge</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="help-dialog">
     <form method="dialog">
       <h2>Polylines Sankey</h2>
@@ -131,7 +143,7 @@
           the single item when the table has item ids, under the pointer. Click to pin what is shown; Alt-click
           (⌥-click) to add or remove substrands from a pool that is traced and tabulated together.</li>
         <li>The SVG and PNG buttons export the plot as shown, including any focused substrands.</li>
-        <li>Alt-click nodes in one column to pick them, then <b>Merge nodes</b> collapses them into one (Ctrl/⌘+Z undoes).</li>
+        <li>Alt-click two or more nodes in one column to merge them with the <b>Merge</b> button that appears (Ctrl/⌘+Z undoes).</li>
         <li>Dragging a node into a neighbour stops at a wall, or pushes it along (Canvas &amp; dragging).</li>
         <li>Ctrl/⌘+Z and Ctrl/⌘+Shift+Z undo and redo; F fits the view; Esc clears the selection.</li>
       </ul>

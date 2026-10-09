@@ -994,6 +994,30 @@
     return Number((STACK_FILL * H * K * X_PAD / (W * tallest)).toPrecision(3));
   }
 
+  // Normalized y of each node of one column as auto-layout stacks them: centred, with even gaps,
+  // filling most of the height (pxPerUnit turns value x value scale into pixels).
+  function stackColumn(group, pxPerUnit, H) {
+    const heights = group.map((n) => n.height * state.valueScale * pxPerUnit);
+    const used = heights.reduce((a, b) => a + b, 0);
+    const gap = group.length > 1 ? Math.max((0.8 * H - used) / (group.length - 1), 4) : 0;
+    let top = H / 2 + (used + gap * (group.length - 1)) / 2;
+    return heights.map((h) => {
+      const Y = top - h / 2;
+      top -= h + gap;
+      return round(Y / H);
+    });
+  }
+
+  // Re-stack one column of an auto-generated layout exactly as auto-layout would have.
+  function restackColumn(set) {
+    const sets = nodeSets();
+    computeFrame();
+    const H = frame.height - 2 * MARGIN;
+    const tallest = Math.max(...sets.map((g) => g.reduce((s, n) => s + n.height * state.valueScale, 0)));
+    const ys = stackColumn(sets[set - 1], STACK_FILL * H / tallest, H);
+    state.loc.forEach((r) => { if (Number(r.set) === set) r.y = ys[Number(r.node) - 1]; });
+  }
+
   // Default loc: node sets in evenly spaced columns, stacked to fill most of the height.
   // labels: "above" or "inside" (label-derived node widths; see style.labelPosition), "beside"
   // (zero-width nodes) or "none".
@@ -1010,14 +1034,9 @@
     const rowsByGraphId = [];
     const loc = [];
     sets.forEach((group, s) => {
-      const heights = group.map((n) => n.height * state.valueScale * pxPerUnit);
-      const used = heights.reduce((a, b) => a + b, 0);
-      const gap = group.length > 1 ? Math.max((0.8 * H - used) / (group.length - 1), 4) : 0;
-      let top = H / 2 + (used + gap * (group.length - 1)) / 2;
+      const ys = stackColumn(group, pxPerUnit, H);
       group.forEach((n, k) => {
-        const Y = top - heights[k] / 2;
-        top -= heights[k] + gap;
-        const row = { set: s + 1, node: k + 1, x: round(s * spacing), y: round(Y / H) };
+        const row = { set: s + 1, node: k + 1, x: round(s * spacing), y: ys[k] };
         if (n.label && labels !== 'none') row.label = n.label;
         if (n.label && labels === 'beside') row.width = 0;
         if (n.id !== undefined) rowsByGraphId[n.id] = row;
@@ -1317,27 +1336,45 @@
     return ok ? nodes : null;
   }
 
+  // The Merge button shows only while a merge is possible.
   function refreshMerge() {
     const button = $('#merge-nodes');
     const nodes = mergeCandidates();
-    button.disabled = !nodes;
-    button.textContent = nodes ? `Merge ${nodes.length} nodes` : 'Merge nodes';
-    button.title = nodes
-      ? `Merge ${nodes.map(nodeDisplayName).join(', ')} into one node (Ctrl/⌘+Z undoes)`
-      : 'Alt-click two or more nodes in one column, then merge them into one node';
+    button.hidden = !nodes;
+    if (nodes) {
+      button.textContent = `Merge ${nodes.length} nodes`;
+      button.title = `Merge ${nodes.map(nodeDisplayName).join(', ')} into one node (Ctrl/⌘+Z undoes)`;
+    }
   }
 
-  function mergePicked() {
+  // Ask for the merged node's name, pre-filled with the members' names joined by " + ".
+  function askMergeName() {
     const nodes = mergeCandidates();
     if (!nodes) return;
-    const name = nodes.map(nodeDisplayName).join(' + ');
-    state = window.SK.edit.mergeNodes(state, nodes[0].set, nodes.map((n) => n.node - 1), name);
+    $('#merge-members').textContent = `Merging ${nodes.map(nodeDisplayName).join(', ')}.`;
+    $('#merge-name').value = nodes.map(nodeDisplayName).join(' + ');
+    $('#merge-dialog').showModal();
+    $('#merge-name').select();
+  }
+
+  // Merge the picked nodes as if the data had them as one node from the start: an auto-generated
+  // layout re-stacks their column as auto-layout would; a loaded loc keeps the merged node at the
+  // members' weighted mean height.
+  function mergePicked(name) {
+    const nodes = mergeCandidates();
+    if (!nodes) return;
+    const label = name.trim();
+    if (!label) throw new L.SankeyError('The merged node needs a name.');
+    const autoLoc = state.locName === 'auto-generated' || /^built from /.test(state.locName);
+    const set = nodes[0].set;
+    state = window.SK.edit.mergeNodes(state, set, nodes.map((n) => n.node - 1), label);
+    if (autoLoc) restackColumn(set);
     picked = new Set();
     pool = new Map();
     selection = null;
     hover = null;
     update({ fit: true, commit: true });
-    notify(`Merged into "${name}" (Ctrl/⌘+Z undoes).`);
+    notify(`Merged into "${label}" (Ctrl/⌘+Z undoes).`);
   }
 
   // Under every node, a small bar: the share of the node the selection fills in the node's color
@@ -1413,17 +1450,15 @@
     let html;
     const nodes = pickedNodes();
     const pickedLine = nodes.length
-      ? `<p>Picked nodes: <b>${nodes.map((n) => esc(nodeDisplayName(n))).join(', ')}</b>` +
-        `${mergeCandidates() ? ' · <b>Merge</b> them with the button at the top' : nodes.length > 1 ? ' (in different columns, so they cannot merge)' : ''}.</p>`
+      ? `<p>Picked nodes: <b>${nodes.map((n) => esc(nodeDisplayName(n))).join(', ')}</b>.</p>`
       : '';
     if (target.kind === 'pool') {
       return '<h2>Pool</h2><p class="muted small">Alt-click strands or nodes to add their substrands, or remove them when ' +
-        'they are all in already (with Ctrl/⌘ or Shift: one pathway or one item). Alt-clicked nodes are also picked for merging.</p>' +
+        'they are all in already (with Ctrl/⌘ or Shift: one pathway or one item).</p>' +
         pickedLine + focusHtml(target) + '<button class="mini-btn wide" id="pool-clear">Clear pool (Esc)</button>';
     }
     if (target.kind === 'nodes') {
-      return '<h2>Picked nodes</h2><p class="muted small">Alt-click nodes to pick or unpick them; nodes picked in one column ' +
-        'can be merged into one with the button at the top.</p>' + pickedLine +
+      return '<h2>Picked nodes</h2><p class="muted small">Alt-click nodes to pick or unpick them.</p>' + pickedLine +
         '<button class="mini-btn wide" id="pool-clear">Clear (Esc)</button>';
     }
     if (target.kind === 'flow') {
@@ -1705,7 +1740,7 @@
         const nodes = pickedNodes();
         notify([
           units.length ? `Pool: ${fmtValue(units.reduce((sum, u) => sum + unitWeight(u), 0))} ${unitOf(2)} in ${new Set(units.map((u) => u[0])).size} pathways.` : '',
-          nodes.length ? `Picked: ${nodes.map(nodeDisplayName).join(', ')}${mergeCandidates() ? ' (Merge at the top).' : '.'}` : '',
+          nodes.length ? `Picked: ${nodes.map(nodeDisplayName).join(', ')}.` : '',
           'Esc clears.'
         ].filter(Boolean).join(' '));
         applyHighlight();
@@ -2307,9 +2342,12 @@
     $('#undo').addEventListener('click', () => restore(history.index - 1));
     $('#redo').addEventListener('click', () => restore(history.index + 1));
     $('#fit').addEventListener('click', () => update({ fit: true, commit: true }));
-    $('#merge-nodes').addEventListener('click', () => {
+    $('#merge-nodes').addEventListener('click', askMergeName);
+    $('#merge-cancel').addEventListener('click', () => $('#merge-dialog').close('cancel'));
+    // Only the Merge button submits (Cancel and Esc just close), and submitting merges at once.
+    $('#merge-form').addEventListener('submit', () => {
       try {
-        mergePicked();
+        mergePicked($('#merge-name').value);
       } catch (err) {
         showError(err.message);
       }
