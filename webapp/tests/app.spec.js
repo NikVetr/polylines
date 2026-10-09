@@ -686,34 +686,58 @@ test('hovering draws a bar under every node showing the share the selection fill
   expect(exported).not.toContain('layer-fills');
 });
 
-test('node share bars shrink with narrower nodes while keeping their text size and accurate proportions', async ({ page }) => {
+test('node share bars shrink text to reserve a visible bar inside narrow nodes', async ({ page }) => {
   await page.evaluate(() => {
     const app = window.SankeyApp;
     const scale = app.layout.tf.sx;
     app.state.loc[0].width = 120 / scale;
     app.state.loc[1].width = 200 / scale;
     app.state.loc[2].width = 90 / scale;
+    app.state.loc[3].width = 60 / scale;
+    app.state.loc[4].width = 30 / scale;
     app.update();
   });
   const p = await ribbonCenter(page, 0);
   await page.mouse.move(p.x, p.y);
-  const sizes = await page.locator('#plot .node-fill').evaluateAll((els) => els.slice(0, 3).map((el) => {
+  const sizes = await page.locator('#plot .node-fill').evaluateAll((els) => els.slice(0, 5).map((el) => {
     const box = el.getBBox();
     const n = window.SankeyApp.layout.nodes[Number(el.dataset.fill)];
     const background = el.querySelector('g rect');
     const solid = el.querySelector('.node-fill-solid');
     return { nodeWidth: n.widthPx, barWidth: Number(background.getAttribute('width')), wholeWidth: box.width,
-      textSizes: [...el.querySelectorAll('text')].map((t) => t.getAttribute('font-size')),
+      textSizes: [...el.querySelectorAll('text')].map((t) => Number(t.getAttribute('font-size'))),
       ratio: solid ? Number(solid.getAttribute('width')) / Number(background.getAttribute('width')) : 0 };
   }));
-  expect(sizes.map((s) => s.barWidth)).toEqual([40, 60, 10]);
+  expect(sizes.map((s) => s.barWidth)).toEqual([40, 60, 24, 20, 10]);
   expect(sizes.every((s) => s.wholeWidth <= s.nodeWidth)).toBe(true);
-  expect(sizes.every((s) => s.textSizes.every((size) => size === '10.5'))).toBe(true);
+  [10.5, 10.5, 8.6625, 5.25, 2.625].forEach((font, i) => {
+    sizes[i].textSizes.forEach(size => expect(size).toBeCloseTo(font, 4));
+  });
   const fraction = await page.evaluate(() => {
     const f = window.SankeyApp.layout.flows[0];
     return f.value / window.SankeyApp.layout.nodes[f.from].outValue;
   });
   expect(sizes[0].ratio).toBeCloseTo(fraction, 2);
+});
+
+test('node share bars sit just beneath the local body instead of distant ribbon faces', async ({ page }) => {
+  await page.evaluate(() => {
+    const app = window.SankeyApp, tf = app.layout.tf;
+    const row = app.state.loc.find(n => n.set === 2 && n.node === 1);
+    row.width = 300 / tf.sx;
+    row.height = 10 / tf.sy;
+    app.update();
+  });
+  const p = await ribbonCenter(page, 0);
+  await page.mouse.move(p.x, p.y);
+  const gap = await page.evaluate(() => {
+    const app = window.SankeyApp, n = app.layout.nodes.find(n => n.set === 2 && n.node === 1);
+    const shape = SK.shapes.interiorTrunk(app.layout, n);
+    const bodyBottom = Number(document.querySelector('#plot').getAttribute('height')) - 18 - SK.layout.pointAtX(shape.lower, n.X)[1];
+    const rect = document.querySelector(`[data-fill="${n.id}"] g rect`);
+    return Number(rect.getAttribute('y')) - bodyBottom;
+  });
+  expect(gap).toBeCloseTo(7, 1);
 });
 
 test('hovered substrands show endpoint counts and their share of each edge along its direction', async ({ page }) => {

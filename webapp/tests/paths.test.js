@@ -266,6 +266,40 @@ test('reordered pathways tile the node body and resolve at its top and bottom', 
   });
 });
 
+test('node traces follow their exact weighted slices through incoming and outgoing merge bands', () => {
+  const table = T.parseTable('id,a,b,c,n\nP1,A,X,P,4\nP2,A,X,P,6\nP3,A,Y,P,5\nP4,B,X,Q,7\nP5,A,X,Q,3\nP6,B,X,P,2\n');
+  const r = T.build(table, { format: 'wide', id: 'id', columns: ['a', 'b', 'c'], weight: 'n' });
+  for (const route of ['bezier', 'boundary']) for (const dir of [1, -1]) {
+    const loc = [0, 1, 2].flatMap(s => [0, 1].map(i => ({ set: s + 1, node: i + 1,
+      x: dir * s, y: 0.8 - i * 0.6, width: 0.35, height: 0.4, label: 'Node' })));
+    const layout = SK.layout.computeLayout({ mode: 'layered', matrices: r.matrices, loc,
+      params: { route, n: 120, merge_frac: 0.2 }, valueScale: 0.004 },
+    { xlim: [-2.2, 2.2], ylim: [0, 1], width: 800, height: 500 });
+    const subs = SK.paths.substrands(layout, r.paths);
+    r.paths.forEach((p, pi) => {
+      for (const member of [-1, ...p.members.map((_, mi) => mi)]) {
+        const trace = SK.paths.tracePolygon(layout, subs, pi, { member });
+        trace.flows.forEach((f, stage) => {
+          const part = subs.byFlow[f.index].find(e => e.path === pi);
+          const cuts = member < 0 ? [0, 1] : subs.memberCuts[pi].slice(member, member + 2);
+          const fractions = cuts.map(c => part.a + (part.b - part.a) * c);
+          [trace.lower, trace.upper].forEach((edge, j) => {
+            const fraction = fractions[j];
+            const expected = f.lower.map((lo, i) => [lo[0] * (1 - fraction) + f.upper[i][0] * fraction,
+              lo[1] * (1 - fraction) + f.upper[i][1] * fraction]);
+            const m = Math.min(layout.mergeLength, Math.abs(f.endX - f.startX) / 4);
+            for (const t of [0, 0.1, 0.5, 0.9, 1]) {
+              const x = stage === 0 ? f.endX - dir * m * t : f.startX + dir * m * t;
+              assert.ok(Math.abs(SK.layout.pointAtX(edge, x)[1] - SK.layout.pointAtX(expected, x)[1]) < 1e-8,
+                `${route}, direction ${dir}, path ${pi}, member ${member}: merge slice must match its ribbon`);
+            }
+          });
+        });
+      }
+    });
+  }
+});
+
 test('body curves reserve smooth shoulders and endpoint fills share their outline edges', () => {
   const n = { X: 0, Y: 0, widthPx: 40, labelWidthPx: 40, bodyHeightPx: 80 };
   for (const dir of [-1, 1]) {

@@ -268,8 +268,8 @@
     const m = measure(data);
     lay.nodes.forEach((n) => {
       const bar = fillBarBox(lay, n);
-      out.push([bar.x0 - FILL_BAR.labelGap - FILL_BAR.labelWidth, bar.Y - FILL_BAR.height],
-        [bar.x0 + bar.width + FILL_BAR.labelGap + FILL_BAR.labelWidth, bar.Y]);
+      out.push([bar.x0 - bar.labelGap - bar.labelWidth, bar.Y - FILL_BAR.height],
+        [bar.x0 + bar.width + bar.labelGap + bar.labelWidth, bar.Y]);
       const text = n.hasLabel ? n.label : (data.style.showIndices ? String(n.node) : '');
       if (!data.style.labels || !text) return;
       const size = m(text, n.cex, n.font);
@@ -1563,16 +1563,28 @@
 
   // Under every node, a small bar: the share of the node the selection fills in the node's color
   // (none for nodes it misses), the rest in a faded node color, with both percentages beside it.
-  const FILL_BAR = { width: 60, height: 8, gap: 7, font: 10.5, labelWidth: 36, labelGap: 4 };
-  function fillBarBox(lay, n) {
-    const width = n.widthPx > 0 ? Math.max(2, Math.min(FILL_BAR.width, n.widthPx - 2 * (FILL_BAR.labelWidth + FILL_BAR.labelGap))) : FILL_BAR.width;
-    const shape = S.nodeRole(n) === 'interior' ? S.interiorTrunk(lay, n) : null;
-    let bottom = shape ? L.pointAtX(shape.lower, n.X)[1] : n.Y - Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2;
-    const half = width / 2 + FILL_BAR.labelGap + FILL_BAR.labelWidth;
-    n.inFlows.concat(n.outFlows).forEach((k) => {
-      S.sliceByX(lay.flows[k].lower, n.X - half, n.X + half).forEach((p) => { bottom = Math.min(bottom, p[1]); });
+  const FILL_BAR = { width: 60, minWidth: 24, height: 8, gap: 7, font: 10.5, labelWidth: 36, labelGap: 4 };
+  function fillBarBox(lay, n, labels) {
+    const labelSpace = 2 * (FILL_BAR.labelWidth + FILL_BAR.labelGap);
+    const width = n.widthPx > 0 ? Math.min(FILL_BAR.width,
+      Math.max(Math.min(FILL_BAR.minWidth, n.widthPx / 3), n.widthPx - labelSpace)) : FILL_BAR.width;
+    const scale = n.widthPx > 0 ? Math.min(1, (n.widthPx - width) / labelSpace) : 1;
+    const font = FILL_BAR.font * scale, labelWidth = FILL_BAR.labelWidth * scale, labelGap = FILL_BAR.labelGap * scale;
+    const role = S.nodeRole(n);
+    const shape = role === 'interior' ? S.interiorTrunk(lay, n) : S.endpointBody(lay, n, role === 'source' ? 'start' : 'end', 0);
+    const lower = shape && (shape.lower || shape.lowerBorder);
+    let bottom = lower ? L.pointAtX(lower, n.X)[1] : n.Y - Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2;
+    const textMeasure = R.makeMeasure({ fontSize: font });
+    const widths = labels ? labels.map(text => textMeasure(text, 1, 1).width) : [labelWidth, labelWidth];
+    const x0 = n.X - width / 2 - labelGap - widths[0], x1 = n.X + width / 2 + labelGap + widths[1];
+    // Only clear the drawn body beneath this widget, rather than remote ribbon ends.
+    if (lower) S.sliceByX(lower, x0, x1).forEach(p => { bottom = Math.min(bottom, p[1]); });
+    else n.inFlows.concat(n.outFlows).forEach(k => {
+      const f = lay.flows[k];
+      if (Math.max(f.startX, f.endX) < x0 || Math.min(f.startX, f.endX) > x1) return;
+      S.sliceByX(f.lower, x0, x1).forEach(p => { bottom = Math.min(bottom, p[1]); });
     });
-    return { width, x0: n.X - width / 2, Y: bottom - FILL_BAR.gap };
+    return { width, font, labelWidth, labelGap, x0: n.X - width / 2, Y: bottom - FILL_BAR.gap };
   }
   function fillMarkup(target) {
     const h = layout.view.height;
@@ -1588,8 +1600,9 @@
       // Both shares get one decimal when the smaller one is under 10%, so they add up to 100%.
       const digits = t > 0 && t < 1 && Math.min(t, 1 - t) < 0.0995 ? 1 : 0;
       const share = (x) => `${(100 * x).toFixed(digits)}%`;
-      const { height, font, labelGap } = FILL_BAR;
-      const bar = fillBarBox(layout, n);
+      const { height } = FILL_BAR;
+      const bar = fillBarBox(layout, n, [share(t), share(1 - t)]);
+      const { font, labelGap } = bar;
       const width = f2(bar.width);
       const x0 = MARGIN + bar.x0;
       const y0 = frame.margin.top + h - bar.Y;

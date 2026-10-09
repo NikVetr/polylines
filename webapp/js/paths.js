@@ -184,10 +184,21 @@
   function packedBridge(layout, subs, n, pi, member, a, b, edge) {
     const shape = nodeShape(layout, n);
     if (!shape || Math.abs(b[0] - a[0]) < 1e-9) return nodeBridge(layout, n, a, b);
+    // Keep the real slice through each merge band: the bundle envelope can cut across
+    // other strands, producing a notch where the trace joins its ribbon.
+    let incoming = [a], outgoing = [b];
+    if (n.widthPx > 0) {
+      const fs = subs.pathFlows[pi].map(k => layout.flows[k]);
+      const f = fs.find(f => f.to === n.id), g = fs.find(f => f.from === n.id);
+      incoming = S.sliceByX(lerpEdge(f, sliceOf(subs, f.index, pi, member)[edge]), a[0], f.endX);
+      outgoing = S.sliceByX(lerpEdge(g, sliceOf(subs, g.index, pi, member)[edge]), g.startX, b[0]);
+      a = last(incoming);
+      b = first(outgoing);
+    }
     const slot = nodeSlots(layout, subs, n).get(pi);
     const cuts = member >= 0 && subs.memberCuts[pi] ? subs.memberCuts[pi].slice(member, member + 2) : [0, 1];
     const fraction = slot.a + (slot.b - slot.a) * cuts[edge];
-    const half = Math.min(n.widthPx / 2, Math.abs(b[0] - a[0]) / 4);
+    const half = Math.min(n.widthPx / 4, Math.abs(b[0] - a[0]) / 4);
     const dir = Math.sign(b[0] - a[0]);
     const at = (x) => {
       const lo = SK.layout.pointAtX(shape.lower, x)[1];
@@ -196,7 +207,8 @@
     };
     const left = at(n.X - dir * half);
     const right = at(n.X + dir * half);
-    return nodeBridge(layout, n, a, left).concat(nodeBridge(layout, n, left, right).slice(1), nodeBridge(layout, n, right, b).slice(1));
+    return incoming.slice(0, -1).concat(nodeBridge(layout, n, a, left),
+      nodeBridge(layout, n, left, right).slice(1), nodeBridge(layout, n, right, b).slice(1), outgoing.slice(1));
   }
 
   // Central label positions along a substrand, with local tangents and widths.
