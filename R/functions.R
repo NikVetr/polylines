@@ -1735,6 +1735,22 @@ bezier_sankey_geometry <- function(sankey, n, curvature, xyr) {
     ribbons[[k]] <- edges_to_ribbon(edges[[k]])
   }
 
+  # Normal offsets wider than a bend's radius fold back into the node. Keep
+  # neighboring joins consistent by using vertical Bezier boundaries in this stage.
+  folded <- any(vapply(seq_along(edges), function(k) {
+    direction <- sign(flows$end_x[k] - flows$start_x[k])
+    any(direction * diff(edges[[k]]$left[, "x"]) < -1e-7) ||
+      any(direction * diff(edges[[k]]$right[, "x"]) < -1e-7)
+  }, logical(1)))
+  if(folded) {
+    for(k in seq_along(edges)) {
+      direction <- sign(flows$end_x[k] - flows$start_x[k])
+      offset <- cbind(0, rep(direction * flows$width[k] / (2 * xyr), n))
+      edges[[k]] <- list(left = centerlines[[k]] + offset, right = centerlines[[k]] - offset)
+      ribbons[[k]] <- edges_to_ribbon(edges[[k]])
+    }
+  }
+
   names(ribbons) <- sprintf("from_%s_to_%s", flows$from, flows$to)
   list(ribbons = ribbons, centerlines = centerlines, edges = edges)
 }
@@ -2701,6 +2717,12 @@ validate_node_border_args <- function(node_border, node_border_lwd,
   TRUE
 }
 
+draw_sankey_polygon <- function(coords, col) {
+  parts <- attr(coords, "fill_polygons")
+  if(is.null(parts)) parts <- list(coords)
+  for(part in parts) polygon(part[, "x"], part[, "y"], col = col, border = NA, xpd = NA)
+}
+
 draw_x_gradient_polygon <- function(coords, low_col, high_col, steps = 24,
                                     flatten = FALSE, bg = par("bg")) {
   if(is.null(coords) || nrow(coords) < 4) {
@@ -2713,7 +2735,7 @@ draw_x_gradient_polygon <- function(coords, low_col, high_col, steps = 24,
     if(flatten) {
       col <- flatten_alpha_color(col, bg = bg)
     }
-    polygon(coords[, "x"], coords[, "y"], col = col, border = NA, xpd = NA)
+    draw_sankey_polygon(coords, col)
     return(invisible(NULL))
   }
 
@@ -2728,7 +2750,7 @@ draw_x_gradient_polygon <- function(coords, low_col, high_col, steps = 24,
     if(flatten) {
       col <- flatten_alpha_color(col, bg = bg)
     }
-    polygon(slice[, "x"], slice[, "y"], col = col, border = NA, xpd = NA)
+    draw_sankey_polygon(slice, col)
   }
   invisible(NULL)
 }
@@ -2761,7 +2783,7 @@ draw_x_color_stops_polygon <- function(coords, x_stops, cols, steps = 24,
     if(flatten) {
       col <- flatten_alpha_color(col, bg = bg)
     }
-    polygon(coords[, "x"], coords[, "y"], col = col, border = NA, xpd = NA)
+    draw_sankey_polygon(coords, col)
     return(invisible(NULL))
   }
 
@@ -3200,6 +3222,13 @@ node_trunk_polygon <- function(sankey, flow_inds, side, merge_length) {
     lower_seg[1, , drop = FALSE]
   )
   colnames(coords) <- c("x", "y")
+  # The envelope supplies gradient bounds; only the individual ribbon bands are filled.
+  face <- if(side == "start") sankey$flows$start_x[flow_inds[1]] else sankey$flows$end_x[flow_inds[1]]
+  direction <- sign(sankey$flows$end_x[flow_inds[1]] - sankey$flows$start_x[flow_inds[1]])
+  target <- face + if(side == "start") direction * merge_length else -direction * merge_length
+  attr(coords, "fill_polygons") <- Filter(Negate(is.null), lapply(flow_inds, function(k) {
+    clip_polygon_x(sankey$ribbons[[k]], face, target)
+  }))
   coords
 }
 
@@ -3468,7 +3497,7 @@ draw_endpoint_node_bodies <- function(sankey, flow_cols, merge_cols,
         if(flatten_trunks) {
           col <- flatten_alpha_color(col, bg = trunk_bg)
         }
-        polygon(coords[, "x"], coords[, "y"], col = col, border = NA, xpd = NA)
+        draw_sankey_polygon(coords, col)
       }
     }
   }
@@ -3630,7 +3659,7 @@ draw_node_trunk_fills <- function(sankey, flow_cols, merge_length,
         if(flatten_trunks) {
           col <- flatten_alpha_color(col, bg = trunk_bg)
         }
-        polygon(coords[, "x"], coords[, "y"], col = col, border = NA, xpd = NA)
+        draw_sankey_polygon(coords, col)
       }
     }
   }
@@ -3695,6 +3724,10 @@ interior_node_trunk_polygon <- function(prev_segment, next_segment, node, merge_
     prev_lower_seg[1, , drop = FALSE]
   )
   colnames(coords) <- c("x", "y")
+  body <- rbind(lower_bridge, upper_bridge[nrow(upper_bridge):1, , drop = FALSE], lower_bridge[1, ])
+  attr(coords, "fill_polygons") <- c(list(body),
+    attr(node_trunk_polygon(prev_segment, prev_inds, "end", merge_length), "fill_polygons"),
+    attr(node_trunk_polygon(next_segment, next_inds, "start", merge_length), "fill_polygons"))
   coords
 }
 
@@ -3776,7 +3809,7 @@ draw_multi_stage_interior_trunks <- function(sankey, node_cols, merge_cols,
         if(flatten_trunks) {
           col <- flatten_alpha_color(col, bg = trunk_bg)
         }
-        polygon(coords[, "x"], coords[, "y"], col = col, border = NA, xpd = NA)
+        draw_sankey_polygon(coords, col)
       }
     }
   }
@@ -3897,6 +3930,8 @@ clip_polygon_x <- function(coords, x0, x1) {
   if(nrow(out) < 4) {
     return(NULL)
   }
+  parts <- attr(coords, "fill_polygons")
+  if(!is.null(parts)) attr(out, "fill_polygons") <- Filter(Negate(is.null), lapply(parts, clip_polygon_x, x0 = x0, x1 = x1))
   out
 }
 
@@ -3963,7 +3998,7 @@ draw_graph_interior_trunks <- function(sankey, flow_cols, merge_cols,
     if(flatten_trunks) {
       col <- flatten_alpha_color(col, bg = trunk_bg)
     }
-    polygon(coords[, "x"], coords[, "y"], col = col, border = NA, xpd = NA)
+    draw_sankey_polygon(coords, col)
   }
 
   invisible(NULL)

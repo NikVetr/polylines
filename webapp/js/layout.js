@@ -726,6 +726,15 @@
           boundaryGeometry(flows, inds, sps, p.n);
         } else {
           inds.forEach((k) => bezierGeometry(flows[k], p.n, p.curvature));
+          // A normal offset wider than the bend radius folds back into the node. Use
+          // vertical Bezier boundaries for the whole stage so neighboring joins agree.
+          const folded = inds.some(k => [flows[k].upper, flows[k].lower].some(edge =>
+            edge.slice(1).some((point, i) => flows[k].dir * (point[0] - edge[i][0]) < -PX_TOL)));
+          if (folded) inds.forEach(k => {
+            const f = flows[k];
+            f.upper = f.centerline.map(([x, y]) => [x, y + f.w / 2]);
+            f.lower = f.centerline.map(([x, y]) => [x, y - f.w / 2]);
+          });
         }
       });
     };

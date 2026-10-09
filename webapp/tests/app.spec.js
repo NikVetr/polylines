@@ -904,8 +904,8 @@ test('thin plot outlines default on, hide during focus and persist in exports an
   await expect(outlines.first()).toBeVisible();
   await expect(outlines.locator('path').first()).toHaveAttribute('stroke', '#000000');
   await page.locator('#ctl-substrands').check();
-  const widths = await page.locator('#plot .plot-outline, #plot .substrand-lines').evaluateAll((els) => [...new Set(els.map((el) => el.getAttribute('stroke-width')))]);
-  expect(widths).toEqual(['0.6']);
+  const widths = await page.locator('#plot .plot-outline, #plot .substrand-lines').evaluateAll((els) => [...new Set(els.map(el => Number(el.getAttribute('stroke-width')) / (el.hasAttribute('mask') ? 2 : 1)))]);
+  expect(widths).toEqual([0.6]);
   expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).toContain('class="layer-outline"');
   const n = await nodeAt(page, 'Remission');
   await page.mouse.move(n.x, n.y);
@@ -962,6 +962,61 @@ test('a covered strand outline stays hidden beneath an opaque node polygon', asy
   expect(pixels.off).toEqual([239, 142, 145, 255]);
   expect(pixels.on).toEqual(pixels.off);
 });
+
+for (const interior of [false, true]) {
+  test(`${interior ? 'interior' : 'source'} merge joins keep tapered gaps and borders on the filled curves`, async ({ page }) => {
+    await page.mouse.move(5, 5);
+    const pixels = await page.evaluate(async interior => {
+      const app = window.SankeyApp;
+      const loc = [{ set: 1, node: 1, x: 0, y: 0.5, width: 0.4, label: 'Sedentary' },
+        { set: 2, node: 1, x: 1, y: 1.5, width: 0.1 }, { set: 2, node: 2, x: 1, y: -0.5, width: 0.1 }];
+      if (interior) {
+        loc.forEach(n => { n.set++; n.x++; });
+        loc[0].label = 'Post-Suspension';
+        loc.unshift({ set: 1, node: 1, x: 0, y: 0.5, width: 0.1 });
+      }
+      Object.assign(app.state, { mode: 'layered', matrices: interior ? [[[0.65]], [[0.5, 0.15]]] : [[[0.5, 0.15]]],
+        loc, paths: null, sourceTable: null, valueScale: 1, dimnames: null,
+        view: { xlim: [-0.3, interior ? 2.3 : 1.3], ylim: [-0.8, 1.8] } });
+      Object.assign(app.state.params, { adjust_loc: false, merge_frac: 0.2 });
+      Object.assign(app.state.style, { opacity: 0.8, colorBy: 'single', singleColor: '#EF8E91', gradient: false,
+        nodeBorder: 'none', labels: true, labelPosition: 'above', flatten: true, canvasWidth: 900, canvasHeight: 900 });
+      app.update();
+      const n = app.layout.nodes[interior ? 1 : 0];
+      const fs = n.outFlows.map(k => app.layout.flows[k]).sort((a, b) => a.startOffset - b.startOffset);
+      const X = fs[0].startX + app.layout.mergeLength / 2;
+      const at = (points, x) => window.SK.layout.pointAtX(points, x)[1];
+      const gap = [X, (at(fs[0].upper, X) + at(fs[1].lower, X)) / 2];
+      const edge = [X, at(fs[1].upper, X)];
+      const toScreen = ([x, y]) => [Math.round(18 + x), Math.round(882 - y)];
+      const sample = async thinOutline => {
+        app.state.style.thinOutline = thinOutline;
+        app.update();
+        const url = URL.createObjectURL(new Blob([app.exportSvgText()], { type: 'image/svg+xml' }));
+        const image = new Image();
+        await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url; });
+        const canvas = document.createElement('canvas');
+        canvas.width = image.width; canvas.height = image.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(image, 0, 0);
+        URL.revokeObjectURL(url);
+        const pixel = p => [...ctx.getImageData(...toScreen(p), 1, 1).data];
+        const [x, y] = toScreen(edge);
+        return { gap: pixel(gap), inside: pixel([edge[0], edge[1] - 3]), outside: pixel([edge[0], edge[1] + 3]),
+          border: [...ctx.getImageData(x - 1, y - 1, 3, 3).data] };
+      };
+      return { on: await sample(true), off: await sample(false), gapWidth: at(fs[1].lower, X) - at(fs[0].upper, X),
+        folds: fs.some(f => [f.upper, f.lower].some(points => points.slice(1).some((p, i) => p[0] < points[i][0]))) };
+    }, interior);
+    expect(pixels.folds).toBe(false);
+    expect(pixels.gapWidth).toBeGreaterThan(3);
+    expect(pixels.on.gap).toEqual([255, 255, 255, 255]);
+    expect(pixels.off.gap).toEqual(pixels.on.gap);
+    expect(pixels.on.outside).toEqual([255, 255, 255, 255]);
+    expect(pixels.on.inside).toEqual([242, 165, 167, 255]);
+    expect(pixels.on.border.some((v, i) => i % 4 !== 3 && v < pixels.off.border[i] - 10)).toBe(true);
+  });
+}
 
 test('dimmed nodes stay opaque so their necks match their bodies', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));

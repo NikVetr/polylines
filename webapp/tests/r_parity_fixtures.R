@@ -132,6 +132,8 @@ bezier_order_thic[2, 4] <- 0.02859826
 bezier_order_thic[3, 4] <- 0.03437776
 
 cases <- list(
+  run_case("wide_steep_bezier", matrix(c(0.5, 0.15), nrow = 1),
+           rbind(c(1, 1, 0, 0.5, 0.4), c(2, 1, 1, 1.5, 0.1), c(2, 2, 1, -0.5, 0.1)), list(n = 40)),
   run_case("multi_bezier", multi_thic, multi_loc, list(n = 30, merge_frac = 0.075)),
   run_case("multi_stage_routes", list(small_thic, diag(colSums(small_thic))),
            rbind(small_loc, cbind(3, 1:2, 3, c(0.68, 0.30))),

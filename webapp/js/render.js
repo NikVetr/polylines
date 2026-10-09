@@ -218,13 +218,34 @@
     const flat = (c) => (style.flatten ? C.flatten(c, colors.flatBg) : c);
     const borderOn = style.border && style.border !== 'none';
     const borderPaint = borderOn ? C.paint(C.parse(style.border)) : null;
-    const strokeAttrs = borderOn
-      ? `fill="none" stroke="${borderPaint.color}" stroke-opacity="${borderPaint.opacity}" stroke-width="${style.borderWidth}" stroke-linejoin="round"`
+    const strokeAttrs = (outside = false) => borderOn
+      ? `fill="none" stroke="${borderPaint.color}" stroke-opacity="${borderPaint.opacity}" stroke-width="${style.borderWidth * (outside ? 2 : 1)}" stroke-linejoin="round"`
       : '';
-    const outline = (edges, layer) => {
+    // Consistent winding makes overlapping band subpaths a union, rather than holes.
+    const compoundD = polygons => polygons.map(polygon => {
+      const area = polygon.reduce((sum, p, i) => {
+        const q = polygon[(i + 1) % polygon.length];
+        return sum + p[0] * q[1] - q[0] * p[1];
+      }, 0);
+      return pathD(area < 0 ? polygon.slice().reverse() : polygon, map, true);
+    }).join('');
+    const edgeMask = (n, polygons) => {
+      const id = `node-edge-mask${n.id}`;
+      const points = polygons.flat().map(([x, y]) => [map.x(x), map.y(y)]);
+      const pad = Math.max(THIN_LINE_WIDTH, style.borderWidth) + 1;
+      const x = Math.min(...points.map(p => p[0])) - pad, y = Math.min(...points.map(p => p[1])) - pad;
+      const width = Math.max(...points.map(p => p[0])) - x + pad, height = Math.max(...points.map(p => p[1])) - y + pad;
+      // Bound each mask to its node, avoiding a canvas-sized bitmap for every outline.
+      defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" x="${fmt(x)}" y="${fmt(y)}" width="${fmt(width)}" height="${fmt(height)}">` +
+        `<rect width="${frame.width}" height="${frame.height}" fill="white"/><path d="${compoundD(polygons)}" fill="black"/></mask>`);
+      return `mask="url(#${id})"`;
+    };
+    const outline = (edges, layer, mask = '') => {
       if (!style.thinOutline) return;
+      // The union mask hides the inward half, keeping the visible outline 0.6 px wide.
+      const width = mask ? 2 * THIN_LINE_WIDTH : THIN_LINE_WIDTH;
       layer.push(`<g class="layer-outline"><path class="plot-outline" d="${edges.map((edge) => pathD(edge, map, false)).join('')}" ` +
-        `fill="none" stroke="#000000" stroke-width="${THIN_LINE_WIDTH}" stroke-linejoin="round"/></g>`);
+        `fill="none" stroke="#000000" stroke-width="${width}" stroke-linejoin="round" ${mask}/></g>`);
     };
 
     // Strands. With flattened (opaque) trunks the full ribbon sits underneath; otherwise ribbons
@@ -242,13 +263,14 @@
       }
       ribbons.push(`<path class="ribbon" data-flow="${f.index}" d="${pathD(polygon, map, true)}" ${fill}/>`);
       // Paint edges with their fill so later strands and nodes cover both consistently.
-      outline(S.edgeSegments(f, cuts), ribbons);
+      const edges = S.edgeSegments(f, style.flatten ? null : cuts);
+      outline(edges, ribbons);
       const hitLine = cuts ? S.sliceByX(f.centerline, cuts[0], cuts[1]) : f.centerline;
       hits.push(`<path class="hit" data-flow="${f.index}" d="${pathD(hitLine, map, false)}" ` +
         `stroke-width="${fmt(Math.max(f.w, 7))}"/>`);
       if (borderOn) {
-        S.edgeSegments(f, cuts).forEach((edge) => {
-          ribbons.push(`<path class="strand-border" data-flow="${f.index}" d="${pathD(edge, map, false)}" ${strokeAttrs}/>`);
+        edges.forEach((edge) => {
+          ribbons.push(`<path class="strand-border" data-flow="${f.index}" d="${pathD(edge, map, false)}" ${strokeAttrs()}/>`);
         });
       }
       const polylines = extras && extras.substrandLines && extras.substrandLines[f.index];
@@ -259,13 +281,13 @@
       }
     });
 
-    const nodeFill = (n, id, polygon, x0, x1, stops) => {
+    const nodeFill = (n, id, polygons, x0, x1, stops) => {
       const gid = `gn${n.id}_${id}`;
       defs.push(linearGradient(gid, map.x(x0), map.x(x1), stops.map(([t, c]) => [t, flat(c)])));
-      trunks.push(`<path class="trunk" data-node="${n.id}" d="${pathD(polygon, map, true)}" fill="url(#${gid})"/>`);
+      trunks.push(`<path class="trunk" data-node="${n.id}" d="${compoundD(polygons)}" fill="url(#${gid})"/>`);
     };
-    const solidNode = (n, polygon, c) => {
-      trunks.push(`<path class="trunk" data-node="${n.id}" d="${pathD(polygon, map, true)}" ${fillAttrs(flat(c))}/>`);
+    const solidNode = (n, polygons, c) => {
+      trunks.push(`<path class="trunk" data-node="${n.id}" d="${compoundD(polygons)}" ${fillAttrs(flat(c))}/>`);
     };
     // Node borders sit just inside the node: inward = +1 for bottom edges, -1 for top edges.
     const fadeStroke = (n, id, edge, c, alpha, inward) => {
@@ -301,14 +323,15 @@
         const labelBody = labelFades(n, style) && n.widthPx > 0 && span > 1e-9;
         if ((style.gradient || labelBody) && span > 1e-9) {
           const stops = nodeStops(layout, n, colors, style).map(([x, c]) => [(x - shape.x0) / span, c]);
-          nodeFill(n, 'i', shape.polygon, shape.x0, shape.x1, stops.sort((a, b) => a[0] - b[0]));
+          nodeFill(n, 'i', shape.polygons, shape.x0, shape.x1, stops.sort((a, b) => a[0] - b[0]));
         } else {
-          solidNode(n, shape.polygon, mergeColor);
+          solidNode(n, shape.polygons, mergeColor);
         }
-        outline([shape.lower, shape.upper], trunks);
+        const mask = (style.thinOutline || borderOn) ? edgeMask(n, shape.polygons) : '';
+        outline(shape.borderEdges, trunks, mask);
         if (borderOn) {
-          [shape.lower, shape.upper].forEach((line) => {
-            trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD(line, map, false)}" ${strokeAttrs}/>`);
+          shape.borderEdges.forEach((line) => {
+            trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD(line, map, false)}" ${strokeAttrs(true)} ${mask}/>`);
           });
         }
         const bc = nodeBorderColor(n);
@@ -328,14 +351,14 @@
       if (trunk) {
         const inward = trunk.faceX + (side === 'start' ? trunk.dir : -trunk.dir) * layout.mergeLength;
         if (style.gradient) {
-          nodeFill(n, 't', trunk.polygon, trunk.faceX, inward, [[0, mergeColor], [1, nodeColor]]);
+          nodeFill(n, 't', trunk.polygons, trunk.faceX, inward, [[0, mergeColor], [1, nodeColor]]);
         } else {
-          solidNode(n, trunk.polygon, mergeColor);
+          solidNode(n, trunk.polygons, mergeColor);
         }
       }
       // Opaque trunks can hide a small body overlap; translucent ones would show it as a darker line.
       const body = S.endpointBody(layout, n, side, style.flatten && trunk ? Math.min(1.5, layout.mergeLength) : 0);
-      const edges = trunk ? [trunk.edges.lower, trunk.edges.upper] : [];
+      const edges = trunk ? trunk.edges.slice() : [];
       if (body) {
         edges.push(body.lowerBorder, body.upperBorder,
           [body.lowerBorder[body.lowerBorder.length - 1], body.upperBorder[body.upperBorder.length - 1]]);
@@ -347,10 +370,10 @@
         const tc = Math.abs(n.X - body.faceX) / Math.abs(body.outerX - body.faceX);
         // The trunk meets the body at the face in the trunk (merge) color, so the body starts there too.
         if (labelFades(n, style)) {
-          nodeFill(n, 'b', body.polygon, body.faceX, body.outerX,
+          nodeFill(n, 'b', [body.polygon], body.faceX, body.outerX,
             [[0, mergeColor], [tc, C.withAlpha(mergeColor, 0)], [1, C.withAlpha(mergeColor, 0)]]);
         } else {
-          solidNode(n, body.polygon, mergeColor);
+          solidNode(n, [body.polygon], mergeColor);
         }
         const bc = nodeBorderColor(n);
         if (bc) {
@@ -359,18 +382,20 @@
           fadeStroke(n, 'u', body.upperBorder, bc, alpha, -1);
         }
       }
+      const polygons = (trunk ? trunk.polygons : []).concat(body ? [body.polygon] : []);
+      const mask = (style.thinOutline || borderOn) && polygons.length ? edgeMask(n, polygons) : '';
       if (borderOn) {
         const b = S.bundle(layout, n, side);
         if (trunk) {
-          [trunk.edges.lower, trunk.edges.upper].forEach((line) => {
-            trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD(line, map, false)}" ${strokeAttrs}/>`);
+          trunk.edges.forEach((line) => {
+            trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD(line, map, false)}" ${strokeAttrs(true)} ${mask}/>`);
           });
         }
         if (style.borderCaps && b) {
-          trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD([[b.faceX, b.lowerY], [b.faceX, b.upperY]], map, false)}" ${strokeAttrs}/>`);
+          trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD([[b.faceX, b.lowerY], [b.faceX, b.upperY]], map, false)}" ${strokeAttrs()}/>`);
         }
       }
-      outline(edges, trunks);
+      outline(edges, trunks, mask);
     });
 
     if (style.nodeSums) {

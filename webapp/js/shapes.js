@@ -27,13 +27,59 @@
   }
 
   function ribbonPolygon(f, cuts) {
-    if (!cuts) return f.upper.concat(f.lower.slice().reverse());
-    return sliceByX(f.upper, cuts[0], cuts[1]).concat(sliceByX(f.lower, cuts[0], cuts[1]).reverse());
+    const polygon = f.upper.concat(f.lower.slice().reverse());
+    return cuts ? clipPolygonX(polygon, cuts[0], cuts[1]) : polygon;
   }
 
   function edgeSegments(f, cuts) {
     if (!cuts) return [f.upper, f.lower];
-    return [sliceByX(f.upper, cuts[0], cuts[1]), sliceByX(f.lower, cuts[0], cuts[1])];
+    return clipEdgeX(f.upper, cuts[0], cuts[1]).concat(clipEdgeX(f.lower, cuts[0], cuts[1]));
+  }
+
+  // Normal-offset edges can double back in x. Clip every segment, preserving all crossings.
+  function clipEdgeX(points, x0, x1) {
+    const lo = Math.min(x0, x1), hi = Math.max(x0, x1);
+    const pieces = [];
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i], dx = b[0] - a[0];
+      let start = 0, end = 1;
+      if (Math.abs(dx) < 1e-12) {
+        if (a[0] < lo || a[0] > hi) continue;
+      } else {
+        const u = (lo - a[0]) / dx, v = (hi - a[0]) / dx;
+        start = Math.max(0, Math.min(u, v)); end = Math.min(1, Math.max(u, v));
+        if (start > end) continue;
+      }
+      const at = t => [a[0] + dx * t, a[1] + (b[1] - a[1]) * t];
+      const p = at(start), q = at(end), previous = pieces[pieces.length - 1];
+      if (previous && Math.hypot(previous[previous.length - 1][0] - p[0], previous[previous.length - 1][1] - p[1]) < 1e-9) previous.push(q);
+      else pieces.push([p, q]);
+    }
+    return pieces;
+  }
+
+  function clipPolygonX(points, x0, x1) {
+    let out = points;
+    for (const [x, above] of [[Math.min(x0, x1), true], [Math.max(x0, x1), false]]) {
+      const input = out;
+      out = [];
+      input.forEach((b, i) => {
+        const a = input[(i + input.length - 1) % input.length];
+        const inside = p => above ? p[0] >= x : p[0] <= x;
+        if (inside(a) !== inside(b)) out.push([x, a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0])]);
+        if (inside(b)) out.push(b);
+      });
+    }
+    return out;
+  }
+
+  function mergeBands(b, side, length) {
+    const inward = side === 'start' ? b.dir : -b.dir;
+    const target = b.faceX + inward * length;
+    return b.flows.map(f => ({
+      polygon: clipPolygonX(f.lower.concat(f.upper.slice().reverse()), b.faceX, target),
+      edges: clipEdgeX(f.lower, b.faceX, target).concat(clipEdgeX(f.upper, b.faceX, target))
+    }));
   }
 
   // Outermost strands of a node side: side "start" uses strands leaving the node.
@@ -65,8 +111,9 @@
   function trunkPolygon(layout, node, side) {
     const b = bundle(layout, node, side);
     if (!b || !(layout.mergeLength > 0)) return null;
-    const e = trunkEdges(b, side, layout.mergeLength);
-    return { polygon: e.lower.concat(e.upper.slice().reverse()), faceX: b.faceX, dir: b.dir, edges: e, bundle: b };
+    const bands = mergeBands(b, side, layout.mergeLength);
+    return { polygons: bands.map(part => part.polygon), faceX: b.faceX, dir: b.dir,
+      edges: bands.flatMap(part => part.edges), bundle: b };
   }
 
   // Cosine-eased bridge with horizontal tangents (R node_width_bridge_curve).
@@ -136,8 +183,12 @@
     const lower = ein.lower.concat(lowerBridge.slice(1), eout.lower.slice(1));
     const upper = ein.upper.concat(upperBridge.slice(1), eout.upper.slice(1));
     const xs = lower.concat(upper).map((p) => p[0]);
+    const bands = mergeBands(bin, 'end', m).concat(mergeBands(bout, 'start', m));
+    const polygon = lowerBridge.concat(upperBridge.slice().reverse());
     return {
-      polygon: lower.concat(upper.slice().reverse()),
+      polygon,
+      polygons: [polygon, ...bands.map(part => part.polygon)],
+      borderEdges: [lowerBridge, upperBridge, ...bands.flatMap(part => part.edges)],
       lower,
       upper,
       lowerBridge,
@@ -178,7 +229,7 @@
   }
 
   SK.shapes = {
-    sliceByX, strandCuts, ribbonPolygon, edgeSegments, bundle, trunkPolygon, trunkEdges,
+    sliceByX, clipPolygonX, clipEdgeX, strandCuts, ribbonPolygon, edgeSegments, bundle, trunkPolygon, trunkEdges,
     bridgeCurve, bridgeBody, endpointBody, interiorTrunk, nodeRole, geometryBounds
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;

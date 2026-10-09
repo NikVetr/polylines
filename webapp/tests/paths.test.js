@@ -300,3 +300,60 @@ test('strand edges meet without gaps or overlap at node faces and sum to the nod
     }
   });
 });
+
+const insidePolygon = ([x, y], polygon) => {
+  let inside = false;
+  polygon.forEach((b, i) => {
+    const a = polygon[(i + polygon.length - 1) % polygon.length];
+    if ((a[1] > y) !== (b[1] > y) && x < a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1])) inside = !inside;
+  });
+  return inside;
+};
+
+test('wide steep Bezier stages keep ordered edges within node faces in both directions', () => {
+  for (const dir of [1, -1]) {
+    const layout = SK.layout.computeLayout({ mode: 'layered', matrices: [[[0.5, 0.15]]],
+      loc: [{ set: 1, node: 1, x: 0, y: 0.5, width: 0.4 },
+        { set: 2, node: 1, x: dir, y: 1.5, width: 0.1 }, { set: 2, node: 2, x: dir, y: -0.5, width: 0.1 }] },
+    { xlim: [-1.3, 1.3], ylim: [-0.8, 1.8], width: 800, height: 900 });
+    layout.flows.forEach(f => {
+      for (const edge of [f.lower, f.upper]) {
+        edge.slice(1).forEach((p, i) => assert.ok(dir * (p[0] - edge[i][0]) > 0));
+        assert.ok(edge.every(([x]) => dir * (x - f.startX) >= 0 && dir * (f.endX - x) >= 0));
+      }
+    });
+    const flows = layout.flows.slice().sort((a, b) => a.startOffset - b.startOffset);
+    for (const t of [0.0001, 0.01, 0.1]) {
+      const x = flows[0].startX + (flows[0].endX - flows[0].startX) * t;
+      assert.ok(SK.layout.pointAtX(flows[0].upper, x)[1] < SK.layout.pointAtX(flows[1].lower, x)[1], 'adjacent strands separate without overlapping');
+    }
+  }
+});
+
+test('merge fills preserve gaps between separated strands before the merge cutoff', () => {
+  const layout = SK.layout.computeLayout({ mode: 'layered', matrices: [[[0.5, 0.15]]],
+    loc: [{ set: 1, node: 1, x: 0, y: 0.5, width: 0.4 },
+      { set: 2, node: 1, x: 1, y: 1.5, width: 0.1 }, { set: 2, node: 2, x: 1, y: -0.5, width: 0.1 }], params: { merge_frac: 0.2 } },
+  { xlim: [-0.3, 1.3], ylim: [-0.8, 1.8], width: 800, height: 900 });
+  const source = layout.nodes[0];
+  const trunk = SK.shapes.trunkPolygon(layout, source, 'start');
+  const [bottom, top] = layout.flows.slice().sort((a, b) => a.startOffset - b.startOffset);
+  const x = bottom.startX + layout.mergeLength / 2;
+  const lower = SK.layout.pointAtX(bottom.upper, x)[1], upper = SK.layout.pointAtX(top.lower, x)[1];
+  assert.ok(upper - lower > 1);
+  assert.ok(!trunk.polygons.some(polygon => insidePolygon([x, (lower + upper) / 2], polygon)));
+  for (const f of layout.flows) {
+    const y = (SK.layout.pointAtX(f.upper, x)[1] + SK.layout.pointAtX(f.lower, x)[1]) / 2;
+    assert.ok(trunk.polygons.some(polygon => insidePolygon([x, y], polygon)));
+  }
+});
+
+test('x clipping preserves every crossing of a folded edge', () => {
+  const edge = [[0, 0], [2, 1], [-1, 2], [2, 3], [3, 4]];
+  const pieces = SK.shapes.clipEdgeX(edge, 0.5, 1.5);
+  assert.equal(pieces.length, 3);
+  pieces.forEach(piece => {
+    assert.ok(piece.every(([x]) => x >= 0.5 && x <= 1.5));
+    assert.equal(Math.abs(piece[0][0] - piece[piece.length - 1][0]), 1);
+  });
+});

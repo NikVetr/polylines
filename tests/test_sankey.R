@@ -670,13 +670,19 @@ beside_loc <- data.frame(set = multi_loc[, 1], node = multi_loc[, 2], x = multi_
                          label = paste("node", seq_len(nrow(multi_loc))), width = 0)
 beside <- sankey_ribbons(list(thic, thic2), beside_loc, xyr = 1)
 trunk_polygons <- 0
-polygon <- function(...) trunk_polygons <<- trunk_polygons + 1
+solid_trunk_cols <- character(0)
+polygon <- function(x, y, col, ...) {
+  trunk_polygons <<- trunk_polygons + 1
+  solid_trunk_cols <<- c(solid_trunk_cols, col)
+}
 draw_multi_stage_interior_trunks(beside, node_cols = NULL, merge_cols = multi_stage_merge_cols(beside, "#5B8CBA"),
                                  merge_length = beside$merge_length, gradient_slices = 20)
 rm(polygon)
 grDevices::dev.off()
 unlink(beside_pdf)
-stopifnot(trunk_polygons == beside$node_counts[2])
+# Each node has one body and an individual band for each arriving/leaving strand.
+stopifnot(trunk_polygons == beside$node_counts[2] + nrow(beside$segments[[1]]$flows) + nrow(beside$segments[[2]]$flows),
+          length(unique(solid_trunk_cols)) == 1, all(grDevices::col2rgb(solid_trunk_cols, alpha = TRUE)["alpha", ] == 255))
 
 # Labeled graph interior trunks use the supplied merge (trunk) colors.
 graph_label_pdf <- tempfile(fileext = ".pdf")
@@ -778,5 +784,15 @@ for(edge in list(attr(curved_body, "lower_border"), attr(curved_body, "upper_bor
   stopifnot(all(apply(edge, 1, function(p) any(rowSums(abs(sweep(curved_body, 2, p))) < 1e-10))))
   stopifnot(all(abs(diff(edge[, "x"])) > 1e-10 | abs(diff(edge[, "y"])) < 1e-10))
 }
+
+steep_loc <- rbind(c(1, 1, 0, 0.5, 0.4), c(2, 1, 1, 1.5, 0.1), c(2, 2, 1, -0.5, 0.1))
+steep <- sankey_ribbons(matrix(c(0.5, 0.15), nrow = 1), steep_loc, xyr = 1, merge_frac = 0.2)
+stopifnot(all(vapply(steep$edges, function(e) all(diff(e$left[, "x"]) > 0) && all(diff(e$right[, "x"]) > 0), logical(1))))
+bands <- attr(node_trunk_polygon(steep, seq_len(nrow(steep$flows)), "start", steep$merge_length), "fill_polygons")
+gap_x <- steep$flows$start_x[1] + steep$merge_length / 2
+spans <- lapply(bands, clip_polygon_x, x0 = gap_x, x1 = gap_x + 0.001)
+stopifnot(length(bands) == 2, max(spans[[2]][, "y"]) < min(spans[[1]][, "y"]))
+clipped <- clip_polygon_x(node_trunk_polygon(steep, 1:2, "start", steep$merge_length), gap_x, gap_x + 0.01)
+stopifnot(length(attr(clipped, "fill_polygons")) == 2)
 
 cat("sankey tests passed\n")
