@@ -898,7 +898,59 @@ test('crowded endpoint counts spread apart and follow gathered traces', async ({
     const box = path.getBBox();
     return Number(el.getAttribute('x')) - (box.x + box.width);
   }));
-  distance.forEach((d) => expect(d).toBeCloseTo(9, 1));
+  distance.forEach((d) => expect(d).toBeCloseTo(48, 1));
+});
+
+test('many endpoint counts fan farther out, clear node labels and stay inside exports', async ({ page }) => {
+  await page.evaluate(() => {
+    const T = window.SK.transform, app = window.SankeyApp;
+    const rows = ['A', 'B', 'C', 'D'].flatMap((source, i) => Array.from({ length: 6 }, (_, j) =>
+      [`${source},TR0${j},Low-risk only,${i * 6 + j + 1}`, `${source},TR0${j},Open/all data,${j + 1}`])).flat();
+    const table = T.parseTable('source,tranche,consent,n\n' + rows.join('\n'));
+    app.applyImport(T.build(table, { format: 'wide', columns: ['source', 'tranche', 'consent'], weight: 'n' }), { labels: 'above' });
+    Object.assign(app.state.style, { canvasWidth: 1000, canvasHeight: 700, fontSize: 18 });
+    app.state.valueScale = 0.00001;
+    app.update({ fit: true });
+  });
+  const node = await nodeAt(page, 'Low-risk only');
+  await page.mouse.click(node.x, node.y);
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace-count')).toHaveCount(24);
+  const result = await page.evaluate(() => {
+    const plot = document.querySelector('#plot');
+    const counts = [...plot.querySelectorAll('.trace-count')].map(el => el.getBBox());
+    const labels = [...plot.querySelectorAll('.node-label')].map(el => el.getBBox());
+    const endpoint = Math.max(...[...plot.querySelectorAll('.trace')].map(el => { const b = el.getBBox(); return b.x + b.width; }));
+    return { gap: Math.min(...counts.map(b => b.x)) - endpoint,
+      overlap: counts.some(a => labels.some(b => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y)),
+      clipped: counts.some(b => b.x + b.width > plot.width.baseVal.value || b.y < 0 || b.y + b.height > plot.height.baseVal.value),
+      svg: window.SankeyApp.exportSvgText() };
+  });
+  expect(result.gap).toBeGreaterThan(75);
+  expect(result.overlap).toBe(false);
+  expect(result.clipped).toBe(false);
+  expect(result.svg).toContain('mask="url(#trace-count-label-mask)"');
+  expect(result.svg).toContain('class="trace-count"');
+  const oldView = await page.evaluate(() => {
+    const saved = JSON.parse(JSON.stringify(window.SankeyApp.state));
+    delete saved.traceCountsVersion;
+    saved.style.labelCounts = false;
+    saved.view.xlim[1] -= 0.3 * (saved.view.xlim[1] - saved.view.xlim[0]);
+    localStorage.setItem('polylines-sankey-v1', JSON.stringify(saved));
+    return saved.view;
+  });
+  await page.reload();
+  await expect(page.locator('#ctl-labelCounts')).not.toBeChecked();
+  expect((await state(page)).view).not.toEqual(oldView);
+  const restoredNode = await nodeAt(page, 'Low-risk only');
+  await page.mouse.click(restoredNode.x, restoredNode.y);
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace-count')).toHaveCount(24);
+  const restoredClipping = await page.locator('#plot .trace-count').evaluateAll(els => {
+    const width = document.querySelector('#plot').width.baseVal.value;
+    return els.some(el => { const b = el.getBBox(); return b.x + b.width > width; });
+  });
+  expect(restoredClipping).toBe(false);
 });
 
 test('older saved sessions enable counts, default percentages off and fit space for counts', async ({ page }) => {

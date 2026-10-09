@@ -6,7 +6,7 @@
   const STORAGE_KEY = 'polylines-sankey-v1';
   const MARGIN = 18;
   const HISTORY_LIMIT = 100;
-  const TRACE_LABEL = { font: 10.5, minFont: 8, countGap: 9, countSpacing: 13 };
+  const TRACE_LABEL = { font: 10.5, minFont: 8, countGap: 9, countSpacing: 13, crowdedGap: 48, maxGap: 180 };
 
   const DEFAULT_STYLE = {
     colorBy: 'source',
@@ -66,6 +66,7 @@
     return {
       version: 1,
       labelCountsVersion: 1,
+      traceCountsVersion: 1,
       mode: 'layered',
       matrices: [],
       stageNames: [],
@@ -316,6 +317,39 @@
     return out;
   }
 
+  function nodeLabelBounds(lay, data) {
+    const boxes = [];
+    if (!data.style.labels) return boxes;
+    const m = measure(data);
+    lay.nodes.forEach(n => {
+      const text = n.hasLabel ? n.label : (data.style.showIndices ? String(n.node) : '');
+      if (!text) return;
+      const height = data.style.fontSize * n.cex;
+      const pos = R.labelPlacement(n, data.style, height);
+      const width = m(text, n.cex, n.font).width;
+      const x1 = pos.X + width * (pos.anchor === 'start' ? 1 : pos.anchor === 'middle' ? 0.5 : 0);
+      boxes.push({ x0: x1 - width, x1, y0: pos.Y - height / 2, y1: pos.Y + height / 2 });
+    });
+    return boxes;
+  }
+
+  const labelRightEdge = (boxes, y0 = -Infinity, y1 = Infinity) =>
+    Math.max(-Infinity, ...boxes.filter(b => b.y1 >= y0 && b.y0 <= y1).map(b => b.x1));
+
+  const countGapFor = displacement => displacement > 1
+    ? Math.min(TRACE_LABEL.maxGap, Math.max(TRACE_LABEL.crowdedGap, TRACE_LABEL.countGap + displacement / 2)) : TRACE_LABEL.countGap;
+
+  function countGutter(lay, data) {
+    const nodes = new Map(lay.nodes.map(n => [n.key, n]));
+    const counts = new Map();
+    data.paths.forEach(path => {
+      const n = path.nodes.map((ni, s) => nodes.get(`${s + 1}:${ni + 1}`))
+        .reduce((a, b) => a.X + a.widthPx / 2 >= b.X + b.widthPx / 2 ? a : b);
+      counts.set(n.id, (counts.get(n.id) || 0) + (path.members ? Math.max(1, path.members.length) : 1));
+    });
+    return countGapFor((Math.max(...counts.values()) - 1) * TRACE_LABEL.countSpacing);
+  }
+
   // Data limits that contain every strand, node body and label (a few refinement passes,
   // because strand thickness in pixels depends on the limits themselves).
   function fitView(data = state) {
@@ -337,10 +371,10 @@
         box.y0 = Math.min(box.y0, p[1]);
         box.y1 = Math.max(box.y1, p[1]);
       });
-      if (data.paths && data.paths.length && data.style.tracePaths && data.style.traceCounts) {
+      if (lay.mode === 'layered' && data.paths && data.paths.length && data.style.tracePaths && data.style.traceCounts) {
         const countMeasure = R.makeMeasure({ fontSize: TRACE_LABEL.font });
         const width = Math.max(...data.paths.map((p) => countMeasure(fmtValue(p.weight), 1, 1).width));
-        box.x1 += TRACE_LABEL.countGap + width;
+        box.x1 = Math.max(box.x1, labelRightEdge(nodeLabelBounds(lay, data))) + countGutter(lay, data) + width;
       }
       const x0 = lay.tf.x(box.x0);
       const x1 = lay.tf.x(box.x1);
@@ -1334,7 +1368,9 @@
     const counts = new Map();
     const occupied = [];
     const textMeasure = R.makeMeasure({ fontSize: font });
+    const nodeLabels = nodeLabelBounds(layout, state);
     let out = '';
+    let leaders = '';
     annotations.forEach(({ path, member, weight, geometry }) => {
       const attrs = `data-path="${path}" data-member="${member}"`;
       if (state.style.tracePercents) geometry.labelAnchors.forEach((a) => {
@@ -1363,7 +1399,7 @@
       if (state.style.traceCounts) {
         const a = geometry.countAnchor;
         if (!counts.has(a.node)) counts.set(a.node, []);
-        counts.get(a.node).push({ attrs, weight, x: sx(a.X) + countGap, y: sy(a.Y), anchorY: sy(a.Y) });
+        counts.get(a.node).push({ attrs, weight, anchorX: sx(a.X), y: sy(a.Y), anchorY: sy(a.Y) });
       }
     });
     counts.forEach((labels, node) => {
@@ -1374,14 +1410,28 @@
       const last = labels[labels.length - 1];
       const centerShift = (first.y + last.y - first.anchorY - last.anchorY) / 2;
       const shift = Math.max(last.y - (frame.height - MARGIN - font / 2), Math.min(centerShift, first.y - MARGIN - font / 2));
+      labels.forEach(a => { a.y -= shift; });
+      const displacement = Math.max(...labels.map(a => Math.abs(a.y - a.anchorY)));
+      const right = Math.max(...labels.map(a => a.anchorX), sx(labelRightEdge(nodeLabels,
+        frame.margin.top + layout.view.height - last.y - font / 2,
+        frame.margin.top + layout.view.height - first.y + font / 2)));
+      const x = right + countGapFor(displacement);
       labels.forEach((a) => {
-        const y = a.y - shift;
-        if (Math.abs(y - a.anchorY) > 1) out += `<path class="trace-count-leader" d="M${f2(a.x - countGap)} ${f2(a.anchorY)}L${f2(a.x - 3)} ${f2(y)}" ` +
+        const y = a.y;
+        if (Math.abs(y - a.anchorY) > 1 || x - a.anchorX > countGap + 1) leaders += `<path class="trace-count-leader" ` +
+          `d="M${f2(a.anchorX)} ${f2(a.anchorY)}L${f2(Math.min(right + countGap, x - 3))} ${f2(a.anchorY)}L${f2(x - 3)} ${f2(y)}" ` +
           'fill="none" stroke="#64748B" stroke-width="0.6"/>';
-        out += `<text class="trace-count" ${a.attrs} data-label-node="${node}" x="${f2(a.x)}" y="${f2(y)}" ` +
+        out += `<text class="trace-count" ${a.attrs} data-label-node="${node}" x="${f2(x)}" y="${f2(y)}" ` +
           `text-anchor="start" ${fontAttrs} font-size="${font}" fill="#1F2937">${fmtValue(a.weight)}</text>`;
       });
     });
+    if (leaders) {
+      const holes = nodeLabels.map(b => `<rect x="${f2(sx(b.x0) - 3)}" y="${f2(sy(b.y1) - 3)}" ` +
+        `width="${f2(b.x1 - b.x0 + 6)}" height="${f2(b.y1 - b.y0 + 6)}" fill="black"/>`).join('');
+      out = `<defs><mask id="trace-count-label-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="${frame.width}" height="${frame.height}">` +
+        `<rect width="${frame.width}" height="${frame.height}" fill="white"/>${holes}</mask></defs>` +
+        `<g mask="url(#trace-count-label-mask)">${leaders}</g>` + out;
+    }
     return out;
   }
 
@@ -2486,6 +2536,7 @@
       next.style.labelCounts = true;
       next.view = null;
     }
+    if (!obj.traceCountsVersion && next.paths && next.style.tracePaths && next.style.traceCounts) next.view = null;
     state = next;
     selection = null;
     routeScope = 'all';
