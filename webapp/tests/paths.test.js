@@ -13,14 +13,14 @@ const T = SK.transform;
 
 const wide = 'a,b,c,n\nA,X,P,10\nA,Y,P,5\nB,X,Q,7\nA,X,Q,3\nB,X,P,2\n';
 
-function buildLayout(result) {
+function buildLayout(result, params = {}) {
   const counts = result.dimnames.map((d) => d.rows.length).concat([result.dimnames[result.dimnames.length - 1].cols.length]);
   const loc = [];
   counts.forEach((count, s) => {
     for (let k = 0; k < count; k++) loc.push({ set: s + 1, node: k + 1, x: s, y: 1 - (k + 0.5) / count });
   });
   return SK.layout.computeLayout(
-    { mode: 'layered', matrices: result.matrices, loc, params: { n: 30 }, valueScale: 0.004 },
+    { mode: 'layered', matrices: result.matrices, loc, params: Object.assign({ n: 30 }, params), valueScale: 0.004 },
     { xlim: [-0.2, counts.length - 0.8], ylim: [0, 1], width: 800, height: 500 }
   );
 }
@@ -75,6 +75,44 @@ test('the substrand under a point identifies its pathway', () => {
     const X = f.lower[k][0] + (f.upper[k][0] - f.lower[k][0]) * t;
     const Y = f.lower[k][1] + (f.upper[k][1] - f.lower[k][1]) * t;
     assert.deepStrictEqual(SK.paths.pathAt(layout, subs, f.index, X, Y), { path: part.path, member: -1 });
+  });
+});
+
+for (const route of ['bezier', 'boundary']) {
+  test(`percentage anchors stay inside their substrand with ${route} routing`, () => {
+    const r = T.build(T.parseTable(wide), { format: 'wide', columns: ['a', 'b', 'c'], weight: 'n' });
+    const layout = buildLayout(r, { route });
+    const subs = SK.paths.substrands(layout, r.paths);
+    r.paths.forEach((p, pi) => {
+      const t = SK.paths.tracePolygon(layout, subs, pi);
+      assert.strictEqual(t.labelAnchors.length, 2);
+      t.labelAnchors.forEach((a) => {
+        const f = layout.flows[a.flow];
+        for (const candidate of [a, ...a.alternatives]) {
+          assert.ok(candidate.X > Math.min(f.startX, f.endX) && candidate.X < Math.max(f.startX, f.endX));
+          assert.deepStrictEqual(SK.paths.pathAt(layout, subs, a.flow, candidate.X, candidate.Y), { path: pi, member: -1 });
+          assert.ok(Number.isFinite(candidate.angle) && candidate.thickness > 0);
+        }
+      });
+      const n = layout.nodes[t.countAnchor.node];
+      assert.strictEqual(n.set, 3);
+      assert.strictEqual(t.countAnchor.X, n.X + n.widthPx / 2);
+    });
+  });
+}
+
+test('leftward pathways put the count at the source, their rightmost node', () => {
+  const r = T.build(T.parseTable(wide), { format: 'wide', columns: ['a', 'b', 'c'], weight: 'n' });
+  const loc = [3, 2, 1].flatMap((x, s) => [0, 1].map((i) => ({ set: s + 1, node: i + 1, x, y: 0.8 - i * 0.5, width: 0.1 })));
+  const layout = SK.layout.computeLayout({ mode: 'layered', matrices: r.matrices, loc, valueScale: 0.004 },
+    { xlim: [0.8, 3.2], ylim: [0, 1], width: 800, height: 500 });
+  const subs = SK.paths.substrands(layout, r.paths);
+  r.paths.forEach((p, pi) => {
+    const t = SK.paths.tracePolygon(layout, subs, pi, { fadeLabels: false });
+    const n = layout.nodes[t.countAnchor.node];
+    assert.strictEqual(n.set, 1);
+    assert.strictEqual(t.countAnchor.X, n.X + n.widthPx / 2);
+    t.labelAnchors.forEach((a) => assert.ok(Math.abs(a.angle) > Math.PI / 2));
   });
 });
 

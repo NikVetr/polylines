@@ -425,7 +425,7 @@
       `<g class="layer-hits">${hits.join('')}</g>` +
       `<g class="layer-dots">${dots.join('')}</g>` +
       `<g class="layer-labels">${labels.join('')}</g>` +
-      '<g class="layer-fills"></g>';
+      '<g class="layer-fills"></g><g class="layer-trace-labels" pointer-events="none"></g>';
   }
 
   // Canvas-based text metrics in pixels, matching the SVG label font.

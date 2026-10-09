@@ -19,6 +19,21 @@ const ribbonCenter = (page, index) => page.evaluate((k) => {
   return { x: box.left + 18 + mid[0], y: box.top + (box.height - 18) - mid[1] };
 }, index);
 
+const pathwayPoint = (page, weight = 41) => page.evaluate((w) => {
+  const app = window.SankeyApp;
+  const L = app.layout;
+  const pi = app.state.paths.findIndex((p) => p.weight === w);
+  const subs = window.SK.paths.substrands(L, app.state.paths);
+  const f = L.flows[subs.pathFlows[pi][0]];
+  const part = subs.byFlow[f.index].find((e) => e.path === pi);
+  const X = f.startX + 0.45 * (f.endX - f.startX);
+  const lo = window.SK.layout.pointAtX(f.lower, X)[1];
+  const hi = window.SK.layout.pointAtX(f.upper, X)[1];
+  const Y = lo + (hi - lo) * (part.a + part.b) / 2;
+  const box = document.querySelector('#plot').getBoundingClientRect();
+  return { x: box.left + 18 + X, y: box.top + box.height - 18 - Y, path: pi, flow: f.index };
+}, weight);
+
 test('renders the default example without errors', async ({ page }) => {
   await expect(page.locator('#plot .ribbon')).toHaveCount(14);
   await expect(page.locator('#plot .node-label')).toHaveCount(9);
@@ -517,6 +532,158 @@ test('hovering draws a bar under every node showing the share the selection fill
   await expect(page.locator('#plot .node-fill')).toHaveCount(0);
   const exported = await page.evaluate(() => window.SankeyApp.exportSvgText());
   expect(exported).not.toContain('layer-fills');
+});
+
+test('hovered substrands show endpoint counts and their share of each edge along its direction', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  await expect(page.locator('#ctl-traceCounts')).toBeChecked();
+  await expect(page.locator('#ctl-tracePercents')).toBeChecked();
+  const p = await pathwayPoint(page);
+  await page.mouse.move(p.x, p.y);
+  await expect(page.locator('#plot .trace-count')).toHaveCount(2);
+  await expect(page.locator('#plot .trace-percent')).toHaveCount(4);
+  await expect(page.locator(`#plot .trace-count[data-path="${p.path}"]`)).toHaveText('41');
+  await expect(page.locator(`#plot .trace-percent[data-path="${p.path}"][data-label-flow="${p.flow}"]`)).toHaveText('65.1%');
+  // The same 41 patients fill 41/69 of the later Chemotherapy → Remission edge.
+  const shares = await page.locator(`#plot .trace-percent[data-path="${p.path}"]`).allTextContents();
+  expect(shares).toEqual(['65.1%', '59.4%']);
+  const geometry = await page.evaluate(() => {
+    const L = window.SankeyApp.layout;
+    return [...document.querySelectorAll('#plot .trace-count, #plot .trace-percent')].map((el) => {
+      const box = el.getBoundingClientRect();
+      const svg = document.querySelector('#plot').getBoundingClientRect();
+      const n = L.nodes[Number(el.dataset.labelNode)];
+      const matrix = el.transform.baseVal.consolidate()?.matrix;
+      return { right: box.right <= svg.right, bottom: box.bottom <= svg.bottom,
+        countRight: n ? Number(el.getAttribute('x')) > 18 + n.X + n.widthPx / 2 : true,
+        white: !matrix || el.getAttribute('fill') === '#FFFFFF',
+        angle: matrix ? Math.atan2(matrix.b, matrix.a) : null };
+    });
+  });
+  expect(geometry.every((g) => g.right && g.bottom && g.countRight && g.white)).toBe(true);
+  expect(geometry.some((g) => g.angle !== null && Math.abs(g.angle) > 0.2)).toBe(true);
+  await page.keyboard.down('Control');
+  await expect(page.locator('#plot .trace-count')).toHaveCount(1);
+  await expect(page.locator('#plot .trace-percent')).toHaveCount(2);
+  await expect(page.locator('#plot .trace-count')).toHaveText('41');
+  await page.mouse.click(p.x, p.y);
+  await page.keyboard.up('Control');
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace-count')).toHaveText('41');
+  const exported = await page.evaluate(() => window.SankeyApp.exportSvgText());
+  expect(exported).toContain('class="trace-count"');
+  expect(exported).toContain('class="trace-percent"');
+  expect(exported).toContain('59.4%');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#plot .trace-count, #plot .trace-percent')).toHaveCount(0);
+  expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).not.toContain('layer-trace-labels');
+});
+
+test('Shift-hover annotations use the patient slice count, and pools retain that slice', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  const p = await pathwayPoint(page);
+  await page.keyboard.down('Shift');
+  await page.mouse.move(p.x, p.y);
+  await expect(page.locator('#plot .trace-count')).toHaveText('1');
+  expect(await page.locator('#plot .trace-percent').allTextContents()).toEqual(['1.6%', '1.4%']);
+  const member = await page.locator('#plot .trace-count').getAttribute('data-member');
+  expect(Number(member)).toBeGreaterThanOrEqual(0);
+  await page.keyboard.down('Alt');
+  await page.mouse.click(p.x, p.y);
+  await page.keyboard.up('Alt');
+  await page.keyboard.up('Shift');
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace-count')).toHaveText('1');
+  await expect(page.locator('#plot .trace-count')).toHaveAttribute('data-member', member);
+  expect(await page.locator('#plot .trace-percent').allTextContents()).toEqual(['1.6%', '1.4%']);
+});
+
+test('substrand label toggles work independently and persist across reloads', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const n = await nodeAt(page, 'Remission');
+  await page.mouse.click(n.x, n.y);
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace-count')).toHaveCount(5);
+  await expect(page.locator('#plot .trace-percent')).toHaveCount(10);
+  const overlapping = await page.locator('#plot .trace-percent').evaluateAll((els) => {
+    const boxes = els.map((el) => el.getBoundingClientRect());
+    return boxes.some((a, i) => boxes.slice(i + 1).some((b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top));
+  });
+  expect(overlapping).toBe(false);
+  await page.locator('#ctl-traceCounts').uncheck();
+  await expect(page.locator('#plot .trace-count')).toHaveCount(0);
+  await expect(page.locator('#plot .trace-percent')).toHaveCount(10);
+  await page.locator('#ctl-traceCounts').check();
+  await page.locator('#ctl-tracePercents').uncheck();
+  await expect(page.locator('#plot .trace-count')).toHaveCount(5);
+  await expect(page.locator('#plot .trace-percent')).toHaveCount(0);
+  await page.locator('#ctl-traceCounts').uncheck();
+  expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).not.toContain('layer-trace-labels');
+  const project = JSON.parse((await page.evaluate(() => window.SankeyApp.bundleFiles())).find((f) => f.name === 'project.json').text);
+  expect(project.style.traceCounts).toBe(false);
+  expect(project.style.tracePercents).toBe(false);
+  await expect.poll(() => page.evaluate(() => {
+    const style = JSON.parse(localStorage.getItem('polylines-sankey-v1'))?.style;
+    return style && [style.traceCounts, style.tracePercents];
+  })).toEqual([false, false]);
+  await page.reload();
+  await expect(page.locator('#ctl-traceCounts')).not.toBeChecked();
+  await expect(page.locator('#ctl-tracePercents')).not.toBeChecked();
+  const p = await pathwayPoint(page);
+  await page.mouse.move(p.x, p.y);
+  await expect(page.locator('#plot .trace')).toHaveCount(2);
+  await expect(page.locator('#plot .trace-count, #plot .trace-percent')).toHaveCount(0);
+});
+
+test('crowded endpoint counts spread apart and follow gathered traces', async ({ page }) => {
+  await page.evaluate(() => {
+    window.SankeyApp.loadExample('pathways');
+    window.SankeyApp.state.valueScale = 0.00001;
+    window.SankeyApp.update();
+  });
+  const n = await nodeAt(page, 'Remission');
+  await page.mouse.click(n.x, n.y);
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace-count')).toHaveCount(5);
+  expect((await page.locator('#plot .trace-count').allTextContents()).sort()).toEqual(['120', '28', '35', '41', '64']);
+  expect(await page.locator('#plot .trace-count-leader').count()).toBeGreaterThan(0);
+  const crowded = async () => page.locator('#plot .trace-count').evaluateAll((els) => {
+    const canvas = document.querySelector('#plot').getBoundingClientRect();
+    const boxes = els.map((el) => el.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+    return boxes.some((a, i) => a.bottom > canvas.bottom || a.top < canvas.top || (i > 0 && a.top < boxes[i - 1].bottom));
+  });
+  expect(await crowded()).toBe(false);
+  await page.locator('#ctl-gatherInNodes').check();
+  await expect(page.locator('#plot .trace-count')).toHaveCount(5);
+  expect(await crowded()).toBe(false);
+  const distance = await page.locator('#plot .trace-count').evaluateAll((els) => els.map((el) => {
+    const path = document.querySelector(`#plot .trace[data-path="${el.dataset.path}"]`);
+    const box = path.getBBox();
+    return Number(el.getAttribute('x')) - (box.x + box.width);
+  }));
+  distance.forEach((d) => expect(d).toBeCloseTo(9, 1));
+});
+
+test('older saved sessions enable substrand labels and fit space for counts', async ({ page }) => {
+  await page.evaluate(() => {
+    window.SankeyApp.loadExample('pathways');
+    const app = window.SankeyApp;
+    delete app.state.style.traceCounts;
+    delete app.state.style.tracePercents;
+    app.update({ fit: true });
+    localStorage.setItem('polylines-sankey-v1', JSON.stringify(app.state));
+  });
+  await page.reload();
+  await expect(page.locator('#ctl-traceCounts')).toBeChecked();
+  await expect(page.locator('#ctl-tracePercents')).toBeChecked();
+  const p = await pathwayPoint(page);
+  await page.mouse.move(p.x, p.y);
+  await expect(page.locator('#plot .trace-count')).toHaveCount(2);
+  const clipped = await page.locator('#plot .trace-count').evaluateAll((els) => {
+    const right = document.querySelector('#plot').getBoundingClientRect().right;
+    return els.some((el) => el.getBoundingClientRect().right > right);
+  });
+  expect(clipped).toBe(false);
 });
 
 test('clicking a node pins its traces and breakdown in the inspector until Esc', async ({ page }) => {

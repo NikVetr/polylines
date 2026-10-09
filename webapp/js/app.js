@@ -6,6 +6,7 @@
   const STORAGE_KEY = 'polylines-sankey-v1';
   const MARGIN = 18;
   const HISTORY_LIMIT = 100;
+  const TRACE_LABEL = { font: 10.5, minFont: 8, countGap: 9, countSpacing: 13 };
 
   const DEFAULT_STYLE = {
     colorBy: 'source',
@@ -36,6 +37,8 @@
     canvasHeight: null,
     collision: 'wall',
     tracePaths: true,
+    traceCounts: true,
+    tracePercents: true,
     gatherInNodes: false,
     substrands: false
   };
@@ -262,6 +265,11 @@
         box.y0 = Math.min(box.y0, p[1]);
         box.y1 = Math.max(box.y1, p[1]);
       });
+      if (data.paths && data.paths.length && data.style.tracePaths && data.style.traceCounts) {
+        const countMeasure = R.makeMeasure({ fontSize: TRACE_LABEL.font });
+        const width = Math.max(...data.paths.map((p) => countMeasure(fmtValue(p.weight), 1, 1).width));
+        box.x1 += TRACE_LABEL.countGap + width;
+      }
       const x0 = lay.tf.x(box.x0);
       const x1 = lay.tf.x(box.x1);
       const y0 = lay.tf.y(box.y0);
@@ -450,9 +458,15 @@
     {
       title: 'Canvas & dragging',
       items: [
-        { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover',
+        { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover', fit: true,
           help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ for the single pathway under the pointer, or Shift for the single item.',
           showIf: () => !!state.paths },
+        { key: 'traceCounts', target: 'style', type: 'checkbox', label: 'Substrand counts', fit: true,
+          help: 'Show each traced pathway or item count to the right of its rightmost node.',
+          showIf: () => !!state.paths && state.style.tracePaths },
+        { key: 'tracePercents', target: 'style', type: 'checkbox', label: 'Substrand percentages',
+          help: 'White percentages along each traced substrand: its count divided by the full strand count at that edge.',
+          showIf: () => !!state.paths && state.style.tracePaths },
         { key: 'gatherInNodes', target: 'style', type: 'checkbox', label: 'Gather traces in nodes',
           help: 'Traced pathways close up into one contiguous bundle along the top or bottom of each node they share, fanning back out to their strands at the node edges.',
           showIf: () => !!state.paths && state.style.tracePaths },
@@ -1169,8 +1183,10 @@
       ? P.gatherSlots(layout, traces.subs, units.map(([pi]) => pi)) : null;
     let defs = '';
     let body = '';
+    const annotations = [];
     units.forEach(([pi, mi], n) => {
       const t = P.tracePolygon(layout, traces.subs, pi, { member: mi, slots, fadeLabels: state.style.labelPosition !== 'above' });
+      annotations.push({ path: pi, member: mi, weight: unitWeight([pi, mi]), geometry: t });
       const xs = t.polygon.map((p) => p[0]);
       const x0 = Math.min(...xs);
       const x1 = Math.max(...xs);
@@ -1188,7 +1204,67 @@
       body += `<path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})"/>` +
         `<path class="trace-edge" d="${line(t.upper)}${line(t.lower)}" fill="none" stroke="url(#trace-edge${n})" stroke-width="0.6"/>`;
     });
-    return `<defs>${defs}</defs>${body}`;
+    return { paths: `<defs>${defs}</defs>${body}`, labels: traceLabelMarkup(annotations) };
+  }
+
+  function traceLabelMarkup(annotations) {
+    const { font, minFont, countGap, countSpacing } = TRACE_LABEL;
+    const f2 = (v) => Math.round(v * 100) / 100;
+    const sx = (X) => MARGIN + X;
+    const sy = (Y) => MARGIN + layout.view.height - Y;
+    const fontAttrs = `font-family="${R.FONT_FAMILY}" dominant-baseline="central"`;
+    const counts = new Map();
+    const occupied = [];
+    const textMeasure = R.makeMeasure({ fontSize: font });
+    let out = '';
+    annotations.forEach(({ path, member, weight, geometry }) => {
+      const attrs = `data-path="${path}" data-member="${member}"`;
+      if (state.style.tracePercents) geometry.labelAnchors.forEach((a) => {
+        const text = pct(weight, layout.flows[a.flow].value);
+        // Prefer the midpoint, moving along the slice only to reduce collisions at crossings.
+        const candidates = [a, ...a.alternatives].map((p) => {
+          const size = Math.max(minFont, Math.min(font, p.thickness * 0.85));
+          const w = textMeasure(text, size / font, 1).width + 3;
+          const h = size + 3;
+          const cos = Math.abs(Math.cos(p.angle));
+          const sin = Math.abs(Math.sin(p.angle));
+          return { p, size, x: sx(p.X), y: sy(p.Y), w: w * cos + h * sin, h: w * sin + h * cos };
+        });
+        const overlapArea = (a, b) => Math.max(0, Math.min(a.x + a.w / 2, b.x + b.w / 2) - Math.max(a.x - a.w / 2, b.x - b.w / 2)) *
+          Math.max(0, Math.min(a.y + a.h / 2, b.y + b.h / 2) - Math.max(a.y - a.h / 2, b.y - b.h / 2));
+        candidates.forEach((c) => { c.overlap = occupied.reduce((t, box) => t + overlapArea(c, box), 0); });
+        const placed = candidates.reduce((best, c) => (c.overlap < best.overlap ? c : best));
+        occupied.push(placed);
+        let angle = -placed.p.angle * 180 / Math.PI;
+        if (angle > 90) angle -= 180;
+        if (angle < -90) angle += 180;
+        out += `<text class="trace-percent" ${attrs} data-label-flow="${a.flow}" ` +
+          `transform="translate(${f2(placed.x)} ${f2(placed.y)}) rotate(${f2(angle)})" text-anchor="middle" ` +
+          `${fontAttrs} font-size="${f2(placed.size)}" fill="#FFFFFF" stroke="#1F2937" stroke-opacity="0.65" stroke-width="0.8" paint-order="stroke">${text}</text>`;
+      });
+      if (state.style.traceCounts) {
+        const a = geometry.countAnchor;
+        if (!counts.has(a.node)) counts.set(a.node, []);
+        counts.get(a.node).push({ attrs, weight, x: sx(a.X) + countGap, y: sy(a.Y), anchorY: sy(a.Y) });
+      }
+    });
+    counts.forEach((labels, node) => {
+      labels.sort((a, b) => a.y - b.y);
+      labels.forEach((a, i) => { if (i) a.y = Math.max(a.y, labels[i - 1].y + countSpacing); });
+      // Keep crowded endpoint counts readable, centered on their substrands and inside the canvas.
+      const first = labels[0];
+      const last = labels[labels.length - 1];
+      const centerShift = (first.y + last.y - first.anchorY - last.anchorY) / 2;
+      const shift = Math.max(last.y - (frame.height - MARGIN - font / 2), Math.min(centerShift, first.y - MARGIN - font / 2));
+      labels.forEach((a) => {
+        const y = a.y - shift;
+        if (Math.abs(y - a.anchorY) > 1) out += `<path class="trace-count-leader" d="M${f2(a.x - countGap)} ${f2(a.anchorY)}L${f2(a.x - 3)} ${f2(y)}" ` +
+          'fill="none" stroke="#64748B" stroke-width="0.6"/>';
+        out += `<text class="trace-count" ${a.attrs} data-label-node="${node}" x="${f2(a.x)}" y="${f2(y)}" ` +
+          `text-anchor="start" ${fontAttrs} font-size="${font}" fill="#1F2937">${fmtValue(a.weight)}</text>`;
+      });
+    });
+    return out;
   }
 
   // Elements to keep in focus. Traced pathways replace their strands with overlays, so only the
@@ -1438,8 +1514,11 @@
     const sets = highlightSets(active);
     const covered = coverage(active);
     svg.classList.toggle('dimmed', !!active);
+    const traced = active && active.paths && traces ? traceMarkup(active) : null;
     const traceLayer = svg.querySelector('.layer-traces');
-    if (traceLayer) traceLayer.innerHTML = active && active.paths && traces ? traceMarkup(active) : '';
+    if (traceLayer) traceLayer.innerHTML = traced ? traced.paths : '';
+    const traceLabels = svg.querySelector('.layer-trace-labels');
+    if (traceLabels) traceLabels.innerHTML = traced && !drag ? traced.labels : '';
     const fillLayer = svg.querySelector('.layer-fills');
     if (fillLayer) fillLayer.innerHTML = active && !drag ? fillMarkup(active) : '';
     svg.querySelectorAll('[data-flow]').forEach((el) => {
@@ -1969,7 +2048,7 @@
       if (cs.filter && cs.filter !== 'none') copies[i].setAttribute('filter', cs.filter.replace(/url\("?([^")]+)"?\)/, 'url($1)'));
     });
     clone.querySelectorAll('.layer-hits').forEach((el) => el.remove());
-    clone.querySelectorAll('.layer-traces, .layer-fills').forEach((el) => { if (!el.childElementCount) el.remove(); });
+    clone.querySelectorAll('.layer-traces, .layer-trace-labels, .layer-fills').forEach((el) => { if (!el.childElementCount) el.remove(); });
     clone.removeAttribute('class');
     clone.removeAttribute('id');
     clone.querySelectorAll('[class]').forEach((el) => {
@@ -2238,6 +2317,8 @@
     // Only known style keys are restored (renamed or retired ones are dropped); the rest take defaults.
     next.style = Object.assign({}, DEFAULT_STYLE);
     Object.keys(DEFAULT_STYLE).forEach((k) => { if (obj.style && k in obj.style) next.style[k] = obj.style[k]; });
+    // Older saved views have no room reserved for the newly enabled endpoint counts.
+    if (next.paths && next.style.tracePaths && (!obj.style || !('traceCounts' in obj.style))) next.view = null;
     state = next;
     selection = null;
     routeScope = 'all';

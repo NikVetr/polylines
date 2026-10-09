@@ -114,6 +114,28 @@
   const first = (pts) => pts[0];
   const last = (pts) => pts[pts.length - 1];
 
+  // Central label positions along a substrand, with local tangents and widths.
+  function labelAnchor(layout, f, a, b) {
+    const m = bandLength(layout, f);
+    const center = S.sliceByX(lerpEdge(f, (a + b) / 2), f.startX + f.dir * m, f.endX - f.dir * m);
+    const lengths = center.slice(1).map((p, i) => Math.hypot(p[0] - center[i][0], p[1] - center[i][1]));
+    const length = lengths.reduce((t, v) => t + v, 0);
+    const at = (fraction) => {
+      let remaining = length * fraction;
+      let i = 0;
+      while (i < lengths.length - 1 && remaining > lengths[i]) remaining -= lengths[i++];
+      const p = center[i];
+      const q = center[i + 1];
+      const t = lengths[i] > 0 ? remaining / lengths[i] : 0;
+      const X = p[0] + (q[0] - p[0]) * t;
+      const Y = p[1] + (q[1] - p[1]) * t;
+      const angle = Math.atan2(q[1] - p[1], q[0] - p[0]);
+      const width = Math.abs(SK.layout.pointAtX(f.upper, X)[1] - SK.layout.pointAtX(f.lower, X)[1]);
+      return { X, Y, angle, thickness: width * (b - a) * Math.abs(Math.cos(angle)) };
+    };
+    return Object.assign({ flow: f.index, length, alternatives: [0.4, 0.6, 0.3, 0.7].map(at) }, at(0.5));
+  }
+
   // How far a trace runs into an end node's body (to the centre of a fading label body), or null.
   function bodyReach(layout, n, side, fadeLabels) {
     const body = S.endpointBody(layout, n, side, 0);
@@ -231,12 +253,21 @@
     lower.unshift(...intoBody(first(lower), faceStart, reachStart, placeAt(from.id, 0)).reverse());
     upper.push(...intoBody(last(upper), faceEnd, reachEnd, placeAt(to.id, 1)));
     lower.push(...intoBody(last(lower), faceEnd, reachEnd, placeAt(to.id, 0)));
+    const rightmost = [from, ...ps.map((p) => layout.nodes[p.f.to])]
+      .reduce((a, b) => (a.X + a.widthPx / 2 >= b.X + b.widthPx / 2 ? a : b));
+    const rightX = rightmost.X + rightmost.widthPx / 2;
     return {
       upper,
       lower,
       polygon: upper.concat(lower.slice().reverse()),
       flows: ps.map((p) => p.f),
-      thickness: Math.min(...ps.map((p) => p.thickness))
+      thickness: Math.min(...ps.map((p) => p.thickness)),
+      labelAnchors: ps.map((p) => {
+        const [a, b] = sliceOf(subs, p.f.index, pi, member);
+        return labelAnchor(layout, p.f, a, b);
+      }),
+      countAnchor: { node: rightmost.id, X: rightX,
+        Y: (SK.layout.pointAtX(upper, rightX)[1] + SK.layout.pointAtX(lower, rightX)[1]) / 2 }
     };
   }
 
