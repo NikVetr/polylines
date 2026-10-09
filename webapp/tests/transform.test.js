@@ -7,6 +7,9 @@ const SK = require(js('layout.js'));
 require(js('color.js'));
 require(js('csv.js'));
 require(js('transform.js'));
+require(js('shapes.js'));
+require(js('render.js'));
+require(js('table-controls.js'));
 const T = SK.transform;
 
 const table = (text) => T.parseTable(text);
@@ -113,4 +116,61 @@ test('grouping into Other is rejected for graph-shaped links', () => {
   const t = table('source,target,value\nA,B,2\nB,C,2\nA,C,1\n');
   assert.throws(() => T.build(t, { format: 'links', source: 'source', target: 'target', value: 'value' }, { topN: 1 }),
     /needs layered stages/);
+});
+
+const cohort = table('patient_id,sex,TR00,TR01,TR02,n\nP1,Female,A,X,Z,8\nP2,Male,A,Y,Z,4\nP3,Female,B,Y,W,6\nP4,Male,B,X,W,2\nP5,Female,A,Y,Z,3\n');
+const cohortSpec = { format: 'wide', id: 'patient_id', columns: ['TR00', 'TR01', 'TR02'], weight: 'n' };
+
+test('row filters intersect source columns, retain literal blanks and reject empty subsets', () => {
+  assert.deepStrictEqual(T.filterTable(cohort, { sex: ['Female'], TR01: ['Y'] }).rows.map((r) => r[0]), ['P3', 'P5']);
+  const blanks = table('a,b\n,X\nNA,Y\nA,Z\n');
+  assert.deepStrictEqual(T.filterTable(blanks, { a: [''] }).rows, [['', 'X']]);
+  assert.throws(() => T.filterTable(cohort, { sex: [] }), /No rows match/);
+  assert.throws(() => T.filterTable(cohort, { sex: ['absent'] }), /absent from the source/);
+  assert.throws(() => T.filterTable(cohort, { sex: ['Female'], TR01: [] }), /No rows match/);
+  assert.strictEqual(cohort.rows.length, 5);
+});
+
+test('table controls rebuild filtered weighted trajectories after hiding and reordering columns', () => {
+  const C = SK.tableControls;
+  const initial = T.build(cohort, cohortSpec);
+  const source = C.create(initial.source, { name: 'cohort.csv', labels: 'above' });
+  assert.deepStrictEqual(source.order, ['TR00', 'TR01', 'TR02', 'sex']);
+  assert.deepStrictEqual(source.enabled, ['TR00', 'TR01', 'TR02']);
+  const changed = Object.assign({}, source, { order: ['TR02', 'TR00', 'TR01', 'sex'], enabled: ['TR00', 'TR02'], filters: { sex: ['Female'] } });
+  const { result, source: next } = C.build(changed);
+  assert.deepStrictEqual(result.setNames, ['TR02', 'TR00']);
+  assert.deepStrictEqual(result.matrices, [[[11, 0], [0, 6]]]);
+  assert.strictEqual(result.summary.total, 17);
+  assert.strictEqual(next.summary.rowsFiltered, 3);
+  assert.strictEqual(result.paths.length, 2);
+  assert.deepStrictEqual(result.paths[0].members.map((m) => m.id), ['P1', 'P5']);
+  assert.strictEqual(source.table.rows.length, 5);
+  assert.strictEqual(C.build(source).result.summary.total, 23);
+});
+
+test('long table stages can be disabled and reordered before checking complete trajectories', () => {
+  const t = table('id,visit,status,sex\nA,3,C,Female\nA,1,A,Female\nA,2,B,Female\nB,3,D,Male\nB,1,A,Male\nB,2,B,Male\nC,3,C,Female\nC,1,B,Female\n');
+  const spec = { format: 'long', id: 'id', stage: 'visit', category: 'status', stageOrder: 'appearance' };
+  assert.deepStrictEqual(T.diagramColumns(t, spec), ['3', '1', '2']);
+  const source = SK.tableControls.create(T.build(t, spec).source);
+  const next = Object.assign({}, source, { order: ['3', '1', '2'], enabled: ['3', '1'], filters: { sex: ['Female'] } });
+  const out = SK.tableControls.build(next);
+  assert.deepStrictEqual(out.result.setNames, ['visit 3', 'visit 1']);
+  assert.strictEqual(out.result.summary.total, 2);
+  assert.deepStrictEqual(out.result.matrices, [[[1, 1]]]);
+  assert.throws(() => T.build(t, Object.assign({}, spec, { stages: ['3', '3'] })), /only once/);
+  assert.throws(() => T.build(t, Object.assign({}, spec, { stages: ['3', 'absent'] })), /no rows after filtering/);
+  const duplicateUnused = { columns: t.columns, rows: t.rows.concat([['A', '2', 'unused', 'Female']]) };
+  assert.strictEqual(T.build(duplicateUnused, Object.assign({}, spec, { stages: ['3', '1'] })).summary.total, 3);
+});
+
+test('subset captions wrap long values, escape SVG markup and bold column names', () => {
+  const source = { filters: { 'sex & group': ['Female <1>', 'A'.repeat(140)] } };
+  const header = SK.tableControls.header(source, 200);
+  assert.ok(header.lines.length > 1);
+  assert.ok(header.markup.includes('font-weight="600">sex &amp; group'));
+  assert.ok(header.markup.includes('Female &lt;1&gt;'));
+  assert.strictEqual(header.lines.flat().map((p) => p.text).join(''), 'sex & group ∈ {Female <1>, ' + 'A'.repeat(140) + '}');
+  assert.strictEqual(SK.tableControls.header(null, 200).height, 0);
 });

@@ -34,6 +34,21 @@ const pathwayPoint = (page, weight = 41) => page.evaluate((w) => {
   return { x: box.left + 18 + X, y: box.top + box.height - 18 - Y, path: pi, flow: f.index };
 }, weight);
 
+const importCohortTable = async (page) => {
+  await page.locator('.topbar [data-open-import]').click();
+  await page.locator('#import-text').fill('patient_id,sex,TR00,TR01,TR02,n\nP1,Female,A,X,Z,8\nP2,Male,A,Y,Z,4\nP3,Female,B,Y,W,6\nP4,Male,B,X,W,2\nP5,Female,A,Y,Z,3\n');
+  await expect(page.locator('#import-format')).toHaveValue('wide');
+  await page.locator('#import-mapping [data-col="sex"]').uncheck();
+  await page.locator('#import-labels').selectOption('above');
+  await page.locator('#import-apply').click();
+};
+
+const keepOnly = async (page, column, value) => {
+  const details = page.locator(`[data-filter-column="${column}"]`);
+  if (!(await details.evaluate((el) => el.open))) await details.locator('summary').click();
+  await details.locator(`[data-only-value="${value}"]`).click();
+};
+
 test('renders the default example without errors', async ({ page }) => {
   await expect(page.locator('#plot .ribbon')).toHaveCount(14);
   await expect(page.locator('#plot .node-label')).toHaveCount(9);
@@ -319,6 +334,143 @@ test('the table importer builds a Sankey from a pasted wide table', async ({ pag
   await expect(page.locator('#hover-info')).toContainText('120 customers');
 });
 
+test('Data controls rebuild weighted flows from column order, visibility and row filters', async ({ page }) => {
+  await importCohortTable(page);
+  await expect(page.locator('#table-controls')).toBeVisible();
+  expect((await state(page)).sourceTable.table.rows).toHaveLength(5);
+  const scale = (await state(page)).valueScale;
+  await keepOnly(page, 'sex', 'Female');
+  let s = await state(page);
+  expect(s.sourceTable.summary.rowsFiltered).toBe(3);
+  expect(s.sourceTable.summary.total).toBe(17);
+  expect(s.valueScale).not.toBe(scale);
+  expect(s.paths.flatMap((p) => p.members.map((m) => m.id)).sort()).toEqual(['P1', 'P3', 'P5']);
+  await expect(page.locator('#plot .layer-subset')).toHaveText('sex ∈ {Female}');
+  await expect(page.locator('#plot .layer-subset [font-weight="600"]')).toHaveText('sex');
+  await page.locator('[data-enable-column="TR01"]').uncheck();
+  await page.locator('[data-table-column="TR02"] [data-dir="-1"]').click();
+  s = await state(page);
+  expect(s.setNames).toEqual(['TR02', 'TR00']);
+  expect(s.matrices).toEqual([[[11, 0], [0, 6]]]);
+  expect(s.paths).toHaveLength(2);
+  expect(s.sourceTable.table.rows).toHaveLength(5);
+  await expect(page.locator('[data-enable-column="TR02"]')).toBeDisabled();
+  await expect(page.locator('[data-enable-column="TR00"]')).toBeDisabled();
+  await expect(page.locator('[data-enable-column="TR01"]')).toBeEnabled();
+  await expect(page.locator('#banner')).toBeHidden();
+  const captionAbove = await page.evaluate(() => {
+    const caption = document.querySelector('#plot .layer-subset').getBBox();
+    return caption.y + caption.height < Math.min(...[...document.querySelectorAll('#plot .ribbon')].map((el) => el.getBBox().y));
+  });
+  expect(captionAbove).toBe(true);
+  const node = await nodeAt(page, 'Z');
+  await page.mouse.click(node.x, node.y);
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace-count')).toHaveText('11');
+  const files = await page.evaluate(() => window.SankeyApp.bundleFiles());
+  expect(files.find((f) => f.name === 'sankey.R').text).toContain('expression(paste(bold("sex")');
+  const project = JSON.parse(files.find((f) => f.name === 'project.json').text);
+  expect(project.sourceTable.filters).toEqual({ sex: ['Female'] });
+  expect(project.matrices).toEqual([[[11, 0], [0, 6]]]);
+  expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).toContain('class="layer-subset"');
+  await page.locator('[data-enable-column="TR01"]').check();
+  expect((await state(page)).setNames).toEqual(['TR02', 'TR01', 'TR00']);
+  await page.locator('[data-clear-filters]').click();
+  expect((await state(page)).sourceTable.summary.total).toBe(23);
+  await expect(page.locator('#plot .layer-subset')).toHaveCount(0);
+});
+
+test('multiple row filters intersect, preserve the original table and reject empty subsets atomically', async ({ page }) => {
+  await importCohortTable(page);
+  await keepOnly(page, 'sex', 'Female');
+  await keepOnly(page, 'TR00', 'B');
+  await page.mouse.move(5, 5);
+  const before = await state(page);
+  expect(before.sourceTable.summary.total).toBe(6);
+  const plot = await page.locator('#plot').innerHTML();
+  const exports = await page.evaluate(() => window.SankeyApp.bundleFiles());
+  await keepOnly(page, 'TR02', 'Z');
+  await expect(page.locator('#banner')).toContainText('No rows match these filters');
+  expect(await state(page)).toEqual(before);
+  expect(await page.locator('#plot').innerHTML()).toBe(plot);
+  expect(await page.evaluate(() => window.SankeyApp.bundleFiles())).toEqual(exports);
+  await expect(page.locator('#plot .layer-subset')).toHaveText('sex ∈ {Female}   ·   TR00 ∈ {B}');
+  await page.locator('[data-filter-column="TR00"] [data-keep-all]').click();
+  await expect(page.locator('#banner')).toBeHidden();
+  expect((await state(page)).sourceTable.summary.total).toBe(17);
+  await keepOnly(page, 'sex', 'Male');
+  expect((await state(page)).sourceTable.summary.total).toBe(6);
+  expect((await state(page)).sourceTable.table.rows).toHaveLength(5);
+});
+
+test('true long tables can reorder and skip stages before checking missing visits', async ({ page }) => {
+  await page.locator('.topbar [data-open-import]').click();
+  await page.locator('#import-text').fill('id,visit,status,sex\nA,1,A,Female\nA,2,B,Female\nA,3,C,Female\nB,1,A,Male\nB,2,B,Male\nB,3,D,Male\nC,1,B,Female\nC,3,C,Female\n');
+  await expect(page.locator('#import-format')).toHaveValue('long');
+  await page.locator('#import-apply').click();
+  await keepOnly(page, 'sex', 'Female');
+  expect((await state(page)).sourceTable.summary.total).toBe(1);
+  await page.locator('[data-enable-column="2"]').uncheck();
+  await page.locator('[data-table-column="3"] [data-dir="-1"]').click();
+  const s = await state(page);
+  expect(s.setNames).toEqual(['visit 3', 'visit 1']);
+  expect(s.sourceTable.summary.total).toBe(2);
+  expect(s.sourceTable.summary.rowsFiltered).toBe(5);
+  expect(s.matrices).toEqual([[[1, 1]]]);
+  expect(s.paths.flatMap((p) => p.members.map((m) => m.id))).toEqual(['A', 'C']);
+  await expect(page.locator('#plot .layer-subset')).toHaveText('sex ∈ {Female}');
+  await expect(page.locator('#banner')).toBeHidden();
+});
+
+test('table column choices and row filters survive history, autosave and project reloads', async ({ page }, testInfo) => {
+  await importCohortTable(page);
+  await page.locator('[data-enable-column="TR01"]').uncheck();
+  const unfiltered = await state(page);
+  await keepOnly(page, 'sex', 'Female');
+  const filtered = await state(page);
+  await page.keyboard.press('Control+z');
+  expect(await state(page)).toEqual(unfiltered);
+  await expect(page.locator('#plot .layer-subset')).toHaveCount(0);
+  await page.keyboard.press('Control+Shift+z');
+  expect(await state(page)).toEqual(filtered);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('polylines-sankey-v1'))?.sourceTable?.filters)).toEqual({ sex: ['Female'] });
+  const project = (await page.evaluate(() => window.SankeyApp.bundleFiles())).find((f) => f.name === 'project.json').text;
+  await page.reload();
+  await expect(page.locator('[data-enable-column="TR01"]')).not.toBeChecked();
+  await expect(page.locator('#plot .layer-subset')).toHaveText('sex ∈ {Female}');
+  await page.evaluate(() => window.SankeyApp.loadExample('labeled'));
+  const filename = testInfo.outputPath('filtered-project.json');
+  fs.writeFileSync(filename, project);
+  await page.setInputFiles('#file-input', filename);
+  await expect(page.locator('#table-controls')).toBeVisible();
+  await expect(page.locator('#plot .layer-subset')).toHaveText('sex ∈ {Female}');
+  await keepOnly(page, 'sex', 'Male');
+  expect((await state(page)).sourceTable.summary.total).toBe(6);
+});
+
+test('table diagrams grow their automatic canvas for many columns and categories', async ({ page }) => {
+  await page.evaluate(() => {
+    const T = window.SK.transform;
+    const cols = Array.from({ length: 10 }, (_, i) => `TR${String(i).padStart(2, '0')}`);
+    const rows = Array.from({ length: 15 }, (_, i) => `P${i},${cols.map(() => `Category ${i}`).join(',')}`);
+    const table = T.parseTable(`patient_id,${cols.join(',')}\n${rows.join('\n')}\n`);
+    window.SankeyApp.applyImport(T.build(table, { format: 'wide', id: 'patient_id', columns: cols }), { labels: 'above' });
+  });
+  const dimensions = await page.evaluate(() => {
+    const plot = document.querySelector('#plot');
+    const stage = document.querySelector('#stage').getBoundingClientRect();
+    return { width: Number(plot.getAttribute('width')), height: Number(plot.getAttribute('height')), stageWidth: stage.width, stageHeight: stage.height };
+  });
+  expect(dimensions.width).toBeGreaterThan(dimensions.stageWidth);
+  expect(dimensions.height).toBeGreaterThan(dimensions.stageHeight);
+  const overlap = await page.locator('#plot .node-label').evaluateAll((els) => {
+    const boxes = els.map((el) => el.getBoundingClientRect());
+    return boxes.some((a, i) => boxes.slice(i + 1).some((b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top));
+  });
+  expect(overlap).toBe(false);
+  await expect(page.locator('#banner')).toBeHidden();
+});
+
 test('opening a long table file starts the importer, which flags bad mappings', async ({ page }, testInfo) => {
   const file = testInfo.outputPath('visits.csv');
   fs.writeFileSync(file, 'patient,visit,status\nA,1,sick\nA,2,well\nB,1,sick\nB,2,sick\nC,1,well\nC,2,well\n');
@@ -534,10 +686,41 @@ test('hovering draws a bar under every node showing the share the selection fill
   expect(exported).not.toContain('layer-fills');
 });
 
+test('node share bars shrink with narrower nodes while keeping their text size and accurate proportions', async ({ page }) => {
+  await page.evaluate(() => {
+    const app = window.SankeyApp;
+    const scale = app.layout.tf.sx;
+    app.state.loc[0].width = 120 / scale;
+    app.state.loc[1].width = 200 / scale;
+    app.state.loc[2].width = 90 / scale;
+    app.update();
+  });
+  const p = await ribbonCenter(page, 0);
+  await page.mouse.move(p.x, p.y);
+  const sizes = await page.locator('#plot .node-fill').evaluateAll((els) => els.slice(0, 3).map((el) => {
+    const box = el.getBBox();
+    const n = window.SankeyApp.layout.nodes[Number(el.dataset.fill)];
+    const background = el.querySelector('g rect');
+    const solid = el.querySelector('.node-fill-solid');
+    return { nodeWidth: n.widthPx, barWidth: Number(background.getAttribute('width')), wholeWidth: box.width,
+      textSizes: [...el.querySelectorAll('text')].map((t) => t.getAttribute('font-size')),
+      ratio: solid ? Number(solid.getAttribute('width')) / Number(background.getAttribute('width')) : 0 };
+  }));
+  expect(sizes.map((s) => s.barWidth)).toEqual([40, 60, 10]);
+  expect(sizes.every((s) => s.wholeWidth <= s.nodeWidth)).toBe(true);
+  expect(sizes.every((s) => s.textSizes.every((size) => size === '10.5'))).toBe(true);
+  const fraction = await page.evaluate(() => {
+    const f = window.SankeyApp.layout.flows[0];
+    return f.value / window.SankeyApp.layout.nodes[f.from].outValue;
+  });
+  expect(sizes[0].ratio).toBeCloseTo(fraction, 2);
+});
+
 test('hovered substrands show endpoint counts and their share of each edge along its direction', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   await expect(page.locator('#ctl-traceCounts')).toBeChecked();
-  await expect(page.locator('#ctl-tracePercents')).toBeChecked();
+  await expect(page.locator('#ctl-tracePercents')).not.toBeChecked();
+  await page.locator('#ctl-tracePercents').check();
   const p = await pathwayPoint(page);
   await page.mouse.move(p.x, p.y);
   await expect(page.locator('#plot .trace-count')).toHaveCount(2);
@@ -581,6 +764,7 @@ test('hovered substrands show endpoint counts and their share of each edge along
 
 test('Shift-hover annotations use the patient slice count, and pools retain that slice', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  await page.locator('#ctl-tracePercents').check();
   const p = await pathwayPoint(page);
   await page.keyboard.down('Shift');
   await page.mouse.move(p.x, p.y);
@@ -600,6 +784,7 @@ test('Shift-hover annotations use the patient slice count, and pools retain that
 
 test('substrand label toggles work independently and persist across reloads', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  await page.locator('#ctl-tracePercents').check();
   const n = await nodeAt(page, 'Remission');
   await page.mouse.click(n.x, n.y);
   await page.mouse.move(5, 5);
@@ -624,7 +809,7 @@ test('substrand label toggles work independently and persist across reloads', as
   expect(project.style.tracePercents).toBe(false);
   await expect.poll(() => page.evaluate(() => {
     const style = JSON.parse(localStorage.getItem('polylines-sankey-v1'))?.style;
-    return style && [style.traceCounts, style.tracePercents];
+    return style && [style.traceCounts, Object.hasOwn(style, 'tracePercents')];
   })).toEqual([false, false]);
   await page.reload();
   await expect(page.locator('#ctl-traceCounts')).not.toBeChecked();
@@ -664,7 +849,7 @@ test('crowded endpoint counts spread apart and follow gathered traces', async ({
   distance.forEach((d) => expect(d).toBeCloseTo(9, 1));
 });
 
-test('older saved sessions enable substrand labels and fit space for counts', async ({ page }) => {
+test('older saved sessions enable counts, default percentages off and fit space for counts', async ({ page }) => {
   await page.evaluate(() => {
     window.SankeyApp.loadExample('pathways');
     const app = window.SankeyApp;
@@ -675,7 +860,7 @@ test('older saved sessions enable substrand labels and fit space for counts', as
   });
   await page.reload();
   await expect(page.locator('#ctl-traceCounts')).toBeChecked();
-  await expect(page.locator('#ctl-tracePercents')).toBeChecked();
+  await expect(page.locator('#ctl-tracePercents')).not.toBeChecked();
   const p = await pathwayPoint(page);
   await page.mouse.move(p.x, p.y);
   await expect(page.locator('#plot .trace-count')).toHaveCount(2);

@@ -144,6 +144,34 @@
     return unique;
   }
 
+  function columnValues(table, column) {
+    const j = colIndex(table, column, 'filter');
+    return [...new Set(table.rows.map((r) => r[j]))].sort(natural);
+  }
+
+  function filterTable(table, filters) {
+    const conditions = Object.entries(filters || {}).map(([name, kept]) => {
+      const j = colIndex(table, name, 'filter');
+      if (!Array.isArray(kept)) fail(`The filter for "${name}" needs a list of values.`);
+      const available = new Set(columnValues(table, name));
+      if (kept.some((v) => !available.has(v))) fail(`The filter for "${name}" contains a value absent from the source table.`);
+      return { j, kept: new Set(kept) };
+    });
+    const rows = table.rows.filter((r) => conditions.every(({ j, kept }) => kept.has(r[j])));
+    if (!rows.length) fail('No rows match these filters. Keep at least one matching value.');
+    return { columns: table.columns, rows };
+  }
+
+  function diagramColumns(table, spec) {
+    if (spec.format === 'wide') return table.columns.filter((c) => c !== spec.id && c !== spec.weight);
+    if (spec.format === 'long') {
+      const j = colIndex(table, spec.stage, 'stage');
+      const id = colIndex(table, spec.id, 'item id');
+      return stageOrder(table.rows.filter((r) => !isNA(r[j]) && !isNA(r[id])).map((r) => r[j]), spec.stageOrder);
+    }
+    fail('Diagram column controls require a wide or long table.');
+  }
+
   // Wide: one row per item (or per item group, with a weight), one column per stage.
   function fromWide(table, spec) {
     const columns = spec.columns || [];
@@ -213,6 +241,7 @@
     const items = new Map();
     let dropped = 0;
     table.rows.forEach((r, i) => {
+      if (spec.stages && !spec.stages.includes(r[iStage])) return;
       if (isNA(r[iId]) || isNA(r[iStage])) {
         dropped++;
         return;
@@ -226,8 +255,11 @@
       item.weight = v;
     });
     if (!items.size) fail('No rows have both an item id and a stage.');
-    const stages = stageOrder(table.rows.filter((r) => !isNA(r[iId]) && !isNA(r[iStage])).map((r) => r[iStage]), spec.stageOrder);
+    const available = stageOrder(table.rows.filter((r) => !isNA(r[iId]) && !isNA(r[iStage])).map((r) => r[iStage]), spec.stageOrder);
+    const stages = spec.stages || available;
     if (stages.length < 2) fail('The stage column needs at least two distinct stages.');
+    if (new Set(stages).size !== stages.length) fail('Each diagram stage must appear only once.');
+    if (stages.some((s) => !available.includes(s))) fail('A selected stage has no rows after filtering.');
     const wide = {
       columns: ['\u0001id'].concat(stages, w >= 0 ? ['\u0001weight'] : []),
       rows: [...items].map(([id, item]) => [id].concat(stages.map((s) => (item.cats.has(s) ? item.cats.get(s) : '')),
@@ -479,9 +511,11 @@
       ? [{ rows: result.nodes, cols: result.nodes }]
       : result.matrices.map((_, k) => ({ rows: result.sets[k], cols: result.sets[k + 1] }));
     result.summary = summarize(result);
+    if (spec.format === 'wide' || spec.format === 'long') result.source = { table, spec, options: options || {} };
     return result;
   }
 
-  SK.transform = { FORMATS, MISSING, parseTable, columnInfo, guess, looksLikeDataTable, build, postProcess };
+  SK.transform = { FORMATS, MISSING, parseTable, columnInfo, guess, looksLikeDataTable, build, postProcess,
+    columnValues, filterTable, diagramColumns };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

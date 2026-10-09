@@ -38,7 +38,7 @@
     collision: 'wall',
     tracePaths: true,
     traceCounts: true,
-    tracePercents: true,
+    tracePercents: false,
     gatherInNodes: false,
     substrands: false
   };
@@ -87,6 +87,7 @@
       paths: null,
       pathUnit: null,
       setNames: [],
+      sourceTable: null,
       view: null
     };
   }
@@ -206,30 +207,45 @@
     };
   }
 
-  function computeFrame() {
+  function computeFrame(data = state) {
     const box = stageEl.getBoundingClientRect();
-    const width = state.style.canvasWidth || Math.max(320, Math.floor(box.width));
-    const height = state.style.canvasHeight || Math.max(240, Math.floor(box.height));
-    frame = { width, height, margin: { left: MARGIN, top: MARGIN, right: MARGIN, bottom: MARGIN } };
-    svg.setAttribute('width', width);
-    svg.setAttribute('height', height);
-    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    let width = data.style.canvasWidth || Math.max(320, Math.floor(box.width));
+    let minHeight = 240;
+    if (data.sourceTable && data.matrices.length) {
+      const sets = nodeSets(data);
+      const longestLabel = Math.max(...sets.flat().map((n) => measure(data)(n.label, 1, 1).width));
+      if (!data.style.canvasWidth) width = Math.max(width, Math.ceil((sets.length - 1) * Math.max(160, longestLabel + 50) + 2 * MARGIN));
+      // Allow scrolling when many categories need more room than the viewport can give them.
+      minHeight = Math.max(minHeight, Math.ceil((Math.max(...sets.map((g) => g.length)) - 1) *
+        (data.style.fontSize * 1.5 + FILL_BAR.height + FILL_BAR.gap + 4) / (1 - STACK_FILL) + 2 * MARGIN));
+    }
+    const subset = window.SK.tableControls.header(data.sourceTable, width - 2 * MARGIN);
+    const height = data.style.canvasHeight || Math.max(minHeight + subset.height, Math.floor(box.height));
+    frame = { width, height, subset, margin: { left: MARGIN, top: MARGIN + subset.height, right: MARGIN, bottom: MARGIN } };
+    if (data === state) {
+      svg.setAttribute('width', width);
+      svg.setAttribute('height', height);
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    }
   }
 
-  const viewFor = (v) => ({ xlim: v.xlim, ylim: v.ylim, width: frame.width - 2 * MARGIN, height: frame.height - 2 * MARGIN });
-  const measure = () => R.makeMeasure(state.style);
+  const viewFor = (v) => ({ xlim: v.xlim, ylim: v.ylim, width: frame.width - 2 * MARGIN, height: frame.height - frame.margin.top - MARGIN });
+  const measure = (data = state) => R.makeMeasure(data.style);
 
   // Labels drawn outside node bodies, in plot pixels, for view fitting.
-  function labelBoxes(lay) {
+  function labelBoxes(lay, data = state) {
     const out = [];
-    const m = measure();
+    const m = measure(data);
     lay.nodes.forEach((n) => {
-      const text = n.hasLabel ? n.label : (state.style.showIndices ? String(n.node) : '');
-      if (!state.style.labels || !text) return;
+      const bar = fillBarBox(lay, n);
+      out.push([bar.x0 - FILL_BAR.labelGap - FILL_BAR.labelWidth, bar.Y - FILL_BAR.height],
+        [bar.x0 + bar.width + FILL_BAR.labelGap + FILL_BAR.labelWidth, bar.Y]);
+      const text = n.hasLabel ? n.label : (data.style.showIndices ? String(n.node) : '');
+      if (!data.style.labels || !text) return;
       const size = m(text, n.cex, n.font);
       const role = S.nodeRole(n);
-      if (state.style.labelPosition === 'above') {
-        const pos = R.labelPlacement(n, state.style, state.style.fontSize * n.cex);
+      if (data.style.labelPosition === 'above') {
+        const pos = R.labelPlacement(n, data.style, data.style.fontSize * n.cex);
         out.push([pos.X - size.width / 2, pos.Y + size.height], [pos.X + size.width / 2, pos.Y + size.height]);
       } else if (n.hasLabel && n.widthPx > 0) {
         out.push([n.X - size.width / 2, n.Y], [n.X + size.width / 2, n.Y]);
@@ -257,9 +273,9 @@
       ylim: [Math.min(...ys) - 0.15 * spanY, Math.max(...ys) + 0.15 * spanY]
     };
     for (let pass = 0; pass < 4; pass++) {
-      const lay = L.computeLayout(model(data), viewFor(view), { measure: measure() });
+      const lay = L.computeLayout(model(data), viewFor(view), { measure: measure(data) });
       const box = S.geometryBounds(lay);
-      labelBoxes(lay).forEach((p) => {
+      labelBoxes(lay, data).forEach((p) => {
         box.x0 = Math.min(box.x0, p[0]);
         box.x1 = Math.max(box.x1, p[0]);
         box.y0 = Math.min(box.y0, p[1]);
@@ -307,6 +323,7 @@
         }
         const extras = { substrandLines: subs && state.style.substrands ? P.boundaryLines(layout, subs) : null };
         svg.innerHTML = R.render(layout, colors, state.style, frame, extras);
+        svg.insertAdjacentHTML('beforeend', frame.subset.markup);
         svg.classList.remove('stale');
         showError(null);
         showWarnings(warnings);
@@ -689,8 +706,8 @@
 
   function fileList(el, names, onMove, onRemove) {
     el.innerHTML = names.map((name, i) => `<li><span title="${esc(name)}">${esc(name)}</span>` +
-      `<button data-move="${i}" data-dir="-1" title="Move up"${i === 0 ? ' disabled' : ''}>↑</button>` +
-      `<button data-move="${i}" data-dir="1" title="Move down"${i === names.length - 1 ? ' disabled' : ''}>↓</button>` +
+      (onMove ? `<button data-move="${i}" data-dir="-1" title="Move up"${i === 0 ? ' disabled' : ''}>↑</button>` +
+      `<button data-move="${i}" data-dir="1" title="Move down"${i === names.length - 1 ? ' disabled' : ''}>↓</button>` : '') +
       (onRemove ? `<button data-remove="${i}" title="Remove">×</button>` : '') + '</li>').join('');
     el.querySelectorAll('[data-move]').forEach((b) => b.addEventListener('click', () => {
       onMove(Number(b.dataset.move), Number(b.dataset.dir));
@@ -711,13 +728,14 @@
 
   function refreshDataPanel() {
     $('#mode-select').value = state.mode;
-    fileList($('#stage-list'), state.stageNames, (i, d) => {
+    window.SK.tableControls.render($('#table-controls'), state.sourceTable, rebuildTable);
+    fileList($('#stage-list'), state.stageNames, state.sourceTable ? null : (i, d) => {
       if (i + d < 0 || i + d >= state.matrices.length) return;
       stageArrays().forEach((arr) => { [arr[i], arr[i + d]] = [arr[i + d], arr[i]]; });
       state.paths = null;
       clearKeyedEdits();
       update({ fit: true, commit: true });
-    }, (i) => {
+    }, state.sourceTable ? null : (i) => {
       stageArrays().forEach((arr) => { if (i < arr.length) arr.splice(i, 1); });
       state.paths = null;
       if (state.colorMatrices && !state.colorMatrices.some(Boolean)) {
@@ -861,6 +879,7 @@
       next.valueScale = 1;
       next.trustedNames = false;
       next.paths = null;
+      next.sourceTable = null;
     }
     if (loc) {
       next.loc = loc;
@@ -916,7 +935,7 @@
         notices.push('Generated node locations because no matching loc file was loaded.');
       }
     }
-    computeFrame();
+    computeFrame(next);
     next.view = next.matrices.length && next.loc.length ? fitView(next) : null;
     if (next.view) {
       const lay = L.computeLayout(model(next), viewFor(next.view), { measure: measure() });
@@ -937,6 +956,7 @@
     try {
       if (applyFiles(await readFiles(fileList), role)) update({ fit: true, commit: true });
     } catch (err) {
+      computeFrame();
       showError(err.message);
       if (!(err instanceof L.SankeyError)) console.error(err);
     }
@@ -1017,11 +1037,11 @@
   const X_PAD = 1.15;
 
   // Value scale giving unit spacing between auto-layout columns (so loc x is 0, 1, 2, ...).
-  function autoValueScale() {
-    const sets = nodeSets();
-    computeFrame();
+  function autoValueScale(data = state) {
+    const sets = nodeSets(data);
+    computeFrame(data);
     const W = frame.width - 2 * MARGIN;
-    const H = frame.height - 2 * MARGIN;
+    const H = frame.height - frame.margin.top - MARGIN;
     const K = Math.max(sets.length - 1, 1);
     const tallest = Math.max(...sets.map((g) => g.reduce((s, n) => s + n.height, 0)));
     if (!(tallest > 0)) throw new L.SankeyError('The flow matrices contain no positive values.');
@@ -1046,7 +1066,7 @@
   function restackColumn(set) {
     const sets = nodeSets();
     computeFrame();
-    const H = frame.height - 2 * MARGIN;
+    const H = frame.height - frame.margin.top - MARGIN;
     const tallest = Math.max(...sets.map((g) => g.reduce((s, n) => s + n.height * state.valueScale, 0)));
     const ys = stackColumn(sets[set - 1], STACK_FILL * H / tallest, H);
     state.loc.forEach((r) => { if (Number(r.set) === set) r.y = ys[Number(r.node) - 1]; });
@@ -1058,9 +1078,9 @@
   function autoLocate(options, data = state) {
     const labels = (options && options.labels) || 'inside';
     const sets = nodeSets(data);
-    computeFrame();
+    computeFrame(data);
     const W = frame.width - 2 * MARGIN;
-    const H = frame.height - 2 * MARGIN;
+    const H = frame.height - frame.margin.top - MARGIN;
     const K = Math.max(sets.length - 1, 1);
     const tallest = Math.max(...sets.map((g) => g.reduce((s, n) => s + n.height * data.valueScale, 0)));
     const spacing = tallest * W / (STACK_FILL * H * K * X_PAD);
@@ -1087,29 +1107,58 @@
     const opts = options || {};
     const style = Object.assign({}, state.style);
     if (style.colorBy === 'file') style.colorBy = 'source';
-    if (opts.labels) {
+    if (opts.labels && !opts.rebuild) {
       style.labelPosition = opts.labels === 'above' ? 'above' : 'auto';
       style.labelColorBy = opts.labels === 'above' ? 'node' : 'single';
     }
-    state = blankState();
-    state.style = style;
-    state.mode = result.mode;
-    state.matrices = result.matrices;
-    state.dimnames = result.dimnames;
-    state.stageNames = result.stageNames;
-    state.paths = result.paths || null;
-    state.pathUnit = result.unit || null;
-    state.setNames = result.setNames || [];
-    state.trustedNames = true;
-    state.valueScale = autoValueScale();
-    autoLocate({ labels: opts.labels });
-    Object.assign(state.params, opts.params || {});
-    state.locName = opts.name ? `built from ${opts.name}` : 'built from table';
-    if (opts.example) state.example = opts.example;
+    const next = blankState();
+    next.style = style;
+    next.mode = result.mode;
+    next.matrices = result.matrices;
+    next.dimnames = result.dimnames;
+    next.stageNames = result.stageNames;
+    next.paths = result.paths || null;
+    next.pathUnit = result.unit || null;
+    next.setNames = result.setNames || [];
+    next.trustedNames = true;
+    next.sourceTable = opts.sourceTable || (result.source ? window.SK.tableControls.create(result.source,
+      { name: opts.name || 'pasted table', labels: opts.labels || 'inside' }) : null);
+    if (next.sourceTable && !next.sourceTable.summary) next.sourceTable.summary = Object.assign({ rowsFiltered: next.sourceTable.table.rows.length, unit: result.unit }, result.summary);
+    Object.assign(next.params, opts.params || {});
+    const previousFrame = frame;
+    try {
+      next.valueScale = autoValueScale(next);
+      autoLocate({ labels: opts.labels }, next);
+      next.locName = opts.name ? `built from ${opts.name}` : 'built from table';
+      if (opts.example) next.example = opts.example;
+      next.view = fitView(next);
+      const candidate = L.computeLayout(model(next), viewFor(next.view), { measure: measure(next) });
+      R.resolveColors(candidate, colorData(next), next.style);
+    } catch (err) {
+      frame = previousFrame;
+      throw err;
+    }
+    state = next;
     selection = null;
     hover = null;
+    pool = new Map();
+    picked = new Set();
+    lastPointer = null;
     routeScope = 'all';
-    update({ fit: true, commit: true });
+    update({ commit: true });
+  }
+
+  function rebuildTable(source) {
+    try {
+      const built = window.SK.tableControls.build(source);
+      applyImport(built.result, { sourceTable: built.source, labels: source.labels, name: source.name,
+        params: state.params, rebuild: true });
+    } catch (err) {
+      computeFrame();
+      window.SK.tableControls.render($('#table-controls'), state.sourceTable, rebuildTable, true);
+      showError(err.message);
+      if (!(err instanceof L.SankeyError)) console.error(err);
+    }
   }
 
   // ---------- interaction ----------
@@ -1175,7 +1224,7 @@
   function traceMarkup(target) {
     const h = layout.view.height;
     const sx = (X) => Math.round((MARGIN + X) * 100) / 100;
-    const sy = (Y) => Math.round((MARGIN + h - Y) * 100) / 100;
+    const sy = (Y) => Math.round((frame.margin.top + h - Y) * 100) / 100;
     const line = (pts) => pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p[0])} ${sy(p[1])}`).join('');
     const stopTag = (offset, color, opacity) => `<stop offset="${(offset * 100).toFixed(2)}%" stop-color="${color}" stop-opacity="${opacity}"/>`;
     const units = unitsOf(target);
@@ -1211,7 +1260,7 @@
     const { font, minFont, countGap, countSpacing } = TRACE_LABEL;
     const f2 = (v) => Math.round(v * 100) / 100;
     const sx = (X) => MARGIN + X;
-    const sy = (Y) => MARGIN + layout.view.height - Y;
+    const sy = (Y) => frame.margin.top + layout.view.height - Y;
     const fontAttrs = `font-family="${R.FONT_FAMILY}" dominant-baseline="central"`;
     const counts = new Map();
     const occupied = [];
@@ -1475,7 +1524,17 @@
 
   // Under every node, a small bar: the share of the node the selection fills in the node's color
   // (none for nodes it misses), the rest in a faded node color, with both percentages beside it.
-  const FILL_BAR = { width: 60, height: 8, gap: 7, font: 10.5 };
+  const FILL_BAR = { width: 60, height: 8, gap: 7, font: 10.5, labelWidth: 36, labelGap: 4 };
+  function fillBarBox(lay, n) {
+    const width = n.widthPx > 0 ? Math.max(2, Math.min(FILL_BAR.width, n.widthPx - 2 * (FILL_BAR.labelWidth + FILL_BAR.labelGap))) : FILL_BAR.width;
+    const shape = S.nodeRole(n) === 'interior' ? S.interiorTrunk(lay, n) : null;
+    let bottom = shape ? L.pointAtX(shape.lower, n.X)[1] : n.Y - Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2;
+    const half = width / 2 + FILL_BAR.labelGap + FILL_BAR.labelWidth;
+    n.inFlows.concat(n.outFlows).forEach((k) => {
+      S.sliceByX(lay.flows[k].lower, n.X - half, n.X + half).forEach((p) => { bottom = Math.min(bottom, p[1]); });
+    });
+    return { width, x0: n.X - width / 2, Y: bottom - FILL_BAR.gap };
+  }
   function fillMarkup(target) {
     const h = layout.view.height;
     const f2 = (v) => Math.round(v * 100) / 100;
@@ -1490,9 +1549,11 @@
       // Both shares get one decimal when the smaller one is under 10%, so they add up to 100%.
       const digits = t > 0 && t < 1 && Math.min(t, 1 - t) < 0.0995 ? 1 : 0;
       const share = (x) => `${(100 * x).toFixed(digits)}%`;
-      const { width, height, gap, font } = FILL_BAR;
-      const x0 = MARGIN + n.X - width / 2;
-      const y0 = MARGIN + h - (n.Y - Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2) + gap;
+      const { height, font, labelGap } = FILL_BAR;
+      const bar = fillBarBox(layout, n);
+      const width = f2(bar.width);
+      const x0 = MARGIN + bar.x0;
+      const y0 = frame.margin.top + h - bar.Y;
       const node = C.opaque(colors.node[id]);
       const solid = C.paint(node).color;
       const faded = C.paint(C.flatten(C.withAlpha(node, 0.22), colors.flatBg)).color;
@@ -1503,8 +1564,8 @@
       out += `<g class="node-fill" data-fill="${id}"><clipPath id="fill-clip${id}">` +
         `<rect x="${f2(x0)}" y="${f2(y0)}" width="${width}" height="${height}" rx="2.5"/></clipPath>` +
         `<g clip-path="url(#fill-clip${id})"><rect x="${f2(x0)}" y="${f2(y0)}" width="${width}" height="${height}" fill="${faded}"/>` +
-        (t > 0 ? `<rect class="node-fill-solid" x="${f2(x0)}" y="${f2(y0)}" width="${f2(Math.max(width * t, 1))}" height="${height}" fill="${solid}"/>` : '') + '</g>' +
-        label(x0 - 4, 'end', share(t)) + label(x0 + width + 4, 'start', share(1 - t)) + '</g>';
+        (t > 0 ? `<rect class="node-fill-solid" x="${f2(x0)}" y="${f2(y0)}" width="${f2(width * t)}" height="${height}" fill="${solid}"/>` : '') + '</g>' +
+        label(x0 - labelGap, 'end', share(t)) + label(x0 + width + labelGap, 'start', share(1 - t)) + '</g>';
     });
     return out;
   }
@@ -2202,9 +2263,12 @@
       }
     }
     const plotW = frame.width - 2 * MARGIN;
-    const plotH = frame.height - 2 * MARGIN;
+    const plotH = layout.view.height;
+    const margins = frame.subset.height
+      ? `c(${[MARGIN, MARGIN, frame.margin.top, MARGIN].map((v) => round(v / 96, 4)).join(', ')})`
+      : `rep(${round(MARGIN / 96, 4)}, 4)`;
     lines.push('', `png("sankey.png", width = ${frame.width}, height = ${frame.height}, res = 96, bg = ${rString(C.toHex(colors.flatBg))})`,
-      `par(mai = rep(${round(MARGIN / 96, 4)}, 4), xpd = NA, ps = ${round(style.fontSize * 0.75, 4)})`,
+      `par(mai = ${margins}, xpd = NA, ps = ${round(style.fontSize * 0.75, 4)})`,
       'plot.new()',
       `plot.window(xlim = c(${state.view.xlim.map(rValue).join(', ')}), ylim = c(${state.view.ylim.map(rValue).join(', ')}), xaxs = "i", yaxs = "i")`);
     const args = [];
@@ -2264,6 +2328,11 @@
       }
     }
     if (style.showPoints) lines.push('points(sankey$nodes$x, sankey$nodes$y, pch = 21, bg = "white", lwd = 2)');
+    frame.subset.lines.forEach((line, i) => {
+      const text = line.map((part) => part.bold ? `bold(${rString(part.text)})` : rString(part.text)).join(', ');
+      const y = layout.tf.y(plotH + frame.margin.top - MARGIN - i * 17);
+      lines.push(`text(${rValue(state.view.xlim[0])}, ${rValue(y)}, expression(paste(${text})), adj = c(0, 0.5), cex = ${rValue(12 / style.fontSize)}, col = "#1F2937")`);
+    });
     lines.push('dev.off()');
     lines.push(`# Plot region: ${plotW} x ${plotH} px.`);
     return `${lines.join('\n')}\n`;
