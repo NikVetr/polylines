@@ -471,6 +471,32 @@ test('table diagrams grow their automatic canvas for many columns and categories
   await expect(page.locator('#banner')).toBeHidden();
 });
 
+test('automatic table layouts add room for constant-width turns and preserve it on reload', async ({ page }) => {
+  await page.evaluate(() => {
+    const T = window.SK.transform;
+    const table = T.parseTable('source,middle,target,n\nA,Middle,Low,10\nB,Middle,High,10\n');
+    window.SankeyApp.applyImport(T.build(table, { format: 'wide', columns: ['source', 'middle', 'target'], weight: 'n' }), { labels: 'above' });
+  });
+  const snapshot = () => page.evaluate(() => {
+    const app = window.SankeyApp;
+    return { width: Number(document.querySelector('#plot').getAttribute('width')), minWidth: app.state.sourceTable.minCanvasWidth,
+      loc: app.state.loc, widths: app.layout.flows.map(f => f.w) };
+  });
+  const before = await snapshot();
+  expect(before.minWidth).toBeGreaterThan(0);
+  expect(before.width).toBeGreaterThan(await page.locator('#stage').evaluate(el => el.clientWidth));
+  await page.evaluate(() => window.SankeyApp.update());
+  expect(await snapshot()).toEqual(before);
+  await page.waitForTimeout(700);
+  await page.reload();
+  expect(await snapshot()).toEqual(before);
+  const widthError = await page.evaluate(() => Math.max(...window.SankeyApp.layout.flows.flatMap(f => f.centerline.slice(1, -1).map((_, j) => {
+    const i = j + 1, a = f.centerline[i - 1], b = f.centerline[i + 1], dx = b[0] - a[0], dy = b[1] - a[1];
+    return Math.abs(Math.abs((f.upper[i][0] - f.lower[i][0]) * -dy + (f.upper[i][1] - f.lower[i][1]) * dx) / Math.hypot(dx, dy) / f.w - 1);
+  }))));
+  expect(widthError).toBeLessThan(0.001);
+});
+
 test('opening a long table file starts the importer, which flags bad mappings', async ({ page }, testInfo) => {
   const file = testInfo.outputPath('visits.csv');
   fs.writeFileSync(file, 'patient,visit,status\nA,1,sick\nA,2,well\nB,1,sick\nB,2,sick\nC,1,well\nC,2,well\n');
@@ -1012,6 +1038,9 @@ for (const interior of [false, true]) {
       const at = (points, x) => window.SK.layout.pointAtX(points, x)[1];
       const gap = [X, (at(fs[0].upper, X) + at(fs[1].lower, X)) / 2];
       const edge = [X, at(fs[1].upper, X)];
+      const slope = (at(fs[1].upper, X + 0.1) - at(fs[1].upper, X - 0.1)) / 0.2;
+      const normal = [-slope / Math.hypot(1, slope), 1 / Math.hypot(1, slope)];
+      const besideEdge = distance => [edge[0] + distance * normal[0], edge[1] + distance * normal[1]];
       const toScreen = ([x, y]) => [Math.round(18 + x), Math.round(882 - y)];
       const sample = async thinOutline => {
         app.state.style.thinOutline = thinOutline;
@@ -1026,7 +1055,7 @@ for (const interior of [false, true]) {
         URL.revokeObjectURL(url);
         const pixel = p => [...ctx.getImageData(...toScreen(p), 1, 1).data];
         const [x, y] = toScreen(edge);
-        return { gap: pixel(gap), inside: pixel([edge[0], edge[1] - 3]), outside: pixel([edge[0], edge[1] + 3]),
+        return { gap: pixel(gap), inside: pixel(besideEdge(-3)), outside: pixel(besideEdge(3)),
           border: [...ctx.getImageData(x - 1, y - 1, 3, 3).data] };
       };
       return { on: await sample(true), off: await sample(false), gapWidth: at(fs[1].lower, X) - at(fs[0].upper, X),

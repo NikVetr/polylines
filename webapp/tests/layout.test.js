@@ -140,3 +140,24 @@ test('bounded node adjustment matches the R regression cases', () => {
   assert.ok(close(SK.layout.adjustOneSet([0, 0.01, 0.5, 1], [0.1, 0.1, 0.1, 0.1], 0, true), [-0.045, 0.055, 0.5, 1]));
   assert.ok(close(SK.layout.adjustOneSet([0, 0.02, 0.2], [0.2, 0.2, 0.2], 0, false), [0, 0.1, 0.2]));
 });
+
+test('steep ribbons retain perpendicular thickness and horizontal face tangents', () => {
+  for (const dir of [-1, 1]) {
+    const layout = SK.layout.computeLayout({ mode: 'layered', matrices: [[[0.5, 0.15]]],
+      loc: [{ set: 1, node: 1, x: 0, y: 0.5, width: 0.4 },
+        { set: 2, node: 1, x: dir, y: 1.5, width: 0.1 }, { set: 2, node: 2, x: dir, y: -0.5, width: 0.1 }] }, unitView);
+    layout.flows.forEach(f => {
+      for (let i = 1; i < f.centerline.length - 1; i++) {
+        const p = f.centerline[i - 1], q = f.centerline[i + 1];
+        const dx = q[0] - p[0], dy = q[1] - p[1], length = Math.hypot(dx, dy);
+        const normalWidth = Math.abs((f.upper[i][0] - f.lower[i][0]) * -dy + (f.upper[i][1] - f.lower[i][1]) * dx) / length;
+        assert.ok(Math.abs(normalWidth / f.w - 1) < 0.001, 'width must be measured perpendicular to the curve');
+      }
+      for (const edge of [f.upper, f.lower]) {
+        for (const [a, b] of [[edge[0], edge[1]], [edge.at(-2), edge.at(-1)]]) {
+          assert.ok(Math.abs((b[1] - a[1]) / (b[0] - a[0])) < 0.025, 'face tangent must be nearly horizontal');
+        }
+      }
+    });
+  }
+});

@@ -20,7 +20,7 @@ function buildLayout(result, params = {}, nodeOptions = {}) {
     for (let k = 0; k < count; k++) loc.push(Object.assign({ set: s + 1, node: k + 1, x: s, y: 1 - (k + 0.5) / count }, nodeOptions));
   });
   return SK.layout.computeLayout(
-    { mode: 'layered', matrices: result.matrices, loc, params: Object.assign({ n: 30 }, params), valueScale: 0.004 },
+    { mode: 'layered', matrices: result.matrices, loc, paths: result.paths, params: Object.assign({ n: 30 }, params), valueScale: 0.004 },
     { xlim: [-0.2, counts.length - 0.8], ylim: [0, 1], width: 800, height: 500 }
   );
 }
@@ -239,17 +239,15 @@ test('member hit positions invert the drawn offset edges on steep strands', () =
   }
 });
 
-test('reordered pathways tile the node body and resolve at its top and bottom', () => {
+test('reordered pathways tile the weighted stack without expanding to the label body', () => {
   const r = T.build(T.parseTable(wide), { format: 'wide', columns: ['a', 'b', 'c'], weight: 'n' });
   const layout = buildLayout(r, {}, { width: 0.35, height: 0.4, label: 'Node' });
   const subs = SK.paths.substrands(layout, r.paths);
   layout.nodes.filter(n => n.set === 2).forEach(n => {
-    const shape = SK.shapes.interiorTrunk(layout, n);
     const paths = r.paths.map((p, pi) => p.nodes[1] === n.node - 1 ? pi : -1).filter(pi => pi >= 0);
-    for (const dx of [-0.2, 0, 0.2]) {
+    for (const dx of [-0.2, 0]) {
       const X = n.X + n.widthPx * dx;
-      const lo = SK.layout.pointAtX(shape.lower, X)[1];
-      const up = SK.layout.pointAtX(shape.upper, X)[1];
+      const lo = n.Y - n.inPx / 2, up = n.Y + n.inPx / 2;
       const spans = paths.map(pi => {
         const trace = SK.paths.tracePolygon(layout, subs, pi);
         return [SK.layout.pointAtX(trace.lower, X)[1], SK.layout.pointAtX(trace.upper, X)[1]];
@@ -297,6 +295,37 @@ test('node traces follow their exact weighted slices through incoming and outgoi
         });
       }
     });
+  }
+});
+
+test('node turns preserve path and member widths instead of stretching to expanded label bodies', () => {
+  const tables = [
+    ['id,a,b,c,n\nP1,A,X,P,4\nP2,A,X,P,6\nP3,A,X,Q,5\nP4,B,X,Q,7\n', 0.35],
+    ['id,a,b,c,n\n' + ['A', 'B', 'C', 'D'].flatMap(a => ['P', 'Q', 'R', 'S'].map(c => `${a}${c},${a},X,${c},1`)).join('\n'), 0.01]
+  ];
+  for (const [csv, nodeWidth] of tables) {
+    const r = T.build(T.parseTable(csv), { format: 'wide', id: 'id', columns: ['a', 'b', 'c'], weight: 'n' });
+    const layout = buildLayout(r, {}, { width: nodeWidth, height: 0.8, label: 'Node' });
+    const subs = SK.paths.substrands(layout, r.paths);
+    r.paths.forEach((p, pi) => SK.paths.tracePolygon(layout, subs, pi));
+    for (const [key, ribbon] of subs.nodeRibbons) {
+      const pi = Number(key.split(':')[1]), p = r.paths[pi];
+      const width = p.weight * layout.valueScale * layout.tf.sx;
+      const mid = ribbon.lower.map((lo, i) => [(lo[0] + ribbon.upper[i][0]) / 2, (lo[1] + ribbon.upper[i][1]) / 2]);
+      mid.slice(1, -1).forEach((_, j) => {
+        const i = j + 1, dx = mid[i + 1][0] - mid[i - 1][0], dy = mid[i + 1][1] - mid[i - 1][1];
+        const normal = Math.abs((ribbon.upper[i][0] - ribbon.lower[i][0]) * -dy + (ribbon.upper[i][1] - ribbon.lower[i][1]) * dx) / Math.hypot(dx, dy);
+        assert.ok(Math.abs(normal / width - 1) < 0.001);
+        p.members.forEach((member, mi) => {
+          assert.ok(Math.abs(normal * (subs.memberCuts[pi][mi + 1] - subs.memberCuts[pi][mi]) - member.weight * layout.valueScale * layout.tf.sx) < width * 0.001);
+        });
+      });
+      for (const edge of [ribbon.lower, ribbon.upper]) {
+        for (const [a, b] of [[edge[0], edge[1]], [edge.at(-2), edge.at(-1)]]) {
+          assert.ok(Math.abs((b[1] - a[1]) / (b[0] - a[0])) < 0.025);
+        }
+      }
+    }
   }
 });
 

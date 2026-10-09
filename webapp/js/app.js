@@ -185,7 +185,8 @@
       params: modelParams(data),
       stageParams: data.stageParams,
       manualOrder: data.manualOrder,
-      valueScale: data.valueScale
+      valueScale: data.valueScale,
+      paths: data.paths
     };
   }
 
@@ -217,7 +218,8 @@
     if (data.sourceTable && data.matrices.length) {
       const sets = nodeSets(data);
       const longestLabel = Math.max(...sets.flat().map((n) => measure(data)(n.label, 1, 1).width));
-      if (!data.style.canvasWidth) width = Math.max(width, Math.ceil((sets.length - 1) * Math.max(160, longestLabel + 50) + 2 * MARGIN));
+      if (!data.style.canvasWidth) width = Math.max(width, data.sourceTable.minCanvasWidth || 0,
+        Math.ceil((sets.length - 1) * Math.max(160, longestLabel + 50) + 2 * MARGIN));
       // Allow scrolling when many categories need more room than the viewport can give them.
       minHeight = Math.max(minHeight, Math.ceil((Math.max(...sets.map((g) => g.length)) - 1) *
         (data.style.fontSize * 1.5 + FILL_BAR.height + FILL_BAR.gap + 4) / (1 - STACK_FILL) + 2 * MARGIN));
@@ -234,6 +236,24 @@
 
   const viewFor = (v) => ({ xlim: v.xlim, ylim: v.ylim, width: frame.width - 2 * MARGIN, height: frame.height - frame.margin.top - MARGIN });
   const measure = (data = state) => R.makeMeasure(data.style);
+
+  function computeLayout(data, view) {
+    for (let pass = 0; pass <= data.matrices.length * 2; pass++) {
+      try { return L.computeLayout(model(data), viewFor(view), { measure: measure(data) }); }
+      catch (err) {
+        if (!err.requiredRun || !err.flow || !data.sourceTable || data.style.canvasWidth || err.flow.dir < 0) throw err;
+        const f = err.flow;
+        const sx = (frame.width - 2 * MARGIN) / (view.xlim[1] - view.xlim[0]);
+        const extra = (err.requiredRun - f.dir * (f.endX - f.startX)) / sx;
+        if (!(extra > 0)) throw err;
+        data.loc.filter(n => n.set >= f.stage + 2).forEach(n => { n.x += extra; });
+        view.xlim[1] += extra;
+        frame.width += Math.ceil(extra * sx);
+        data.sourceTable.minCanvasWidth = frame.width;
+      }
+    }
+    throw new L.SankeyError('Could not find enough column spacing for constant-width ribbons. Increase column spacing or reduce the value scale.');
+  }
 
   function scalePresentation() {
     const { mode, zoom } = state.presentation;
@@ -303,7 +323,7 @@
       ylim: [Math.min(...ys) - 0.15 * spanY, Math.max(...ys) + 0.15 * spanY]
     };
     for (let pass = 0; pass < 4; pass++) {
-      const lay = L.computeLayout(model(data), viewFor(view), { measure: measure(data) });
+      const lay = computeLayout(data, view);
       const box = S.geometryBounds(lay);
       labelBoxes(lay, data).forEach((p) => {
         box.x0 = Math.min(box.x0, p[0]);
@@ -340,7 +360,7 @@
         showError(state.matrices.length ? 'Load node locations (loc) or use "Auto-layout nodes".' : '');
       } else {
         if (opts.fit || !state.view) state.view = fitView();
-        layout = L.computeLayout(model(), viewFor(state.view), { measure: measure() });
+        layout = computeLayout(state, state.view);
         colors = R.resolveColors(layout, colorData(), state.style);
         const warnings = layout.warnings.slice();
         traces = null;
@@ -352,6 +372,9 @@
           warnings.push('The pathway data no longer matches the flow values, so pathway tracing is off.');
         }
         const extras = { substrandLines: subs && state.style.substrands ? P.boundaryLines(layout, subs) : null };
+        svg.setAttribute('width', frame.width);
+        svg.setAttribute('height', frame.height);
+        svg.setAttribute('viewBox', `0 0 ${frame.width} ${frame.height}`);
         svg.innerHTML = R.render(layout, colors, state.style, frame, extras);
         svg.insertAdjacentHTML('beforeend', frame.subset.markup);
         svg.classList.remove('stale');
@@ -1162,6 +1185,7 @@
     next.trustedNames = true;
     next.sourceTable = opts.sourceTable || (result.source ? window.SK.tableControls.create(result.source,
       { name: opts.name || 'pasted table', labels: opts.labels || 'inside' }) : null);
+    if (next.sourceTable) next.sourceTable = Object.assign({}, next.sourceTable, { minCanvasWidth: 0 });
     if (next.sourceTable && !next.sourceTable.summary) next.sourceTable.summary = Object.assign({ rowsFiltered: next.sourceTable.table.rows.length, unit: result.unit }, result.summary);
     Object.assign(next.params, opts.params || {});
     const previousFrame = frame;
@@ -2219,9 +2243,9 @@
       const key = `${r.set}:${r.node}`;
       const node = layout && layout.nodes[id];
       const line = [r.set, r.node, csvNumber(r.x), csvNumber(r.y)];
-      if (anyWidth) line.push(Number.isFinite(r.width) ? csvNumber(r.width) : csvNumber(node ? node.widthPx / layout.tf.sx : 0));
+      if (anyWidth) line.push(csvNumber(node ? node.widthPx / layout.tf.sx : r.width));
       if (anyLabel) line.push(r.label || '', csvNumber(r.cex) || 1, r.font || 1);
-      if (anyHeight) line.push(csvNumber(r.height));
+      if (anyHeight) line.push(csvNumber(node && node.bodyHeightPx ? node.bodyHeightPx / layout.tf.sy : r.height));
       if (anyColor) line.push(state.nodeColors[key] || r.color || null);
       if (anyMerge) line.push(state.mergeColors[key] || r.merge_col || null);
       out.push(line);
@@ -2293,6 +2317,9 @@
       ...(scaled ? [`value_scale <- ${rValue(state.valueScale)}  # strand thickness (x units) per unit of value`] : []),
       `thic <- ${readThic}`,
       'loc <- read.csv("loc.csv", stringsAsFactors = FALSE)',
+      ...(layout.nodes.some(n => n.labelOutside) ? [
+        `loc$label[c(${layout.nodes.filter(n => n.labelOutside).map(n => n.id + 1).join(', ')})] <- NA  # labels outside bodies are drawn separately`
+      ] : []),
       // Labels inside nodes fade their bodies in R too, so labels drawn above are dropped from loc
       // (and drawn separately below), keeping the label-derived widths measured here.
       ...(style.labelPosition === 'above' ? [

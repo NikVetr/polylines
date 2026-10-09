@@ -1706,6 +1706,56 @@ boundary_transport_geometry <- function(sankey, n, xyr,
   list(ribbons = ribbons, centerlines = centerlines, edges = edges)
 }
 
+rounded_sankey_ribbon <- function(a, b, width, n = 40, curvature = 0.45, xyr = 1) {
+  a <- a * c(1, xyr)
+  b <- b * c(1, xyr)
+  direction <- sign(b[1] - a[1])
+  rise <- if(b[2] < a[2]) -1 else 1
+  dx <- abs(b[1] - a[1])
+  dy <- abs(b[2] - a[2])
+  if(dx <= 0) stop("Constant-width routing needs horizontal space between its endpoints.", call. = FALSE)
+  max_radius <- if(dy <= dx) (dx^2 + dy^2) / (4 * max(dy, 1e-12)) else dx / 2
+  if(max_radius <= width * 0.55) {
+    stop("A bend is too tight for constant-width ribbons. Increase horizontal node spacing or reduce flow widths.", call. = FALSE)
+  }
+  if(dy < 1e-10) {
+    points <- rbind(a, b)
+    normals <- cbind(c(0, 0), c(1, 1))
+  } else {
+    radius <- if(dy <= dx) max_radius else min(dx * 0.49, max(width * 0.55, curvature * dx))
+    if(dy <= dx) {
+      angle <- 2 * atan2(dy, dx)
+    } else {
+      lo <- 0
+      hi <- pi / 2
+      for(i in seq_len(48)) {
+        mid <- (lo + hi) / 2
+        if(dy * cos(mid) - dx * sin(mid) + 2 * radius * (1 - cos(mid)) > 0) lo <- mid else hi <- mid
+      }
+      angle <- (lo + hi) / 2
+    }
+    count <- max(16, ceiling(n / 2), ceiling(angle / 0.04) + 1)
+    t <- seq(0, angle, length.out = count)
+    back <- rev(t)
+    if(dy <= dx) back <- back[-1]
+    x <- c(radius * sin(t), dx - radius * sin(back))
+    y <- c(radius * (1 - cos(t)), dy - radius * (1 - cos(back)))
+    tangent <- c(t, back)
+    points <- cbind(a[1] + direction * x, a[2] + rise * y)
+    normals <- cbind(-direction * rise * sin(tangent), cos(tangent))
+  }
+  upper <- points + normals * width / 2
+  lower <- points - normals * width / 2
+  as_data <- function(points) {
+    points[, 2] <- points[, 2] / xyr
+    colnames(points) <- c("x", "y")
+    points
+  }
+  list(centerline = as_data(points), edges = if(direction > 0) {
+    list(left = as_data(upper), right = as_data(lower))
+  } else list(left = as_data(lower), right = as_data(upper)))
+}
+
 bezier_sankey_geometry <- function(sankey, n, curvature, xyr) {
   flows <- sankey$flows
   ribbons <- vector("list", nrow(flows))
@@ -1732,24 +1782,16 @@ bezier_sankey_geometry <- function(sankey, n, curvature, xyr) {
       centerline[, "x"], centerline[, "y"], flow$width, xyr = xyr,
       endpoint_normals = "vertical"
     )
+    direction <- sign(dx)
+    if(any(direction * diff(edges[[k]]$left[, "x"]) < -1e-7) ||
+       any(direction * diff(edges[[k]]$right[, "x"]) < -1e-7)) {
+      rounded <- rounded_sankey_ribbon(p0, p3, flow$width, n, curvature, xyr)
+      centerlines[[k]] <- rounded$centerline
+      edges[[k]] <- rounded$edges
+    }
     ribbons[[k]] <- edges_to_ribbon(edges[[k]])
   }
 
-  # Normal offsets wider than a bend's radius fold back into the node. Keep
-  # neighboring joins consistent by using vertical Bezier boundaries in this stage.
-  folded <- any(vapply(seq_along(edges), function(k) {
-    direction <- sign(flows$end_x[k] - flows$start_x[k])
-    any(direction * diff(edges[[k]]$left[, "x"]) < -1e-7) ||
-      any(direction * diff(edges[[k]]$right[, "x"]) < -1e-7)
-  }, logical(1)))
-  if(folded) {
-    for(k in seq_along(edges)) {
-      direction <- sign(flows$end_x[k] - flows$start_x[k])
-      offset <- cbind(0, rep(direction * flows$width[k] / (2 * xyr), n))
-      edges[[k]] <- list(left = centerlines[[k]] + offset, right = centerlines[[k]] - offset)
-      ribbons[[k]] <- edges_to_ribbon(edges[[k]])
-    }
-  }
 
   names(ribbons) <- sprintf("from_%s_to_%s", flows$from, flows$to)
   list(ribbons = ribbons, centerlines = centerlines, edges = edges)

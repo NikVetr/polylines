@@ -788,6 +788,18 @@ for(edge in list(attr(curved_body, "lower_border"), attr(curved_body, "upper_bor
 steep_loc <- rbind(c(1, 1, 0, 0.5, 0.4), c(2, 1, 1, 1.5, 0.1), c(2, 2, 1, -0.5, 0.1))
 steep <- sankey_ribbons(matrix(c(0.5, 0.15), nrow = 1), steep_loc, xyr = 1, merge_frac = 0.2)
 stopifnot(all(vapply(steep$edges, function(e) all(diff(e$left[, "x"]) > 0) && all(diff(e$right[, "x"]) > 0), logical(1))))
+for(k in seq_along(steep$edges)) {
+  edge <- steep$edges[[k]]
+  center <- steep$centerlines[[k]]
+  tangent <- center[3:nrow(center), , drop = FALSE] - center[1:(nrow(center) - 2), , drop = FALSE]
+  normal <- cbind(-tangent[, 2], tangent[, 1]) / sqrt(rowSums(tangent^2))
+  offsets <- (edge$left - edge$right)[2:(nrow(center) - 1), , drop = FALSE]
+  stopifnot(max(abs(abs(rowSums(offsets * normal)) / steep$flows$width[k] - 1)) < 0.001)
+  for(points in edge) {
+    segments <- points[c(2, nrow(points)), , drop = FALSE] - points[c(1, nrow(points) - 1), , drop = FALSE]
+    stopifnot(all(abs(segments[, "y"] / segments[, "x"]) < 0.025))
+  }
+}
 bands <- attr(node_trunk_polygon(steep, seq_len(nrow(steep$flows)), "start", steep$merge_length), "fill_polygons")
 gap_x <- steep$flows$start_x[1] + steep$merge_length / 2
 spans <- lapply(bands, clip_polygon_x, x0 = gap_x, x1 = gap_x + 0.001)

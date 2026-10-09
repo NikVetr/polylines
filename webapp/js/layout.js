@@ -213,6 +213,7 @@
         fail(`loc row ${id + 1}: width must be a non-negative number.`);
       }
       n.widthExplicit = Number.isFinite(width);
+      n.labelOutside = n.widthExplicit && width === 0;
       n.widthPx = n.widthExplicit ? width * tf.sx : 0;
       const height = toNumber(row.height);
       if (!Number.isNaN(height) && !(height >= 0 && Number.isFinite(height))) {
@@ -505,7 +506,10 @@
       f.startX = a.X + f.dir * a.widthPx / 2;
       f.endX = b.X - f.dir * b.widthPx / 2;
       if (f.dir === 0 || f.dir * (f.endX - f.startX) <= 0) {
-        fail(`Node widths leave no horizontal room for the strand ${nodeName(a)} → ${nodeName(b)}.`);
+        const error = new SankeyError(`Node widths leave no horizontal room for the strand ${nodeName(a)} → ${nodeName(b)}.`);
+        error.requiredRun = 1.25 * f.w;
+        error.flow = f;
+        throw error;
       }
       f.startY = a.Y;
       f.endY = b.Y;
@@ -559,6 +563,57 @@
     const edges = centerlineEdges(f.centerline, f.w, Math.sign(dx));
     f.upper = edges.upper;
     f.lower = edges.lower;
+    if ([f.upper, f.lower].some(edge => edge.slice(1).some((p, i) => f.dir * (p[0] - edge[i][0]) < -PX_TOL))) {
+      const rounded = roundedRibbon(p0, p3, f.w, n, curvature);
+      Object.assign(f, rounded);
+    }
+  }
+
+  // Two tangent circular arcs and their common tangent. Unlike a tight cubic's
+  // offset, both sides retain their thickness and cannot turn back at a node face.
+  function roundedRibbon(a, b, width, n = 40, curvature = 0.45) {
+    const dir = Math.sign(b[0] - a[0]), rise = Math.sign(b[1] - a[1]) || 1;
+    const dx = Math.abs(b[0] - a[0]), dy = Math.abs(b[1] - a[1]);
+    if (!(dx > 0)) fail('Constant-width routing needs horizontal space between its endpoints.');
+    if (dy < 1e-10) return { centerline: [a.slice(), b.slice()],
+      upper: [a, b].map(p => [p[0], p[1] + width / 2]), lower: [a, b].map(p => [p[0], p[1] - width / 2]) };
+    const maxRadius = dy <= dx ? (dx * dx + dy * dy) / (4 * Math.max(dy, 1e-12)) : dx / 2;
+    if (maxRadius <= width * 0.55) {
+      const error = new SankeyError('A bend is too tight for constant-width ribbons. Increase horizontal node spacing or reduce the value scale.');
+      error.requiredRun = width * 1.25;
+      throw error;
+    }
+    const radius = dy <= dx ? maxRadius : Math.min(dx * 0.49, Math.max(width * 0.55, curvature * dx));
+    let angle;
+    if (dy <= dx) angle = 2 * Math.atan2(dy, dx);
+    else {
+      let lo = 0, hi = Math.PI / 2;
+      for (let i = 0; i < 48; i++) {
+        const mid = (lo + hi) / 2;
+        if (dy * Math.cos(mid) - dx * Math.sin(mid) + 2 * radius * (1 - Math.cos(mid)) > 0) lo = mid;
+        else hi = mid;
+      }
+      angle = (lo + hi) / 2;
+    }
+    const count = Math.max(16, Math.ceil(n / 2), Math.ceil(angle / 0.04) + 1);
+    const centerline = [], upper = [], lower = [];
+    const add = (x, y, tangent) => {
+      const p = [a[0] + dir * x, a[1] + rise * y];
+      const normal = [-dir * rise * Math.sin(tangent), Math.cos(tangent)];
+      centerline.push(p);
+      upper.push([p[0] + normal[0] * width / 2, p[1] + normal[1] * width / 2]);
+      lower.push([p[0] - normal[0] * width / 2, p[1] - normal[1] * width / 2]);
+    };
+    for (let i = 0; i < count; i++) {
+      const t = angle * i / (count - 1);
+      add(radius * Math.sin(t), radius * (1 - Math.cos(t)), t);
+    }
+    for (let i = 0; i < count; i++) {
+      if (dy <= dx && i === 0) continue;
+      const t = angle * (1 - i / (count - 1));
+      add(dx - radius * Math.sin(t), dy - radius * (1 - Math.cos(t)), t);
+    }
+    return { centerline, upper, lower };
   }
 
   // Port of boundary_transport_geometry() with xyr = 1.
@@ -708,6 +763,15 @@
     if (mode === 'graph') checkBalance(nodes, p, warnings, scale);
     if (p.adjust_loc) adjustLocations(nodes, p, tf);
     adjustNodeHeights(nodes, p, tf, measure);
+    // A path must have room to turn inside a node without squeezing its normal width.
+    if (model.paths && mode === 'layered') {
+      const maxPath = Math.max(0, ...model.paths.map(path => path.weight));
+      nodes.forEach(n => {
+        if (!n.inFlows.length || !n.outFlows.length) return;
+        n.widthPx = Math.max(n.widthPx, 2.5 * maxPath * scale * tf.sx);
+        if (n.bodyHeightPx) n.bodyHeightPx = Math.max(n.bodyHeightPx, n.inPx, n.outPx);
+      });
+    }
     setFaces(nodes, flows, p, mode);
 
     stackFlows(nodes, flows, sp);
@@ -725,15 +789,12 @@
           }
           boundaryGeometry(flows, inds, sps, p.n);
         } else {
-          inds.forEach((k) => bezierGeometry(flows[k], p.n, p.curvature));
-          // A normal offset wider than the bend radius folds back into the node. Use
-          // vertical Bezier boundaries for the whole stage so neighboring joins agree.
-          const folded = inds.some(k => [flows[k].upper, flows[k].lower].some(edge =>
-            edge.slice(1).some((point, i) => flows[k].dir * (point[0] - edge[i][0]) < -PX_TOL)));
-          if (folded) inds.forEach(k => {
-            const f = flows[k];
-            f.upper = f.centerline.map(([x, y]) => [x, y + f.w / 2]);
-            f.lower = f.centerline.map(([x, y]) => [x, y - f.w / 2]);
+          inds.forEach(k => {
+            try { bezierGeometry(flows[k], p.n, p.curvature); }
+            catch (err) {
+              if (err.requiredRun) err.flow = flows[k];
+              throw err;
+            }
           });
         }
       });
@@ -766,6 +827,7 @@
     adjustOneSet,
     isotonic,
     pointAtX,
+    roundedRibbon,
     polylineLength,
     nodeName
   };

@@ -83,7 +83,7 @@
   // ---------- labels ----------
 
   // Labels inside a node fade its body to a transparent centre; labels drawn above leave it solid.
-  const labelFades = (n, style) => n.hasLabel && style.labelPosition !== 'above';
+  const labelFades = (n, style) => n.hasLabel && !n.labelOutside && style.labelPosition !== 'above';
 
   // Where a node's label goes (plot pixels) and its text anchor. With labelPosition "above", above
   // every node; otherwise centred in a node body, left of sources, right of sinks and above
@@ -91,7 +91,7 @@
   function labelPlacement(n, style, textSize) {
     const above = { X: n.X, Y: n.Y + Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2 + 0.8 * textSize, anchor: 'middle' };
     if (style.labelPosition === 'above') return above;
-    if (n.hasLabel && n.widthPx > 0) return { X: n.X, Y: n.Y, anchor: 'middle' };
+    if (n.hasLabel && n.widthPx > 0 && !n.labelOutside) return { X: n.X, Y: n.Y, anchor: 'middle' };
     const role = S.nodeRole(n);
     if (role === 'source') return { X: n.X - 7, Y: n.Y, anchor: 'end' };
     if (role === 'sink') return { X: n.X + 7, Y: n.Y, anchor: 'start' };
