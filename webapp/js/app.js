@@ -17,6 +17,7 @@
     useMid: true,
     flatten: true,
     bg: '#FFFFFF',
+    thinOutline: true,
     border: 'none',
     borderWidth: 1,
     borderCaps: true,
@@ -96,7 +97,7 @@
     : Math.abs(v) >= 100 ? v.toFixed(1) : Number(v.toPrecision(4)).toString());
   const isDefaultName = (name) => !name || /^V?\d+$/.test(name);
   // Matrix dimnames like V1 or 1 are R defaults, but names from an imported table are real categories.
-  const usableName = (name) => !!name && (state.trustedNames || !isDefaultName(name));
+  const usableName = (name, data = state) => !!name && (data.trustedNames || !isDefaultName(name));
 
   function download(name, content, type) {
     const blob = content instanceof Blob ? content : new Blob([content], { type: type || 'text/plain' });
@@ -145,58 +146,58 @@
   // ---------- model plumbing ----------
 
   // loc as drawn: with "Totals in labels", each label is followed by its node's total.
-  function labeledLoc() {
-    if (!state.style.labelCounts) return state.loc;
+  function labeledLoc(data = state) {
+    if (!data.style.labelCounts) return data.loc;
     const sum = (a) => a.reduce((t, v) => t + (v || 0), 0);
-    const mats = state.matrices;
+    const mats = data.matrices;
     const total = (row, id) => {
-      if (state.mode === 'graph') return Math.max(sum(mats[0][id] || []), sum(mats[0].map((r) => r[id])));
+      if (data.mode === 'graph') return Math.max(sum(mats[0][id] || []), sum(mats[0].map((r) => r[id])));
       const s = row.set - 1;
       const i = row.node - 1;
       return Math.max(s > 0 && mats[s - 1] ? sum(mats[s - 1].map((r) => r[i])) : 0, mats[s] && mats[s][i] ? sum(mats[s][i]) : 0);
     };
-    return state.loc.map((row, id) => (row.label ? Object.assign({}, row, { label: `${row.label} (n = ${fmtValue(total(row, id))})` }) : row));
+    return data.loc.map((row, id) => (row.label ? Object.assign({}, row, { label: `${row.label} (n = ${fmtValue(total(row, id))})` }) : row));
   }
 
   // Labels above nodes widen them only up to 40% of the narrowest gap between columns, so a long
   // label (e.g. of merged nodes) cannot squeeze the strands between columns.
-  function modelParams() {
-    if (state.style.labelPosition !== 'above') return state.params;
+  function modelParams(data = state) {
+    if (data.style.labelPosition !== 'above') return data.params;
     const bySet = new Map();
-    state.loc.forEach((r) => bySet.set(Number(r.set), (bySet.get(Number(r.set)) || []).concat(Number(r.x))));
+    data.loc.forEach((r) => bySet.set(Number(r.set), (bySet.get(Number(r.set)) || []).concat(Number(r.x))));
     const xs = [...bySet.values()].map((v) => v.reduce((t, x) => t + x, 0) / v.length).sort((a, b) => a - b);
     const gaps = xs.slice(1).map((x, i) => x - xs[i]).filter((g) => g > 0);
-    return gaps.length ? Object.assign({}, state.params, { max_node_width: 0.4 * Math.min(...gaps) }) : state.params;
+    return gaps.length ? Object.assign({}, data.params, { max_node_width: 0.4 * Math.min(...gaps) }) : data.params;
   }
 
-  function model() {
+  function model(data = state) {
     return {
-      mode: state.mode,
-      matrices: state.matrices,
-      loc: labeledLoc(),
-      params: modelParams(),
-      stageParams: state.stageParams,
-      manualOrder: state.manualOrder,
-      valueScale: state.valueScale
+      mode: data.mode,
+      matrices: data.matrices,
+      loc: labeledLoc(data),
+      params: modelParams(data),
+      stageParams: data.stageParams,
+      manualOrder: data.manualOrder,
+      valueScale: data.valueScale
     };
   }
 
-  function colorData() {
+  function colorData(data = state) {
     const locColors = {};
     const locMergeColors = {};
-    state.loc.forEach((row) => {
+    data.loc.forEach((row) => {
       const key = `${row.set}:${row.node}`;
       if (row.color) locColors[key] = row.color;
       if (row.merge_col) locMergeColors[key] = row.merge_col;
     });
     return {
-      flowMatrices: state.colorMatrices,
-      midMatrices: state.midMatrices,
-      flowOverrides: state.flowOverrides,
-      midOverrides: state.midOverrides,
-      nodeColors: state.nodeColors,
-      mergeColors: state.mergeColors,
-      nodeSlots: state.nodeSlots,
+      flowMatrices: data.colorMatrices,
+      midMatrices: data.midMatrices,
+      flowOverrides: data.flowOverrides,
+      midOverrides: data.midOverrides,
+      nodeColors: data.nodeColors,
+      mergeColors: data.mergeColors,
+      nodeSlots: data.nodeSlots,
       locColors,
       locMergeColors
     };
@@ -242,10 +243,10 @@
 
   // Data limits that contain every strand, node body and label (a few refinement passes,
   // because strand thickness in pixels depends on the limits themselves).
-  function fitView() {
-    if (!state.loc.length) throw new L.SankeyError('No node locations (loc) are loaded.');
-    const xs = state.loc.map((r) => r.x);
-    const ys = state.loc.map((r) => r.y);
+  function fitView(data = state) {
+    if (!data.loc.length) throw new L.SankeyError('No node locations (loc) are loaded.');
+    const xs = data.loc.map((r) => r.x);
+    const ys = data.loc.map((r) => r.y);
     const spanX = Math.max(...xs) - Math.min(...xs) || 1;
     const spanY = Math.max(...ys) - Math.min(...ys) || 1;
     let view = {
@@ -253,7 +254,7 @@
       ylim: [Math.min(...ys) - 0.15 * spanY, Math.max(...ys) + 0.15 * spanY]
     };
     for (let pass = 0; pass < 4; pass++) {
-      const lay = L.computeLayout(model(), viewFor(view), { measure: measure() });
+      const lay = L.computeLayout(model(data), viewFor(view), { measure: measure() });
       const box = S.geometryBounds(lay);
       labelBoxes(lay).forEach((p) => {
         box.x0 = Math.min(box.x0, p[0]);
@@ -420,6 +421,8 @@
     {
       title: 'Borders & labels',
       items: [
+        { key: 'thinOutline', target: 'style', type: 'checkbox', label: 'Thin plot outline',
+          help: 'A thin black outline around strands and nodes, hidden while a selection is in focus.' },
         { key: 'border', target: 'style', type: 'optionalColor', label: 'Strand borders', defaultColor: '#333333' },
         { key: 'borderWidth', target: 'style', type: 'number', label: 'Border width', min: 0.1, step: 0.1,
           showIf: () => state.style.border !== 'none' },
@@ -728,12 +731,12 @@
   }
 
   // Per-strand edits are keyed by stage/row/column and become stale when matrices change.
-  function clearKeyedEdits() {
-    state.nodeSlots = null;
-    state.flowOverrides = {};
-    state.midOverrides = {};
-    state.manualOrder = { start: {}, end: {} };
-    selection = null;
+  function clearKeyedEdits(data = state) {
+    data.nodeSlots = null;
+    data.flowOverrides = {};
+    data.midOverrides = {};
+    data.manualOrder = { start: {}, end: {} };
+    if (data === state) selection = null;
   }
 
   // ---------- file loading ----------
@@ -831,44 +834,47 @@
       }
     }
 
+    // Work on a candidate: rejected files must leave the plot, edits and exports untouched.
+    const next = Object.assign({}, state, { style: Object.assign({}, state.style) });
+    const notices = [];
     if (stages.length) {
-      state.matrices = stages.map((m) => m.values);
-      state.stageNames = groups.stages.map((f) => f.name);
-      state.dimnames = stages.map((m) => ({ rows: m.rowNames, cols: m.colNames }));
-      clearKeyedEdits();
-      state.stageParams = [];
+      next.matrices = stages.map((m) => m.values);
+      next.stageNames = groups.stages.map((f) => f.name);
+      next.dimnames = stages.map((m) => ({ rows: m.rowNames, cols: m.colNames }));
+      clearKeyedEdits(next);
+      next.stageParams = [];
       // New flow matrices are R thickness values, unrelated to an earlier table's scale.
-      state.valueScale = 1;
-      state.trustedNames = false;
-      state.paths = null;
+      next.valueScale = 1;
+      next.trustedNames = false;
+      next.paths = null;
     }
     if (loc) {
-      state.loc = loc;
-      state.locName = groups.loc[0].name;
-      state.nodeColors = {};
-      state.mergeColors = {};
+      next.loc = loc;
+      next.locName = groups.loc[0].name;
+      next.nodeColors = {};
+      next.mergeColors = {};
     }
     if (opts.mode) {
-      state.mode = opts.mode;
+      next.mode = opts.mode;
     } else if (stages.length || loc) {
       // A single square matrix whose size equals the loc row count can only be a graph.
-      const m = state.matrices;
-      const squareGraph = m.length === 1 && m[0].length === m[0][0].length && state.loc.length === m[0].length;
-      state.mode = squareGraph ? 'graph' : 'layered';
+      const m = next.matrices;
+      const squareGraph = m.length === 1 && m[0].length === m[0][0].length && next.loc.length === m[0].length;
+      next.mode = squareGraph ? 'graph' : 'layered';
     }
     // Color matrices belong to specific flow matrices; new flows invalidate unpaired ones.
-    if (stages.length && !colorMats.length && state.colorMatrices) {
-      state.colorMatrices = null;
-      state.colorNames = [];
-      if (state.style.colorBy === 'file') state.style.colorBy = 'source';
-      notify('Strand color files were cleared because new flow matrices were loaded.');
+    if (stages.length && !colorMats.length && next.colorMatrices) {
+      next.colorMatrices = null;
+      next.colorNames = [];
+      if (next.style.colorBy === 'file') next.style.colorBy = 'source';
+      notices.push('Strand color files were cleared because new flow matrices were loaded.');
     }
     if (stages.length && !midMats.length) {
-      state.midMatrices = null;
-      state.midNames = [];
+      next.midMatrices = null;
+      next.midNames = [];
     }
     const checkShapes = (mats, names, what) => mats.forEach((m, s) => {
-      const flow = state.matrices[s];
+      const flow = next.matrices[s];
       if (!flow || flow.length !== m.values.length || flow[0].length !== m.values[0].length) {
         const shape = flow ? `${flow.length}×${flow[0].length}` : 'missing';
         throw new L.SankeyError(`${names[s]}: ${what} matrix is ${m.values.length}×${m.values[0].length}, ` +
@@ -877,26 +883,40 @@
     });
     if (colorMats.length) {
       checkShapes(colorMats, groups.colors.map((f) => f.name), 'color');
-      state.colorMatrices = colorMats.map((m) => m.values);
-      state.colorNames = groups.colors.map((f) => f.name);
-      state.style.colorBy = 'file';
+      next.colorMatrices = colorMats.map((m) => m.values);
+      next.colorNames = groups.colors.map((f) => f.name);
+      next.style.colorBy = 'file';
     }
     if (midMats.length) {
       checkShapes(midMats, groups.mids.map((f) => f.name), 'mid-color');
-      state.midMatrices = midMats.map((m) => m.values);
-      state.midNames = groups.mids.map((f) => f.name);
-      state.style.useMid = true;
+      next.midMatrices = midMats.map((m) => m.values);
+      next.midNames = groups.mids.map((f) => f.name);
+      next.style.useMid = true;
     }
     if (stages.length && !loc) {
-      const fits = state.loc.length && (() => {
-        try { L.computeLayout(model(), { xlim: [0, 1], ylim: [0, 1], width: 1000, height: 1000 }); return true; } catch (e) { return false; }
+      const fits = next.loc.length && (() => {
+        try { L.computeLayout(model(next), { xlim: [0, 1], ylim: [0, 1], width: 1000, height: 1000 }); return true; } catch (e) { return false; }
       })();
       if (!fits) {
-        autoLocate();
-        notify('Generated node locations because no matching loc file was loaded.');
+        autoLocate(undefined, next);
+        notices.push('Generated node locations because no matching loc file was loaded.');
       }
     }
-    state.view = null;
+    computeFrame();
+    next.view = next.matrices.length && next.loc.length ? fitView(next) : null;
+    if (next.view) {
+      const lay = L.computeLayout(model(next), viewFor(next.view), { measure: measure() });
+      R.resolveColors(lay, colorData(next), next.style);
+    }
+    state = next;
+    if (stages.length || loc) {
+      selection = null;
+      hover = null;
+      lastPointer = null;
+      pool = new Map();
+      picked = new Set();
+    }
+    if (notices.length) notify(notices.join(' '));
   }
 
   async function loadFileList(fileList, role) {
@@ -936,11 +956,11 @@
   }
 
   // Node columns for auto-layout: [{ height (raw value), label, id (graph) }] per set.
-  function nodeSets() {
-    const mats = state.matrices;
+  function nodeSets(data = state) {
+    const mats = data.matrices;
     if (!mats.length) throw new L.SankeyError('Load flow matrices before generating node locations.');
     let sets;
-    if (state.mode === 'graph') {
+    if (data.mode === 'graph') {
       const m = mats[0];
       const n = m.length;
       if (m.some((r) => r.length !== n)) throw new L.SankeyError('Graph mode needs a square adjacency matrix.');
@@ -959,11 +979,11 @@
         });
       }
       if (seen < n) throw new L.SankeyError('The adjacency matrix has a cycle; load a loc file to place its nodes.');
-      const names = state.dimnames[0] && state.dimnames[0].rows;
+      const names = data.dimnames[0] && data.dimnames[0].rows;
       sets = [];
       for (let i = 0; i < n; i++) {
         const total = Math.max(m[i].reduce((s, v) => s + v, 0), m.reduce((s, r) => s + r[i], 0));
-        (sets[depth[i]] = sets[depth[i]] || []).push({ height: total, label: names && usableName(names[i]) ? names[i] : '', id: i });
+        (sets[depth[i]] = sets[depth[i]] || []).push({ height: total, label: names && usableName(names[i], data) ? names[i] : '', id: i });
       }
       sets = sets.filter(Boolean);
     } else {
@@ -971,8 +991,8 @@
       sets = counts.map((count, s) => Array.from({ length: count }, (_, k) => {
         const incoming = s > 0 ? mats[s - 1].reduce((sum, r) => sum + r[k], 0) : 0;
         const outgoing = s < mats.length ? mats[s][k].reduce((sum, v) => sum + v, 0) : 0;
-        const names = s > 0 ? state.dimnames[s - 1] && state.dimnames[s - 1].cols : state.dimnames[0] && state.dimnames[0].rows;
-        return { height: Math.max(incoming, outgoing), label: names && usableName(names[k]) ? names[k] : '' };
+        const names = s > 0 ? data.dimnames[s - 1] && data.dimnames[s - 1].cols : data.dimnames[0] && data.dimnames[0].rows;
+        return { height: Math.max(incoming, outgoing), label: names && usableName(names[k], data) ? names[k] : '' };
       }));
     }
     return sets;
@@ -996,8 +1016,8 @@
 
   // Normalized y of each node of one column as auto-layout stacks them: centred, with even gaps,
   // filling most of the height (pxPerUnit turns value x value scale into pixels).
-  function stackColumn(group, pxPerUnit, H) {
-    const heights = group.map((n) => n.height * state.valueScale * pxPerUnit);
+  function stackColumn(group, pxPerUnit, H, valueScale = state.valueScale) {
+    const heights = group.map((n) => n.height * valueScale * pxPerUnit);
     const used = heights.reduce((a, b) => a + b, 0);
     const gap = group.length > 1 ? Math.max((0.8 * H - used) / (group.length - 1), 4) : 0;
     let top = H / 2 + (used + gap * (group.length - 1)) / 2;
@@ -1021,20 +1041,20 @@
   // Default loc: node sets in evenly spaced columns, stacked to fill most of the height.
   // labels: "above" or "inside" (label-derived node widths; see style.labelPosition), "beside"
   // (zero-width nodes) or "none".
-  function autoLocate(options) {
+  function autoLocate(options, data = state) {
     const labels = (options && options.labels) || 'inside';
-    const sets = nodeSets();
+    const sets = nodeSets(data);
     computeFrame();
     const W = frame.width - 2 * MARGIN;
     const H = frame.height - 2 * MARGIN;
     const K = Math.max(sets.length - 1, 1);
-    const tallest = Math.max(...sets.map((g) => g.reduce((s, n) => s + n.height * state.valueScale, 0)));
+    const tallest = Math.max(...sets.map((g) => g.reduce((s, n) => s + n.height * data.valueScale, 0)));
     const spacing = tallest * W / (STACK_FILL * H * K * X_PAD);
     const pxPerUnit = W / (K * spacing * X_PAD);
     const rowsByGraphId = [];
     const loc = [];
     sets.forEach((group, s) => {
-      const ys = stackColumn(group, pxPerUnit, H);
+      const ys = stackColumn(group, pxPerUnit, H, data.valueScale);
       group.forEach((n, k) => {
         const row = { set: s + 1, node: k + 1, x: round(s * spacing), y: ys[k] };
         if (n.label && labels !== 'none') row.label = n.label;
@@ -1043,9 +1063,9 @@
         else loc.push(row);
       });
     });
-    state.loc = state.mode === 'graph' ? rowsByGraphId : loc;
-    state.locName = 'auto-generated';
-    state.view = null;
+    data.loc = data.mode === 'graph' ? rowsByGraphId : loc;
+    data.locName = 'auto-generated';
+    data.view = null;
   }
 
   // Replace the data with flows built from a table (see transform.js), keeping the style.
@@ -2257,7 +2277,12 @@
     if (index < 0 || index >= history.stack.length) return;
     history.index = index;
     state = JSON.parse(history.stack[index]);
+    // Pins and pools refer to indices in the previous dataset, not the restored one.
+    selection = null;
+    pool = new Map();
+    picked = new Set();
     hover = null;
+    lastPointer = null;
     showHoverInfo(null);
     update();
   }

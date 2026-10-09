@@ -8,6 +8,7 @@
   const S = SK.shapes;
 
   const FONT_FAMILY = 'Helvetica, Arial, sans-serif';
+  const THIN_LINE_WIDTH = 0.6;
   const fmt = (v) => (Math.round(v * 100) / 100).toString();
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -212,6 +213,7 @@
     const trunks = [];
     const borders = [];
     const nodeBorders = [];
+    const outlines = [];
     const sums = [];
     const hits = [];
     const dots = [];
@@ -222,6 +224,11 @@
     const strokeAttrs = borderOn
       ? `fill="none" stroke="${borderPaint.color}" stroke-opacity="${borderPaint.opacity}" stroke-width="${style.borderWidth}" stroke-linejoin="round"`
       : '';
+    const outline = (edges) => {
+      if (!style.thinOutline) return;
+      outlines.push(`<path class="plot-outline" d="${edges.map((edge) => pathD(edge, map, false)).join('')}" ` +
+        `fill="none" stroke="#000000" stroke-width="${THIN_LINE_WIDTH}" stroke-linejoin="round"/>`);
+    };
 
     // Strands. With flattened (opaque) trunks the full ribbon sits underneath; otherwise ribbons
     // are cut at the merge zone so translucent trunks do not double up.
@@ -237,6 +244,7 @@
         fill = fillAttrs(colors.flow[f.index]);
       }
       ribbons.push(`<path class="ribbon" data-flow="${f.index}" d="${pathD(polygon, map, true)}" ${fill}/>`);
+      outline(S.edgeSegments(f, cuts));
       const hitLine = cuts ? S.sliceByX(f.centerline, cuts[0], cuts[1]) : f.centerline;
       hits.push(`<path class="hit" data-flow="${f.index}" d="${pathD(hitLine, map, false)}" ` +
         `stroke-width="${fmt(Math.max(f.w, 7))}"/>`);
@@ -253,7 +261,7 @@
       extras.substrandLines.forEach((polylines, k) => {
         if (!polylines.length) return;
         lines.push(`<path class="substrand-lines" data-flow="${k}" d="${polylines.map((line) => pathD(line, map, false)).join('')}" ` +
-          `fill="none" stroke="${linePaint.color}" stroke-opacity="0.6" stroke-width="0.6"/>`);
+          `fill="none" stroke="${linePaint.color}" stroke-opacity="0.6" stroke-width="${THIN_LINE_WIDTH}"/>`);
       });
     }
 
@@ -295,6 +303,7 @@
       if (role === 'interior') {
         const shape = S.interiorTrunk(layout, n);
         if (!shape) return;
+        outline([shape.lower, shape.upper]);
         const span = shape.x1 - shape.x0;
         const labelBody = labelFades(n, style) && n.widthPx > 0 && span > 1e-9;
         if ((style.gradient || labelBody) && span > 1e-9) {
@@ -332,6 +341,15 @@
       }
       // Opaque trunks can hide a small body overlap; translucent ones would show it as a darker line.
       const body = S.endpointBody(layout, n, side, style.flatten && trunk ? Math.min(1.5, layout.mergeLength) : 0);
+      const edges = trunk ? [trunk.edges.lower, trunk.edges.upper] : [];
+      if (body) {
+        edges.push(body.lowerBorder, body.upperBorder,
+          [body.lowerBorder[body.lowerBorder.length - 1], body.upperBorder[body.upperBorder.length - 1]]);
+      } else {
+        const b = S.bundle(layout, n, side);
+        if (b) edges.push([[b.faceX, b.lowerY], [b.faceX, b.upperY]]);
+      }
+      outline(edges);
       if (body) {
         const tc = Math.abs(n.X - body.faceX) / Math.abs(body.outerX - body.faceX);
         // The trunk meets the body at the face in the trunk (merge) color, so the body starts there too.
@@ -399,6 +417,7 @@
       `<g class="layer-ribbons">${ribbons.join('')}</g>` +
       (lines.length ? `<g class="layer-substrands">${lines.join('')}</g>` : '') +
       `<g class="layer-trunks">${trunks.join('')}</g>` +
+      (outlines.length ? `<g class="layer-outline">${outlines.join('')}</g>` : '') +
       `<g class="layer-borders">${borders.join('')}</g>` +
       `<g class="layer-node-borders">${nodeBorders.join('')}</g>` +
       `<g class="layer-sums">${sums.join('')}</g>` +

@@ -136,6 +136,37 @@ test('matrices without a loc file get generated node locations', async ({ page }
   expect(s.loc.filter((r) => r.label).map((r) => r.label)).toEqual(['In 1', 'In 2', 'Out A', 'Out B']);
 });
 
+for (const invalidRole of ['colors', 'mids', 'loc']) {
+  test(`a rejected ${invalidRole} file leaves the data, drawing and exports unchanged`, async ({ page }) => {
+    const p = await ribbonCenter(page, 0);
+    await page.mouse.click(p.x, p.y);
+    await page.mouse.move(5, 5);
+    const before = await state(page);
+    const bundleBefore = await page.evaluate(() => window.SankeyApp.bundleFiles());
+    const drawingBefore = await page.locator('#plot').innerHTML();
+    const files = before.matrices.map((m, i) => ({
+      name: `stage_${i + 1}.csv`, mimeType: 'text/csv',
+      buffer: Buffer.from(m.map((row) => row.map((v) => v * 2).join(',')).join('\n'))
+    }));
+    const invalid = invalidRole === 'loc'
+      ? { name: 'loc.csv', text: ['set,node,x,y,label', ...before.loc.map((r) => [r.set, r.node, 0, r.y, r.label].join(','))].join('\n') }
+      : { name: `${invalidRole === 'mids' ? 'mid_colors' : 'colors'}_1.csv`, text: '#FF0000\n' };
+    await page.setInputFiles('#file-input', files.concat([{ name: invalid.name, mimeType: 'text/csv', buffer: Buffer.from(invalid.text) }]));
+    await expect(page.locator('#banner')).toBeVisible();
+    await expect(page.locator('#banner')).toContainText(invalidRole === 'loc' ? 'horizontal room' : 'matrix is 1×1');
+    expect(await state(page)).toEqual(before);
+    expect(await page.locator('#plot').innerHTML()).toBe(drawingBefore);
+    expect(await page.evaluate(() => window.SankeyApp.bundleFiles())).toEqual(bundleBefore);
+    await expect(page.locator('#inspector-main .edit-head')).toHaveText('Edit strand');
+
+    await page.setInputFiles('#file-input', files);
+    await expect(page.locator('#banner')).toBeHidden();
+    expect(await page.evaluate(() => window.SankeyApp.layout.flows[0].value)).toBe(before.matrices[0][0][0] * 2);
+    await page.keyboard.press('Control+z');
+    expect(await state(page)).toEqual(before);
+  });
+}
+
 test('boundary routing can be set per stage', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('gradients'));
   await page.locator('#route-scope').selectOption('2');
@@ -513,6 +544,39 @@ test('pinning a node draws no outline around it', async ({ page }) => {
   expect(dashed).toBe(0);
 });
 
+test('thin plot outlines default on, hide during focus and persist in exports and settings', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  const toggle = page.locator('#ctl-thinOutline');
+  const outlines = page.locator('#plot .layer-outline');
+  await expect(toggle).toBeChecked();
+  await expect(outlines).toBeVisible();
+  await expect(outlines.locator('path').first()).toHaveAttribute('stroke', '#000000');
+  await page.locator('#ctl-substrands').check();
+  const widths = await page.locator('#plot .plot-outline, #plot .substrand-lines').evaluateAll((els) => [...new Set(els.map((el) => el.getAttribute('stroke-width')))]);
+  expect(widths).toEqual(['0.6']);
+  expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).toContain('class="layer-outline"');
+  const n = await nodeAt(page, 'Remission');
+  await page.mouse.move(n.x, n.y);
+  expect(await outlines.evaluate((el) => getComputedStyle(el).opacity)).toBe('0');
+  await page.mouse.click(n.x, n.y);
+  await page.mouse.move(5, 5);
+  expect(await outlines.evaluate((el) => getComputedStyle(el).opacity)).toBe('0');
+  const exported = await page.evaluate(() => {
+    const doc = new DOMParser().parseFromString(window.SankeyApp.exportSvgText(), 'image/svg+xml');
+    return doc.querySelector('.layer-outline').getAttribute('opacity');
+  });
+  expect(exported).toBe('0');
+  await page.keyboard.press('Escape');
+  expect(await outlines.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+  await toggle.uncheck();
+  await expect(outlines).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('polylines-sankey-v1'))?.style.thinOutline)).toBe(false);
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+  await expect(outlines).toHaveCount(0);
+  expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).not.toContain('class="layer-outline"');
+});
+
 test('dimmed nodes stay opaque so their necks match their bodies', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const p = await ribbonCenter(page, 0);
@@ -637,6 +701,37 @@ test('nodes of matrix data can be picked and merged too, and merging can be canc
   expect(await page.evaluate(() => window.SankeyApp.state.matrices[0].length)).toBe(3);
   await expect(page.locator('#plot .node-label', { hasText: `${ids[0]} + ${ids[1]}` })).toHaveCount(1);
 });
+
+for (const label of ['Remission', 'Progression']) {
+  test(`redoing a merge clears pinned ${label} pathways from the previous data`, async ({ page }) => {
+    await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+    for (const name of ['Surgery', 'Radiation']) {
+      const n = await nodeAt(page, name);
+      await page.keyboard.down('Alt');
+      await page.mouse.click(n.x, n.y);
+      await page.keyboard.up('Alt');
+    }
+    await page.locator('#merge-nodes').click();
+    await page.locator('#merge-name').fill('Local therapy');
+    await page.locator('#merge-name').press('Enter');
+    await page.keyboard.press('Control+z');
+    const n = await nodeAt(page, label);
+    await page.mouse.click(n.x, n.y);
+    await page.mouse.move(5, 5);
+    await expect(page.locator('#plot .trace').first()).toBeAttached();
+    await page.keyboard.press('Control+Shift+z');
+    await expect(page.locator('#plot .trace')).toHaveCount(0);
+    await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
+    await expect(page.locator('#redo')).toBeDisabled();
+    await expect(page.locator('#banner')).toBeHidden();
+    const merged = await nodeAt(page, label);
+    await page.mouse.click(merged.x, merged.y);
+    await page.mouse.move(5, 5);
+    const total = await page.evaluate((name) => window.SankeyApp.layout.nodes.find((n) => n.label === name).inValue, label);
+    await expect(page.locator('#inspector-main')).toContainText(`${total} patients`);
+    if (label === 'Remission') await expect(page.locator('#inspector-main')).not.toContainText('→ Progression');
+  });
+}
 
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
   await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
