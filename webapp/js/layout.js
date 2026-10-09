@@ -120,7 +120,7 @@
       }
     });
     const nonNegative = ['merge_frac', 'default_node_width', 'node_label_pad', 'node_label_pad_frac',
-      'node_label_vpad', 'node_label_vpad_frac', 'min_node_gap', 'balance_tol'];
+      'node_label_vpad', 'node_label_vpad_frac', 'min_node_gap', 'balance_tol', 'max_node_width'];
     nonNegative.forEach((key) => {
       if (p[key] !== undefined && !(Number.isFinite(p[key]) && p[key] >= 0)) {
         fail(`${key}${at} must be a non-negative number.`);
@@ -184,10 +184,12 @@
       n.labelWidthPx = n.hasLabel ? measure(n.label, n.cex, n.font).width : 0;
     });
     const med = median(nodes.filter((n) => n.hasLabel && n.labelWidthPx > 0).map((n) => n.labelWidthPx));
+    // max_node_width (x units, webapp only; not an R argument) caps label-derived widths.
+    const cap = p.max_node_width > 0 ? p.max_node_width * tf.sx : Infinity;
     nodes.forEach((n) => {
       if (n.widthExplicit) return;
       n.widthPx = n.hasLabel
-        ? n.labelWidthPx + 2 * p.node_label_pad * tf.sx + 2 * p.node_label_pad_frac * med
+        ? Math.min(n.labelWidthPx + 2 * p.node_label_pad * tf.sx + 2 * p.node_label_pad_frac * med, cap)
         : p.default_node_width * tf.sx;
     });
   }

@@ -158,12 +158,23 @@
     return state.loc.map((row, id) => (row.label ? Object.assign({}, row, { label: `${row.label} (n = ${fmtValue(total(row, id))})` }) : row));
   }
 
+  // Labels above nodes widen them only up to 40% of the narrowest gap between columns, so a long
+  // label (e.g. of merged nodes) cannot squeeze the strands between columns.
+  function modelParams() {
+    if (state.style.labelPosition !== 'above') return state.params;
+    const bySet = new Map();
+    state.loc.forEach((r) => bySet.set(Number(r.set), (bySet.get(Number(r.set)) || []).concat(Number(r.x))));
+    const xs = [...bySet.values()].map((v) => v.reduce((t, x) => t + x, 0) / v.length).sort((a, b) => a - b);
+    const gaps = xs.slice(1).map((x, i) => x - xs[i]).filter((g) => g > 0);
+    return gaps.length ? Object.assign({}, state.params, { max_node_width: 0.4 * Math.min(...gaps) }) : state.params;
+  }
+
   function model() {
     return {
       mode: state.mode,
       matrices: state.matrices,
       loc: labeledLoc(),
-      params: state.params,
+      params: modelParams(),
       stageParams: state.stageParams,
       manualOrder: state.manualOrder,
       valueScale: state.valueScale

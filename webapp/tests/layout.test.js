@@ -105,6 +105,23 @@ test('loc rows with blank labels are not treated as labeled', () => {
   assert.strictEqual(layout.nodes[1].widthPx, 0);
 });
 
+test('max_node_width caps label-derived node widths only', () => {
+  const model = simpleModel();
+  model.loc[0].label = 'A rather long label that would make a very wide node';
+  model.loc[1].label = 'Short';
+  model.loc[2].width = 0.5;
+  const view = { xlim: [-0.2, 1.2], ylim: [0, 1], width: 800, height: 500 };
+  const free = SK.layout.computeLayout(model, view);
+  model.params.max_node_width = 0.1;
+  const capped = SK.layout.computeLayout(model, view);
+  assert.ok(free.nodes[0].widthPx > 0.1 * capped.tf.sx);
+  assert.ok(Math.abs(capped.nodes[0].widthPx - 0.1 * capped.tf.sx) < 1e-9);
+  assert.strictEqual(capped.nodes[1].widthPx, free.nodes[1].widthPx);
+  assert.strictEqual(capped.nodes[2].widthPx, free.nodes[2].widthPx);
+  model.params.max_node_width = -1;
+  assert.throws(() => SK.layout.computeLayout(model, view), /max_node_width must be a non-negative number/);
+});
+
 test('invalid inputs fail loudly with a SankeyError', () => {
   const missing = simpleModel();
   missing.loc.pop();
