@@ -73,6 +73,7 @@
       midOverrides: {},
       nodeColors: {},
       mergeColors: {},
+      nodeSlots: null,
       manualOrder: { start: {}, end: {} },
       params: Object.assign({}, L.DEFAULT_PARAMS),
       stageParams: [],
@@ -184,6 +185,7 @@
       midOverrides: state.midOverrides,
       nodeColors: state.nodeColors,
       mergeColors: state.mergeColors,
+      nodeSlots: state.nodeSlots,
       locColors,
       locMergeColors
     };
@@ -716,6 +718,7 @@
 
   // Per-strand edits are keyed by stage/row/column and become stale when matrices change.
   function clearKeyedEdits() {
+    state.nodeSlots = null;
     state.flowOverrides = {};
     state.midOverrides = {};
     state.manualOrder = { start: {}, end: {} };
@@ -1149,7 +1152,12 @@
       unitsOf(target).forEach(([pi]) => traces.paths[pi].nodes.forEach((ni, s) => labels.add(nodeAtStage(s, ni).id)));
       return { flows, nodes, labels };
     }
-    if (target.kind === 'flow') {
+    if (target.kind === 'nodes') {
+      target.nodes.forEach((id) => {
+        nodes.add(id);
+        layout.nodes[id].inFlows.concat(layout.nodes[id].outFlows).forEach((k) => flows.add(k));
+      });
+    } else if (target.kind === 'flow') {
       const f = layout.flows[target.index];
       flows.add(f.index);
       nodes.add(f.from);
@@ -1189,10 +1197,15 @@
       add(f.from, f.value);
       add(f.to, f.value);
     } else {
-      const n = layout.nodes[target.index];
-      add(n.id, Math.max(n.inValue, n.outValue));
-      n.inFlows.forEach((k) => add(layout.flows[k].from, layout.flows[k].value));
-      n.outFlows.forEach((k) => add(layout.flows[k].to, layout.flows[k].value));
+      // A node fills itself, and its neighbours by the strands between them (nodes of one group
+      // fill themselves only once).
+      const ids = target.kind === 'nodes' ? target.nodes : [target.index];
+      ids.forEach((id) => {
+        const n = layout.nodes[id];
+        w.set(n.id, Math.max(n.inValue, n.outValue));
+        n.inFlows.forEach((k) => { if (!ids.includes(layout.flows[k].from)) add(layout.flows[k].from, layout.flows[k].value); });
+        n.outFlows.forEach((k) => { if (!ids.includes(layout.flows[k].to)) add(layout.flows[k].to, layout.flows[k].value); });
+      });
     }
     return w;
   }
@@ -1255,10 +1268,65 @@
     });
   }
 
+  // Nodes picked with a plain Alt-click (on any data), e.g. to merge them. Keyed by node key and
+  // tied to the flow matrices they were picked on.
+  let picked = new Set();
+  let pickedFor = null;
+
+  function togglePicked(key) {
+    if (pickedFor !== state.matrices) {
+      picked = new Set();
+      pickedFor = state.matrices;
+    }
+    if (picked.has(key)) picked.delete(key);
+    else picked.add(key);
+  }
+
+  const pickedNodes = () => (layout && pickedFor === state.matrices ? layout.nodes.filter((n) => picked.has(n.key)) : []);
+
+  // What Alt-clicks gathered: the pool of substrands, else (without pathway data) the picked nodes.
+  function groupTarget() {
+    const target = poolTarget();
+    if (target) return target;
+    const nodes = pickedNodes().map((n) => n.id);
+    return nodes.length ? { kind: 'nodes', index: -1, paths: null, member: -1, single: false, nodes } : null;
+  }
+
   function clearPool() {
     pool = new Map();
+    picked = new Set();
     applyHighlight();
     refreshInspector();
+  }
+
+  // Merging needs two or more picked nodes in one column of a layered diagram.
+  function mergeCandidates() {
+    const nodes = pickedNodes();
+    const ok = state.mode === 'layered' && nodes.length >= 2 && nodes.every((n) => n.set === nodes[0].set);
+    return ok ? nodes : null;
+  }
+
+  function refreshMerge() {
+    const button = $('#merge-nodes');
+    const nodes = mergeCandidates();
+    button.disabled = !nodes;
+    button.textContent = nodes ? `Merge ${nodes.length} nodes` : 'Merge nodes';
+    button.title = nodes
+      ? `Merge ${nodes.map(nodeDisplayName).join(', ')} into one node (Ctrl/⌘+Z undoes)`
+      : 'Alt-click two or more nodes in one column, then merge them into one node';
+  }
+
+  function mergePicked() {
+    const nodes = mergeCandidates();
+    if (!nodes) return;
+    const name = nodes.map(nodeDisplayName).join(' + ');
+    state = window.SK.edit.mergeNodes(state, nodes[0].set, nodes.map((n) => n.node - 1), name);
+    picked = new Set();
+    pool = new Map();
+    selection = null;
+    hover = null;
+    update({ fit: true, commit: true });
+    notify(`Merged into "${name}" (Ctrl/⌘+Z undoes).`);
   }
 
   // Under every node, a small bar: the share of the node the selection fills in the node's color
@@ -1298,7 +1366,7 @@
   }
 
   function applyHighlight() {
-    const active = (drag && drag.target) || hover || poolTarget() || pinnedTarget();
+    const active = (drag && drag.target) || hover || groupTarget() || pinnedTarget();
     const sets = highlightSets(active);
     const covered = coverage(active);
     svg.classList.toggle('dimmed', !!active);
@@ -1322,6 +1390,7 @@
       svg.querySelectorAll(`.ribbon[${attr}="${sel.index}"], .trunk[${attr}="${sel.index}"], .node-dot[${attr}="${sel.index}"]`)
         .forEach((el) => el.classList.add('selected'));
     }
+    refreshMerge();
   }
 
   const pct = (v, total) => (total > 0 ? `${(100 * v / total).toFixed(1)}%` : '–');
@@ -1331,10 +1400,20 @@
   // Hover details: the strand or node, then the traced pathways, if any.
   function hoverHtml(target) {
     let html;
+    const nodes = pickedNodes();
+    const pickedLine = nodes.length
+      ? `<p>Picked nodes: <b>${nodes.map((n) => esc(nodeDisplayName(n))).join(', ')}</b>` +
+        `${mergeCandidates() ? ' · <b>Merge</b> them with the button at the top' : nodes.length > 1 ? ' (in different columns, so they cannot merge)' : ''}.</p>`
+      : '';
     if (target.kind === 'pool') {
       return '<h2>Pool</h2><p class="muted small">Alt-click strands or nodes to add their substrands, or remove them when ' +
-        'they are all in already (with Ctrl/⌘ or Shift: one pathway or one item).</p>' + focusHtml(target) +
-        '<button class="mini-btn wide" id="pool-clear">Clear pool (Esc)</button>';
+        'they are all in already (with Ctrl/⌘ or Shift: one pathway or one item). Alt-clicked nodes are also picked for merging.</p>' +
+        pickedLine + focusHtml(target) + '<button class="mini-btn wide" id="pool-clear">Clear pool (Esc)</button>';
+    }
+    if (target.kind === 'nodes') {
+      return '<h2>Picked nodes</h2><p class="muted small">Alt-click nodes to pick or unpick them; nodes picked in one column ' +
+        'can be merged into one with the button at the top.</p>' + pickedLine +
+        '<button class="mini-btn wide" id="pool-clear">Clear (Esc)</button>';
     }
     if (target.kind === 'flow') {
       const f = layout.flows[target.index];
@@ -1463,7 +1542,8 @@
     event.preventDefault();
     svg.setPointerCapture(event.pointerId);
     showHoverInfo(null);
-    const base = { target, x0: event.clientX, y0: event.clientY, moved: false, alt: event.altKey };
+    const base = { target, x0: event.clientX, y0: event.clientY, moved: false, alt: event.altKey,
+      ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey };
     if (target.kind === 'node') {
       const n = layout.nodes[target.index];
       drag = Object.assign(base, {
@@ -1603,10 +1683,20 @@
     if (!finished.moved) {
       const t = finished.target;
       const shown = hover && hover.kind === t.kind && hover.index === t.index ? hover : null;
-      if (finished.alt && shown && shown.paths && traces) {
-        togglePool(shown);
+      // Alt-click: a plain one on a node picks it (e.g. for merging); with pathway data, the
+      // substrands shown join or leave the pool.
+      const pickNode = finished.alt && t.kind === 'node' && !finished.ctrl && !finished.shift;
+      const poolIt = finished.alt && shown && shown.paths && traces;
+      if (pickNode || poolIt) {
+        if (pickNode) togglePicked(layout.nodes[t.index].key);
+        if (poolIt) togglePool(shown);
         const units = poolTarget() ? poolTarget().units : [];
-        notify(units.length ? `Pool: ${fmtValue(units.reduce((sum, u) => sum + unitWeight(u), 0))} ${unitOf(2)} in ${new Set(units.map((u) => u[0])).size} pathways (Esc clears).` : 'Pool cleared.');
+        const nodes = pickedNodes();
+        notify([
+          units.length ? `Pool: ${fmtValue(units.reduce((sum, u) => sum + unitWeight(u), 0))} ${unitOf(2)} in ${new Set(units.map((u) => u[0])).size} pathways.` : '',
+          nodes.length ? `Picked: ${nodes.map(nodeDisplayName).join(', ')}${mergeCandidates() ? ' (Merge at the top).' : '.'}` : '',
+          'Esc clears.'
+        ].filter(Boolean).join(' '));
         applyHighlight();
         refreshInspector();
         return;
@@ -1680,9 +1770,9 @@
     if (drag) return;
     const sel = findSelected();
     // A pool shows (and is highlighted) in place of the pinned selection's breakdown.
-    const head = () => (poolTarget() ? hoverHtml(poolTarget()) : pinnedHtml());
-    if (!sel && poolTarget()) {
-      host.innerHTML = hoverHtml(poolTarget());
+    const head = () => (groupTarget() ? hoverHtml(groupTarget()) : pinnedHtml());
+    if (!sel && groupTarget()) {
+      host.innerHTML = hoverHtml(groupTarget());
       bindPool(host);
       return;
     }
@@ -2206,6 +2296,13 @@
     $('#undo').addEventListener('click', () => restore(history.index - 1));
     $('#redo').addEventListener('click', () => restore(history.index + 1));
     $('#fit').addEventListener('click', () => update({ fit: true, commit: true }));
+    $('#merge-nodes').addEventListener('click', () => {
+      try {
+        mergePicked();
+      } catch (err) {
+        showError(err.message);
+      }
+    });
     const menu = $('#export-menu');
     $('#export-btn').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2240,9 +2337,10 @@
         restore(history.index + 1);
       } else if (!typing && !mod && e.key.toLowerCase() === 'f') {
         update({ fit: true, commit: true });
-      } else if (e.key === 'Escape' && (selection || pool.size)) {
+      } else if (e.key === 'Escape' && (selection || pool.size || picked.size)) {
         selection = null;
         pool = new Map();
+        picked = new Set();
         applyHighlight();
         refreshInspector();
       } else if (!typing && e.key === '?') {

@@ -53,6 +53,7 @@ Wide and long imports also keep every trajectory (the sequence of nodes an item 
 - Drag a strand up or down to reorder it within the stack at its nearer end.
 - Dragging a node into a neighbour stops at an invisible wall, or (Canvas & dragging → "pushes them") shoves the neighbour along; a node can never be dropped into an invalid layout.
 - **Pathway tracing** (wide and long table imports): hovering a strand or node traces every pathway through it end to end, e.g. which stages and treatments feed Remission, and the inspector breaks the traced items down by node and by strand (counts and shares of the traced total) and lists the largest pathways. Hold Ctrl/⌘ to trace only the pathway (unique trajectory) under the pointer, or Shift to trace only the single item there (e.g. patient P091) when the data has item ids. Clicking a strand or node pins its traces and breakdown above its editor in the inspector until you click empty space or press Esc. Alt-click (⌥-click) adds the hovered substrands (all through a strand or node, or with Ctrl/⌘ or Shift one pathway or one item) to a **pool**, or removes them when they are all in it already; the pool is traced, filled into the node bars and tabulated in the inspector as one set, e.g. two nodes' worth of patients, until Esc or Clear pool. Nodes and strands made entirely of traced substrands hide their faded copies. Share bars fill an outlined box that stands for 100% of the traced total. Each strand is split into substrands, one per pathway and then one per item, ordered by where they arrive at the strand's source node. Traces are colored like the strands and nodes they cross, curve through interior nodes from band edge to band edge, run into end-node bodies, and fade with the node bodies (through white at labeled node centres); the traced nodes dim like the rest, keeping their labels. With **Gather traces in nodes** (off by default; Canvas & dragging), several traced pathways close up into one contiguous bundle through each node they share, in the order they cross it, set against the node's top or bottom edge (whichever moves them less, so the rest of the node stays in one piece for comparison), and fan back out to their own strands at the node edges. Each trace bends once, reaching its place only at the node centre (or, in end nodes, where the body ends), to keep the curves gentle. A single traced item thinner than 4 px is drawn 4 px wide around its slice. **Substrand lines** (Canvas & dragging) draw the substrand divisions permanently. Tracing switches off (with a warning) if flow values are edited away from the imported data.
+- **Merging nodes**: a plain Alt-click on a node also picks it (on any data, with or without pathways). With two or more nodes picked in one column, **Merge nodes** in the toolbar collapses them into one node named after them (e.g. "Surgery + Radiation"): their strands' values are summed, the node sits at their weighted mean height, every other node keeps its color, and item-level pathways are re-indexed (pathways that differed only there become one). Ctrl/⌘+Z undoes it. Graph mode does not support merging yet.
 - Undo/redo (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z), fit view (F), deselect (Esc). Sessions autosave to the browser.
 
 All `sankey_ribbons()` layout options are available in the sidebar, including per-stage routing and ordering ("Apply to: stage k"), `adjust_loc`, `adjust_node_height`, boundary routing and compensation, plus graph-mode `require_forward` and `balance`.
@@ -69,6 +70,7 @@ The **SVG** and **PNG** (2×) buttons export the plot as shown in one click: wit
 - `js/app.js`: state, controls, file loading, interactions, inspector, history and exports.
 - `js/transform.js` and `js/importer.js`: table import converters (wide, long, links, crosstab) and the import dialog.
 - `js/paths.js`: substrand and item-slice stacking, pathway trace geometry, hit-testing and substrand lines for item-level data.
+- `js/edit.js`: data edits on the app state (merging nodes of one column).
 - `js/csv.js`, `js/color.js`, `js/zip.js`, `js/examples.js`: parsing, color math, a store-only zip writer and the bundled examples (matrix sets, aggregated patient pathways, the same patients one row each with patient ids, and long-format survey waves).
 
 ## Tests
@@ -76,7 +78,7 @@ The **SVG** and **PNG** (2×) buttons export the plot as shown in one click: wit
 ```sh
 cd webapp
 npm install                 # Playwright test runner
-npm run test:unit           # geometry parity with R, layout, CSV parsing, table import and pathways (node:test)
+npm run test:unit           # geometry parity with R, layout, CSV parsing, table import, pathways and edits (node:test)
 npm run test:e2e            # browser tests (Playwright, Chromium)
 ```
 

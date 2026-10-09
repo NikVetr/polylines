@@ -26,6 +26,10 @@
     const palette = C.PALETTES[style.palette];
     if (!palette) throw new SK.layout.SankeyError(`Unknown palette "${style.palette}".`);
     const scheme = (index) => C.withAlpha(C.parse(palette[index % palette.length]), style.opacity);
+    // Palette slot of a node: its position, unless pinned (merging nodes pins every node's slot so
+    // the survivors keep their colors).
+    const slots = data.nodeSlots || {};
+    const slot = (id) => (slots[layout.nodes[id].key] !== undefined ? slots[layout.nodes[id].key] : id);
     const single = C.withAlpha(C.parse(style.singleColor), style.opacity);
     const overrides = data.flowOverrides || {};
     const midOverrides = data.midOverrides || {};
@@ -41,8 +45,8 @@
         }
         return C.parse(value);
       }
-      if (style.colorBy === 'source') return scheme(f.from);
-      if (style.colorBy === 'target') return scheme(f.to);
+      if (style.colorBy === 'source') return scheme(slot(f.from));
+      if (style.colorBy === 'target') return scheme(slot(f.to));
       if (style.colorBy === 'stage') return scheme(f.stage);
       return single;
     });

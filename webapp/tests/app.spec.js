@@ -563,6 +563,59 @@ test('Alt-click adds and removes substrands from a pool traced and tabulated tog
   await expect(page.locator('#plot .trace')).toHaveCount(0);
 });
 
+test('Alt-clicked nodes in one column merge into one node, and undo splits them again', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const altClick = async (label) => {
+    const n = await nodeAt(page, label);
+    await page.mouse.move(n.x, n.y);
+    await page.keyboard.down('Alt');
+    await page.mouse.click(n.x, n.y);
+    await page.keyboard.up('Alt');
+  };
+  const merge = page.locator('#merge-nodes');
+  await expect(merge).toBeDisabled();
+  await altClick('Surgery');
+  await altClick('Stage I');
+  await expect(merge).toBeDisabled(); // different columns
+  await altClick('Stage I');
+  await altClick('Radiation');
+  await expect(merge).toBeEnabled();
+  await expect(merge).toHaveText('Merge 2 nodes');
+  await merge.click();
+  const after = await page.evaluate(() => ({
+    labels: window.SankeyApp.layout.nodes.filter((n) => n.set === 2).map((n) => n.label),
+    total: window.SankeyApp.state.paths.reduce((t, p) => t + p.weight, 0)
+  }));
+  expect(after.labels).toEqual(['Surgery + Radiation', 'Chemotherapy', 'Palliative']);
+  expect(after.total).toBe(560);
+  await expect(page.locator('#warnings')).toBeHidden();
+  await expect(merge).toBeDisabled();
+  // Pathways still trace through the merged node; those that differed only there are now one.
+  const node = await nodeAt(page, 'Surgery + Radiation');
+  await page.mouse.move(node.x, node.y);
+  await expect(page.locator('#hover-info')).toContainText('5 pathways · 308 patients');
+  await page.mouse.move(5, 5);
+  await page.keyboard.press('Control+z');
+  expect(await page.evaluate(() => window.SankeyApp.layout.nodes.filter((n) => n.set === 2).length)).toBe(4);
+});
+
+test('nodes of matrix data can be picked and merged too', async ({ page }) => {
+  const ids = await page.evaluate(() => window.SankeyApp.layout.nodes.filter((n) => n.set === 1).slice(0, 2).map((n) => n.label));
+  for (const label of ids) {
+    const n = await nodeAt(page, label);
+    await page.mouse.move(n.x, n.y);
+    await page.keyboard.down('Alt');
+    await page.mouse.click(n.x, n.y);
+    await page.keyboard.up('Alt');
+  }
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#inspector-main h2').first()).toHaveText('Picked nodes');
+  await page.locator('#merge-nodes').click();
+  const sources = await page.evaluate(() => window.SankeyApp.state.matrices[0].length);
+  expect(sources).toBe(3);
+  await expect(page.locator('#plot .node-label', { hasText: `${ids[0]} + ${ids[1]}` })).toHaveCount(1);
+});
+
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
   await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
   await expect(page.locator('.topbar .actions > [data-export="png"]')).toBeVisible();
