@@ -3284,9 +3284,10 @@ node_width_bridge_curve_body <- function(p0, p1, node = NULL, side = c("lower", 
   } else {
     node[[height_col]][1] / 2
   }
-  label_half_width <- node_label_body_half_width(node)
   x0 <- min(p0["x"], p1["x"])
   x1 <- max(p0["x"], p1["x"])
+  # Leave horizontal space for the curved shoulders instead of stepping vertically at a face.
+  label_half_width <- min(node_label_body_half_width(node), (x1 - x0) / 4)
   left_x <- min(max(node$x[1] - label_half_width, x0), x1)
   right_x <- min(max(node$x[1] + label_half_width, x0), x1)
   p_left <- c(x = left_x, y = y_mid)
@@ -3296,9 +3297,9 @@ node_width_bridge_curve_body <- function(p0, p1, node = NULL, side = c("lower", 
     p_left <- p_right
     p_right <- tmp
   }
-  n0 <- max(3L, ceiling(n / 3))
+  n0 <- max(16L, ceiling(n / 3))
   n1 <- max(2L, ceiling(n / 3))
-  n2 <- max(3L, n - n0 - n1 + 2L)
+  n2 <- max(16L, n - n0 - n1 + 2L)
   rbind(
     node_width_bridge_curve(p0, p_left, n = n0),
     line_between(p_left, p_right, n = n1)[-1, , drop = FALSE],
@@ -3332,7 +3333,7 @@ endpoint_node_body_polygon <- function(sankey, node, flow_inds, side, overlap = 
   label_half_width <- if("node_body_height" %in% names(node) &&
                          is.finite(node$node_body_height[1]) &&
                          node$node_body_height[1] > 0) {
-    node_label_body_half_width(node)
+    min(node_label_body_half_width(node), node$node_width[1] / 4)
   } else {
     node$node_width[1] / 2
   }
@@ -3344,31 +3345,15 @@ endpoint_node_body_polygon <- function(sankey, node, flow_inds, side, overlap = 
   transition_x <- min(max(transition_x, min(face_x, outer_x)), max(face_x, outer_x))
   fill_face_x <- face_x + sign(face_x - outer_x) * max(overlap, 0)
 
-  coords <- if(face_x > outer_x) {
-    rbind(
-      c(x = outer_x, y = outer_y["lower"]),
-      c(x = transition_x, y = outer_y["lower"]),
-      c(x = face_x, y = lower$y),
-      c(x = fill_face_x, y = lower$y),
-      c(x = fill_face_x, y = upper$y),
-      c(x = face_x, y = upper$y),
-      c(x = transition_x, y = outer_y["upper"]),
-      c(x = outer_x, y = outer_y["upper"]),
-      c(x = outer_x, y = outer_y["lower"])
-    )
-  } else {
-    rbind(
-      c(x = fill_face_x, y = lower$y),
-      c(x = face_x, y = lower$y),
-      c(x = transition_x, y = outer_y["lower"]),
-      c(x = outer_x, y = outer_y["lower"]),
-      c(x = outer_x, y = outer_y["upper"]),
-      c(x = transition_x, y = outer_y["upper"]),
-      c(x = face_x, y = upper$y),
-      c(x = fill_face_x, y = upper$y),
-      c(x = fill_face_x, y = lower$y)
-    )
-  }
+  fill_lower <- rbind(node_width_bridge_curve(
+    c(x = face_x, y = lower$y), c(x = transition_x, y = outer_y["lower"]), n = 16),
+    c(x = outer_x, y = outer_y["lower"]))
+  fill_upper <- rbind(node_width_bridge_curve(
+    c(x = face_x, y = upper$y), c(x = transition_x, y = outer_y["upper"]), n = 16),
+    c(x = outer_x, y = outer_y["upper"]))
+  coords <- rbind(c(x = fill_face_x, y = lower$y), fill_lower,
+                  fill_upper[nrow(fill_upper):1, , drop = FALSE],
+                  c(x = fill_face_x, y = upper$y), c(x = fill_face_x, y = lower$y))
   colnames(coords) <- c("x", "y")
   lower_transition <- node_width_bridge_curve(
     c(x = face_x, y = lower$y),
@@ -3407,6 +3392,9 @@ node_width_bridge_curve <- function(p0, p1, n = 16) {
     colnames(out) <- c("x", "y")
     return(out)
   }
+  # Match the browser's subpixel cosine sampling (R coordinates are plot units).
+  y_per_pixel <- if(grDevices::dev.cur() > 1) abs(diff(par("usr")[3:4])) / (par("pin")[2] * 96) else 1 / 96
+  n <- max(n, 2 * ceiling(sqrt(abs(p1[2] - p0[2]) / y_per_pixel * pi^2 / 1.6) / 2) + 1)
   t <- seq(0, 1, length.out = n)
   # Cosine easing gives horizontal tangents at each end without the long
   # straight-looking middle segment caused by sharper logistic/shoulder eases.

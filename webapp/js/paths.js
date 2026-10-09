@@ -114,6 +114,91 @@
   const first = (pts) => pts[0];
   const last = (pts) => pts[pts.length - 1];
 
+  const nodeShapes = new WeakMap();
+  function nodeShape(layout, n) {
+    if (!nodeShapes.has(layout)) nodeShapes.set(layout, new Map());
+    const cache = nodeShapes.get(layout);
+    if (!cache.has(n.id)) {
+      const role = S.nodeRole(n);
+      const shape = role === 'interior' ? S.interiorTrunk(layout, n) : S.endpointBody(layout, n, role === 'source' ? 'start' : 'end', 0);
+      cache.set(n.id, shape && (role === 'interior' ? shape : { lower: shape.lowerBorder, upper: shape.upperBorder }));
+    }
+    return cache.get(n.id);
+  }
+
+  // Map a slice through the same expanded body edges used by the node fill.
+  function nodeBridge(layout, n, a, b) {
+    const shape = nodeShape(layout, n);
+    if (!shape || Math.abs(b[0] - a[0]) < 1e-9) return S.bridgeCurve(a, b, 25);
+    const bounds = (x) => [SK.layout.pointAtX(shape.lower, x)[1], SK.layout.pointAtX(shape.upper, x)[1]];
+    const fraction = ([x, y]) => {
+      const [lo, up] = bounds(x);
+      return (y - lo) / Math.max(up - lo, 1e-12);
+    };
+    const fa = fraction(a);
+    const fb = fraction(b);
+    const loX = Math.min(a[0], b[0]);
+    const hiX = Math.max(a[0], b[0]);
+    const xs = [...new Set(S.bridgeCurve(a, b, 25).map((p) => p[0]).concat(
+      shape.lower.concat(shape.upper).filter(([x]) => x > loX && x < hiX).map((p) => p[0])))].sort((x, y) => (b[0] > a[0] ? x - y : y - x));
+    return xs.map((x, i) => {
+      if (i === 0) return a;
+      if (i === xs.length - 1) return b;
+      const t = 0.5 - 0.5 * Math.cos(Math.PI * (x - a[0]) / (b[0] - a[0]));
+      const [lo, up] = bounds(x);
+      return [x, lo + (up - lo) * (fa * (1 - t) + fb * t)];
+    });
+  }
+
+  function bodyEdge(layout, n, end, reach) {
+    const shape = nodeShape(layout, n);
+    if (!shape || Math.abs(reach - end[0]) < 1e-9) return [];
+    const lo = SK.layout.pointAtX(shape.lower, end[0])[1];
+    const up = SK.layout.pointAtX(shape.upper, end[0])[1];
+    const t = (end[1] - lo) / Math.max(up - lo, 1e-12);
+    const y = SK.layout.pointAtX(shape.lower, reach)[1] * (1 - t) + SK.layout.pointAtX(shape.upper, reach)[1] * t;
+    return nodeBridge(layout, n, end, [reach, y]).slice(1);
+  }
+
+  function nodeSlots(layout, subs, n) {
+    if (!subs.nodeSlots) subs.nodeSlots = new Map();
+    if (!subs.nodeSlots.has(n.id)) {
+      const incoming = n.inFlows.length > 0;
+      const entries = (incoming ? n.inFlows : n.outFlows).flatMap((k) => {
+        const f = layout.flows[k];
+        return subs.byFlow[k].map((p) => ({ path: p.path, weight: f.value * (p.b - p.a),
+          y: (incoming ? f.endY + f.endOffset : f.startY + f.startOffset) + f.w * ((p.a + p.b) / 2 - 0.5) }));
+      }).sort((a, b) => a.y - b.y || a.path - b.path);
+      const total = entries.reduce((sum, p) => sum + p.weight, 0);
+      let cum = 0;
+      subs.nodeSlots.set(n.id, new Map(entries.map((p, i) => {
+        const a = cum / total;
+        cum += p.weight;
+        return [p.path, { a, b: i === entries.length - 1 ? 1 : cum / total }];
+      })));
+    }
+    return subs.nodeSlots.get(n.id);
+  }
+
+  // A complete stack through the body avoids gaps when pathways change strand order.
+  function packedBridge(layout, subs, n, pi, member, a, b, edge) {
+    const shape = nodeShape(layout, n);
+    if (!shape || Math.abs(b[0] - a[0]) < 1e-9) return nodeBridge(layout, n, a, b);
+    const slot = nodeSlots(layout, subs, n).get(pi);
+    const cuts = member >= 0 && subs.memberCuts[pi] ? subs.memberCuts[pi].slice(member, member + 2) : [0, 1];
+    const fraction = slot.a + (slot.b - slot.a) * cuts[edge];
+    const half = Math.min(n.widthPx / 2, Math.abs(b[0] - a[0]) / 4);
+    const dir = Math.sign(b[0] - a[0]);
+    const at = (x) => {
+      const lo = SK.layout.pointAtX(shape.lower, x)[1];
+      const up = SK.layout.pointAtX(shape.upper, x)[1];
+      return [x, lo + (up - lo) * fraction];
+    };
+    const left = at(n.X - dir * half);
+    const right = at(n.X + dir * half);
+    return nodeBridge(layout, n, a, left).concat(nodeBridge(layout, n, left, right).slice(1), nodeBridge(layout, n, right, b).slice(1));
+  }
+
   // Central label positions along a substrand, with local tangents and widths.
   function labelAnchor(layout, f, a, b) {
     const m = bandLength(layout, f);
@@ -211,18 +296,21 @@
     // Points strictly between the band-edge points a and b of consecutive strands: the eased
     // bridge, pulled into the gathered place y by a weight that rises and falls smoothly (sin^2,
     // 1 only at the node centre), so a trace bends once rather than holding a level stretch.
-    const cross = (a, b, y) => {
-      const bridge = S.bridgeCurve(a, b, 25);
+    const cross = (n, a, b, y, edge) => {
+      const bridge = y === undefined ? packedBridge(layout, subs, n, pi, member, a, b, edge) : S.bridgeCurve(a, b, 25);
       if (y === undefined) return bridge.slice(1, -1);
       const shift = y - (a[1] + b[1]) / 2;
-      return bridge.slice(1, -1).map(([x, yy], i) => [x, yy + shift * Math.sin(Math.PI * (i + 1) / 24) ** 2]);
+      return bridge.slice(1, -1).map(([x, yy], i) => {
+        const t = Math.abs(b[0] - a[0]) > 1e-9 ? (x - a[0]) / (b[0] - a[0]) : (i + 1) / (bridge.length - 1);
+        return [x, yy + shift * Math.sin(Math.PI * t) ** 2];
+      });
     };
     // Points from a strand's end on to x = reach in the node body (excluding the end point): level,
     // or eased all the way into the gathered place, so the bundle is flush only where the drawn
     // body ends. Without a body (reach at the face), the ease runs across the merge band.
-    const intoBody = (end, faceX, reach, y) => {
+    const intoBody = (n, end, faceX, reach, y) => {
       if (y !== undefined) return ease(end, [reach, y]).slice(1);
-      return reach !== faceX ? [[reach, end[1]]] : [];
+      return bodyEdge(layout, n, end, reach);
     };
     const from = layout.nodes[ps[0].f.from];
     const to = layout.nodes[last(ps).f.to];
@@ -243,16 +331,16 @@
     const lower = [];
     ps.forEach((p, s) => {
       if (s > 0) {
-        upper.push(...cross(last(upper), first(p.up), placeAt(p.f.from, 1)));
-        lower.push(...cross(last(lower), first(p.lo), placeAt(p.f.from, 0)));
+        upper.push(...cross(layout.nodes[p.f.from], last(upper), first(p.up), placeAt(p.f.from, 1), 1));
+        lower.push(...cross(layout.nodes[p.f.from], last(lower), first(p.lo), placeAt(p.f.from, 0), 0));
       }
       upper.push(...p.up);
       lower.push(...p.lo);
     });
-    upper.unshift(...intoBody(first(upper), faceStart, reachStart, placeAt(from.id, 1)).reverse());
-    lower.unshift(...intoBody(first(lower), faceStart, reachStart, placeAt(from.id, 0)).reverse());
-    upper.push(...intoBody(last(upper), faceEnd, reachEnd, placeAt(to.id, 1)));
-    lower.push(...intoBody(last(lower), faceEnd, reachEnd, placeAt(to.id, 0)));
+    upper.unshift(...intoBody(from, first(upper), faceStart, reachStart, placeAt(from.id, 1)).reverse());
+    lower.unshift(...intoBody(from, first(lower), faceStart, reachStart, placeAt(from.id, 0)).reverse());
+    upper.push(...intoBody(to, last(upper), faceEnd, reachEnd, placeAt(to.id, 1)));
+    lower.push(...intoBody(to, last(lower), faceEnd, reachEnd, placeAt(to.id, 0)));
     const rightmost = [from, ...ps.map((p) => layout.nodes[p.f.to])]
       .reduce((a, b) => (a.X + a.widthPx / 2 >= b.X + b.widthPx / 2 ? a : b));
     const rightX = rightmost.X + rightmost.widthPx / 2;
@@ -277,7 +365,15 @@
     const lo = SK.layout.pointAtX(f.lower, X)[1];
     const up = SK.layout.pointAtX(f.upper, X)[1];
     if (Math.abs(up - lo) < 1e-9) return null;
-    const t = Math.min(Math.max((Y - lo) / (up - lo), 0), 1);
+    // Offset edges can have different x coordinates. Invert the actual interpolated slice,
+    // rather than a vertical fraction that compresses hit positions on steep curves.
+    let a = 0, b = 1;
+    for (let i = 0; i < 24; i++) {
+      const mid = (a + b) / 2;
+      if (SK.layout.pointAtX(lerpEdge(f, mid), X)[1] < Y) a = mid;
+      else b = mid;
+    }
+    const t = (a + b) / 2;
     const hit = subs.byFlow[k].find((e) => t >= e.a && t <= e.b);
     if (!hit) return null;
     const cuts = subs.memberCuts[hit.path];
@@ -287,22 +383,72 @@
     return { path: hit.path, member: i > 0 ? i - 1 : cuts.length - 2 };
   }
 
-  // The path (and member) at height Y where strands meet node n, on the side nearer to X.
-  function pathAtNode(layout, subs, n, X, Y) {
-    const near = X < n.X ? n.inFlows : n.outFlows;
-    const ks = near.length ? near : (X < n.X ? n.outFlows : n.inFlows);
-    const incoming = ks === n.inFlows;
-    let best = null;
-    ks.forEach((k) => {
-      const f = layout.flows[k];
-      const m = bandLength(layout, f);
-      const x = incoming ? f.endX - f.dir * m : f.startX + f.dir * m;
-      const lo = SK.layout.pointAtX(f.lower, x)[1];
-      const up = SK.layout.pointAtX(f.upper, x)[1];
-      const d = Y < lo ? lo - Y : Y > up ? Y - up : 0;
-      if (!best || d < best.d) best = { d, k, x, y: Math.min(Math.max(Y, lo), up) };
+  // Cache the local rendered slices once per node/layout; modifier hover only searches these.
+  function nodeSlices(layout, subs, n) {
+    if (!subs.nodeSlices) subs.nodeSlices = new Map();
+    if (subs.nodeSlices.has(n.id)) return subs.nodeSlices.get(n.id);
+    const paths = [...new Set(n.inFlows.concat(n.outFlows).flatMap((k) => subs.byFlow[k].map((p) => p.path)))];
+    const at = (f, t, x) => SK.layout.pointAtX(lerpEdge(f, t), x);
+    const slices = paths.map((pi) => {
+      const ks = subs.pathFlows[pi];
+      let lower, upper;
+      if (n.inFlows.length && n.outFlows.length) {
+        const f = layout.flows[ks[n.set - 2]];
+        const g = layout.flows[ks[n.set - 1]];
+        const [a, b] = sliceOf(subs, f.index, pi, -1);
+        const [c, d] = sliceOf(subs, g.index, pi, -1);
+        const x = f.endX - f.dir * bandLength(layout, f);
+        const xx = g.startX + g.dir * bandLength(layout, g);
+        lower = packedBridge(layout, subs, n, pi, -1, at(f, a, x), at(g, c, xx), 0);
+        upper = packedBridge(layout, subs, n, pi, -1, at(f, b, x), at(g, d, xx), 1);
+      } else {
+        const source = n.outFlows.length > 0;
+        const f = layout.flows[source ? first(ks) : last(ks)];
+        const [a, b] = sliceOf(subs, f.index, pi, -1);
+        const face = source ? f.startX : f.endX;
+        const edge = face + (source ? 1 : -1) * f.dir * bandLength(layout, f);
+        const reach = bodyReach(layout, n, source ? 'start' : 'end', false) ?? face;
+        const local = (t) => {
+          const body = bodyEdge(layout, n, at(f, t, face), reach);
+          const flow = S.sliceByX(lerpEdge(f, t), face, edge);
+          return source ? body.reverse().concat(flow) : flow.concat(body);
+        };
+        lower = local(a); upper = local(b);
+      }
+      return { path: pi, lower, upper };
     });
-    return best ? pathAt(layout, subs, best.k, best.x, best.y) : null;
+    subs.nodeSlices.set(n.id, slices);
+    return slices;
+  }
+
+  // Resolve the slice at the pointer's actual x, including widened node bodies.
+  function pathAtNode(layout, subs, n, X, Y) {
+    const shape = nodeShape(layout, n);
+    // The packed body has constant fractions: avoid constructing every path's bridge on hover.
+    if (shape && Math.abs(X - n.X) <= n.widthPx / 4 + 1e-9) {
+      const lo = SK.layout.pointAtX(shape.lower, X)[1];
+      const up = SK.layout.pointAtX(shape.upper, X)[1];
+      const t = Math.min(Math.max((Y - lo) / Math.max(up - lo, 1e-12), 0), 1);
+      for (const [pi, slot] of nodeSlots(layout, subs, n)) {
+        if (t < slot.a || t > slot.b) continue;
+        const cuts = subs.memberCuts[pi];
+        const u = (t - slot.a) / Math.max(slot.b - slot.a, 1e-12);
+        const i = cuts ? cuts.findIndex((c, j) => j > 0 && u <= c) : -1;
+        return { path: pi, member: cuts ? (i > 0 ? i - 1 : cuts.length - 2) : -1 };
+      }
+      return null;
+    }
+    let best = null;
+    nodeSlices(layout, subs, n).forEach((slice) => {
+      const lo = SK.layout.pointAtX(slice.lower, X)[1];
+      const up = SK.layout.pointAtX(slice.upper, X)[1];
+      const d = Y < lo ? lo - Y : Y > up ? Y - up : 0;
+      if (!best || d < best.d) best = { d, path: slice.path, t: Math.min(Math.max((Y - lo) / Math.max(up - lo, 1e-12), 0), 1) };
+    });
+    if (!best) return null;
+    const cuts = subs.memberCuts[best.path];
+    const i = cuts ? cuts.findIndex((c, j) => j > 0 && best.t <= c) : -1;
+    return { path: best.path, member: cuts ? (i > 0 ? i - 1 : cuts.length - 2) : -1 };
   }
 
   // Per flow, the lines between neighbouring substrands and member slices, band edge to band edge.

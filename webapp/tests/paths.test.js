@@ -13,11 +13,11 @@ const T = SK.transform;
 
 const wide = 'a,b,c,n\nA,X,P,10\nA,Y,P,5\nB,X,Q,7\nA,X,Q,3\nB,X,P,2\n';
 
-function buildLayout(result, params = {}) {
+function buildLayout(result, params = {}, nodeOptions = {}) {
   const counts = result.dimnames.map((d) => d.rows.length).concat([result.dimnames[result.dimnames.length - 1].cols.length]);
   const loc = [];
   counts.forEach((count, s) => {
-    for (let k = 0; k < count; k++) loc.push({ set: s + 1, node: k + 1, x: s, y: 1 - (k + 0.5) / count });
+    for (let k = 0; k < count; k++) loc.push(Object.assign({ set: s + 1, node: k + 1, x: s, y: 1 - (k + 0.5) / count }, nodeOptions));
   });
   return SK.layout.computeLayout(
     { mode: 'layered', matrices: result.matrices, loc, params: Object.assign({ n: 30 }, params), valueScale: 0.004 },
@@ -197,5 +197,106 @@ test('gathered traces sit flush against a node edge at the centre of every node 
     const [lo, up] = slots.get(n.id).get(pi);
     const near = (pts, y) => pts.filter((pt) => Math.abs(pt[1] - y) < 1e-9 && Math.abs(pt[0] - n.X) < 30).length;
     assert.ok(near(t.upper, up) >= 1 && near(t.lower, lo) >= 1);
+  });
+});
+
+test('member hit positions follow rendered slices throughout expanded node bodies', () => {
+  const table = T.parseTable('id,a,b,c\nP1,A,B,C\nP2,A,B,C\nP3,A,B,C\nP4,A,B,C\nP5,A,B,C\n');
+  const r = T.build(table, { format: 'wide', id: 'id', columns: ['a', 'b', 'c'] });
+  const layout = buildLayout(r, {}, { width: 0.35, height: 0.4, label: 'Node' });
+  const subs = SK.paths.substrands(layout, r.paths);
+  const whole = SK.paths.tracePolygon(layout, subs, 0, { fadeLabels: false });
+  layout.nodes.forEach((n) => {
+    for (const dx of [-0.2, 0, 0.2]) {
+      const X = n.X + n.widthPx * dx;
+      const lo = SK.layout.pointAtX(whole.lower, X)[1];
+      const up = SK.layout.pointAtX(whole.upper, X)[1];
+      for (const t of [0.01, 0.21, 0.51, 0.79, 0.99]) {
+        const member = Math.floor(t * 5);
+        const Y = lo + (up - lo) * t;
+        assert.deepStrictEqual(SK.paths.pathAtNode(layout, subs, n, X, Y), { path: 0, member });
+        const slice = SK.paths.tracePolygon(layout, subs, 0, { member, fadeLabels: false });
+        assert.ok(Y >= SK.layout.pointAtX(slice.lower, X)[1] - 1e-8 && Y <= SK.layout.pointAtX(slice.upper, X)[1] + 1e-8);
+      }
+    }
+  });
+});
+
+test('member hit positions invert the drawn offset edges on steep strands', () => {
+  const r = T.build(T.parseTable('id,a,b\nP1,A,B\nP2,A,B\nP3,A,B\nP4,A,B\nP5,A,B\n'),
+    { format: 'wide', id: 'id', columns: ['a', 'b'] });
+  const layout = SK.layout.computeLayout({ mode: 'layered', matrices: r.matrices,
+    loc: [{ set: 1, node: 1, x: 0, y: 0.9 }, { set: 2, node: 1, x: 1, y: 0.1 }],
+    params: { n: 100 }, valueScale: 0.015 }, { xlim: [-0.2, 1.2], ylim: [0, 1], width: 600, height: 600 });
+  const subs = SK.paths.substrands(layout, r.paths);
+  const f = layout.flows[0];
+  for (const i of [10, 25, 50, 75, 90]) {
+    for (const t of [0.01, 0.21, 0.51, 0.79, 0.99]) {
+      const X = f.lower[i][0] * (1 - t) + f.upper[i][0] * t;
+      const Y = f.lower[i][1] * (1 - t) + f.upper[i][1] * t;
+      assert.deepStrictEqual(SK.paths.pathAt(layout, subs, 0, X, Y), { path: 0, member: Math.floor(t * 5) });
+    }
+  }
+});
+
+test('reordered pathways tile the node body and resolve at its top and bottom', () => {
+  const r = T.build(T.parseTable(wide), { format: 'wide', columns: ['a', 'b', 'c'], weight: 'n' });
+  const layout = buildLayout(r, {}, { width: 0.35, height: 0.4, label: 'Node' });
+  const subs = SK.paths.substrands(layout, r.paths);
+  layout.nodes.filter(n => n.set === 2).forEach(n => {
+    const shape = SK.shapes.interiorTrunk(layout, n);
+    const paths = r.paths.map((p, pi) => p.nodes[1] === n.node - 1 ? pi : -1).filter(pi => pi >= 0);
+    for (const dx of [-0.2, 0, 0.2]) {
+      const X = n.X + n.widthPx * dx;
+      const lo = SK.layout.pointAtX(shape.lower, X)[1];
+      const up = SK.layout.pointAtX(shape.upper, X)[1];
+      const spans = paths.map(pi => {
+        const trace = SK.paths.tracePolygon(layout, subs, pi);
+        return [SK.layout.pointAtX(trace.lower, X)[1], SK.layout.pointAtX(trace.upper, X)[1]];
+      }).sort((a, b) => a[0] - b[0]);
+      assert.ok(Math.abs(spans[0][0] - lo) < 1e-8 && Math.abs(spans[spans.length - 1][1] - up) < 1e-8);
+      spans.slice(1).forEach((s, i) => assert.ok(Math.abs(s[0] - spans[i][1]) < 1e-8));
+      for (const t of [0.01, 0.05, 0.5, 0.95, 0.99]) {
+        const Y = lo + (up - lo) * t;
+        const hit = SK.paths.pathAtNode(layout, subs, n, X, Y);
+        const trace = SK.paths.tracePolygon(layout, subs, hit.path);
+        assert.ok(Y >= SK.layout.pointAtX(trace.lower, X)[1] - 1e-8 && Y <= SK.layout.pointAtX(trace.upper, X)[1] + 1e-8);
+      }
+    }
+  });
+});
+
+test('body curves reserve smooth shoulders and endpoint fills share their outline edges', () => {
+  const n = { X: 0, Y: 0, widthPx: 40, labelWidthPx: 40, bodyHeightPx: 80 };
+  for (const dir of [-1, 1]) {
+    const edge = SK.shapes.bridgeBody([-20 * dir, -5], [20 * dir, -15], n, 'lower', 16);
+    edge.slice(1).forEach((p, i) => assert.ok(Math.abs(p[0] - edge[i][0]) > 1e-9 || Math.abs(p[1] - edge[i][1]) < 1e-9));
+    assert.ok(edge.length >= 32);
+  }
+  const r = T.build(T.parseTable('a,b\nA,B\n'), { format: 'wide', columns: ['a', 'b'] });
+  const layout = buildLayout(r, {}, { width: 0.35, height: 0.4, label: 'Node' });
+  layout.nodes.forEach((node) => {
+    const body = SK.shapes.endpointBody(layout, node, node.outFlows.length ? 'start' : 'end', 0);
+    body.lowerBorder.concat(body.upperBorder).forEach((p) => assert.ok(body.polygon.some((q) => q[0] === p[0] && q[1] === p[1])));
+    for (const edge of [body.lowerBorder, body.upperBorder]) {
+      edge.slice(1).forEach((p, i) => assert.ok(Math.abs(p[0] - edge[i][0]) > 1e-9 || Math.abs(p[1] - edge[i][1]) < 1e-9));
+    }
+  });
+});
+
+test('strand edges meet without gaps or overlap at node faces and sum to the node thickness', () => {
+  const r = T.build(T.parseTable(wide), { format: 'wide', columns: ['a', 'b', 'c'], weight: 'n' });
+  const layout = buildLayout(r, {}, { width: 0.35, height: 0.4, label: 'Node' });
+  layout.nodes.forEach(n => {
+    for (const [ids, height, incoming] of [[n.inFlows, n.inPx, true], [n.outFlows, n.outPx, false]]) {
+      if (!ids.length) continue;
+      const spans = ids.map(k => {
+        const f = layout.flows[k];
+        const i = incoming ? f.lower.length - 1 : 0;
+        return [f.lower[i][1], f.upper[i][1]];
+      }).sort((a, b) => a[0] - b[0]);
+      spans.slice(1).forEach((s, i) => assert.ok(Math.abs(s[0] - spans[i][1]) < 1e-9));
+      assert.ok(Math.abs(spans[spans.length - 1][1] - spans[0][0] - height) < 1e-9);
+    }
   });
 });

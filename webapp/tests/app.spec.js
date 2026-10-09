@@ -901,7 +901,7 @@ test('thin plot outlines default on, hide during focus and persist in exports an
   const toggle = page.locator('#ctl-thinOutline');
   const outlines = page.locator('#plot .layer-outline');
   await expect(toggle).toBeChecked();
-  await expect(outlines).toBeVisible();
+  await expect(outlines.first()).toBeVisible();
   await expect(outlines.locator('path').first()).toHaveAttribute('stroke', '#000000');
   await page.locator('#ctl-substrands').check();
   const widths = await page.locator('#plot .plot-outline, #plot .substrand-lines').evaluateAll((els) => [...new Set(els.map((el) => el.getAttribute('stroke-width')))]);
@@ -909,17 +909,17 @@ test('thin plot outlines default on, hide during focus and persist in exports an
   expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).toContain('class="layer-outline"');
   const n = await nodeAt(page, 'Remission');
   await page.mouse.move(n.x, n.y);
-  expect(await outlines.evaluate((el) => getComputedStyle(el).opacity)).toBe('0');
+  expect(await outlines.evaluateAll((els) => [...new Set(els.map(el => getComputedStyle(el).opacity))])).toEqual(['0']);
   await page.mouse.click(n.x, n.y);
   await page.mouse.move(5, 5);
-  expect(await outlines.evaluate((el) => getComputedStyle(el).opacity)).toBe('0');
+  expect(await outlines.evaluateAll((els) => [...new Set(els.map(el => getComputedStyle(el).opacity))])).toEqual(['0']);
   const exported = await page.evaluate(() => {
     const doc = new DOMParser().parseFromString(window.SankeyApp.exportSvgText(), 'image/svg+xml');
-    return doc.querySelector('.layer-outline').getAttribute('opacity');
+    return [...new Set([...doc.querySelectorAll('.layer-outline')].map(el => el.getAttribute('opacity')))];
   });
-  expect(exported).toBe('0');
+  expect(exported).toEqual(['0']);
   await page.keyboard.press('Escape');
-  expect(await outlines.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+  expect(await outlines.evaluateAll((els) => [...new Set(els.map(el => getComputedStyle(el).opacity))])).toEqual(['1']);
   await toggle.uncheck();
   await expect(outlines).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('polylines-sankey-v1'))?.style.thinOutline)).toBe(false);
@@ -927,6 +927,40 @@ test('thin plot outlines default on, hide during focus and persist in exports an
   await expect(toggle).not.toBeChecked();
   await expect(outlines).toHaveCount(0);
   expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).not.toContain('class="layer-outline"');
+});
+
+test('a covered strand outline stays hidden beneath an opaque node polygon', async ({ page }) => {
+  await page.mouse.move(5, 5);
+  const pixels = await page.evaluate(async () => {
+    const app = window.SankeyApp;
+    Object.assign(app.state, { mode: 'graph', matrices: [[[0, 0, 0, 0.08], [0, 0, 0.35, 0], [0, 0, 0, 0], [0, 0, 0, 0]]],
+      loc: [{ set: 1, node: 1, x: 0, y: 0.5, width: 0.2 }, { set: 1, node: 2, x: 1.5, y: 0.5, width: 0.4 },
+        { set: 1, node: 3, x: 2.5, y: 0.5, width: 0.2 }, { set: 1, node: 4, x: 3.5, y: 0.5, width: 0.2 }],
+      paths: null, sourceTable: null, valueScale: 1, dimnames: null, view: { xlim: [-0.4, 3.9], ylim: [0, 1] } });
+    Object.assign(app.state.params, { adjust_loc: false });
+    Object.assign(app.state.style, { opacity: 1, colorBy: 'single', singleColor: '#EF8E91', gradient: false, nodeBorder: 'none', labels: false });
+    app.update();
+    const n = app.layout.nodes[1];
+    const f = app.layout.flows.find(f => f.from === 0);
+    const X = 18 + n.X;
+    const Y = Number(document.querySelector('#plot').getAttribute('height')) - 18 - window.SK.layout.pointAtX(f.upper, n.X)[1];
+    const pixel = async (thinOutline) => {
+      app.state.style.thinOutline = thinOutline;
+      app.update();
+      const url = URL.createObjectURL(new Blob([app.exportSvgText()], { type: 'image/svg+xml' }));
+      const image = new Image();
+      await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url; });
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width; canvas.height = image.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(image, 0, 0);
+      URL.revokeObjectURL(url);
+      return [...ctx.getImageData(Math.round(X), Math.round(Y), 1, 1).data];
+    };
+    return { on: await pixel(true), off: await pixel(false) };
+  });
+  expect(pixels.off).toEqual([239, 142, 145, 255]);
+  expect(pixels.on).toEqual(pixels.off);
 });
 
 test('dimmed nodes stay opaque so their necks match their bodies', async ({ page }) => {

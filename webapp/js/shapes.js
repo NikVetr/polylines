@@ -72,8 +72,10 @@
   // Cosine-eased bridge with horizontal tangents (R node_width_bridge_curve).
   function bridgeCurve(p0, p1, n) {
     if (Math.abs(p1[0] - p0[0]) <= 1e-12 && Math.abs(p1[1] - p0[1]) <= 1e-12) return [p0.slice()];
-    return Array.from({ length: n }, (_, i) => {
-      const t = i / (n - 1);
+    // Bound the cosine curve's interpolation error to 0.1 plot pixels.
+    const count = Math.max(n, 2 * Math.ceil(Math.sqrt(Math.abs(p1[1] - p0[1]) * Math.PI ** 2 / 1.6) / 2) + 1);
+    return Array.from({ length: count }, (_, i) => {
+      const t = i / (count - 1);
       const ease = 0.5 - 0.5 * Math.cos(Math.PI * t);
       return [p0[0] * (1 - t) + p1[0] * t, p0[1] * (1 - ease) + p1[1] * ease];
     });
@@ -85,14 +87,15 @@
   function bridgeBody(p0, p1, node, side, n) {
     if (!(node.bodyHeightPx > 0)) return bridgeCurve(p0, p1, n);
     const yMid = node.Y + (side === 'lower' ? -1 : 1) * node.bodyHeightPx / 2;
-    const half = labelBodyHalfWidth(node);
     const x0 = Math.min(p0[0], p1[0]);
     const x1 = Math.max(p0[0], p1[0]);
+    // Reserve a shoulder at either face: a full-width plateau creates a vertical step.
+    const half = Math.min(labelBodyHalfWidth(node), (x1 - x0) / 4);
     let left = [clamp(node.X - half, x0, x1), yMid];
     let right = [clamp(node.X + half, x0, x1), yMid];
     if (p0[0] > p1[0]) [left, right] = [right, left];
-    const n0 = Math.max(3, Math.ceil(n / 3));
-    const n2 = Math.max(3, n - 2 * n0 + 2);
+    const n0 = Math.max(16, Math.ceil(n / 3));
+    const n2 = Math.max(16, n - 2 * n0 + 2);
     return bridgeCurve(p0, left, n0).concat([right], bridgeCurve(right, p1, n2).slice(1));
   }
 
@@ -110,16 +113,13 @@
       lo = Math.min(lo, node.Y - node.bodyHeightPx / 2);
       hi = Math.max(hi, node.Y + node.bodyHeightPx / 2);
     }
-    const half = node.bodyHeightPx > 0 ? labelBodyHalfWidth(node) : node.widthPx / 2;
+    const half = node.bodyHeightPx > 0 ? Math.min(labelBodyHalfWidth(node), node.widthPx / 4) : node.widthPx / 2;
     const towardFace = b.faceX > node.X ? 1 : -1;
     const transitionX = clamp(node.X + towardFace * half, Math.min(b.faceX, outerX), Math.max(b.faceX, outerX));
     const fillFaceX = b.faceX + towardFace * Math.max(overlap || 0, 0);
-    const polygon = [
-      [outerX, lo], [transitionX, lo], [b.faceX, b.lowerY], [fillFaceX, b.lowerY],
-      [fillFaceX, b.upperY], [b.faceX, b.upperY], [transitionX, hi], [outerX, hi]
-    ];
     const lowerBorder = bridgeCurve([b.faceX, b.lowerY], [transitionX, lo], 16).concat([[outerX, lo]]);
     const upperBorder = bridgeCurve([b.faceX, b.upperY], [transitionX, hi], 16).concat([[outerX, hi]]);
+    const polygon = [[fillFaceX, b.lowerY], ...lowerBorder, ...upperBorder.slice().reverse(), [fillFaceX, b.upperY]];
     return { polygon, faceX: b.faceX, outerX, lowerBorder, upperBorder, bundle: b };
   }
 

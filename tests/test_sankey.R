@@ -764,4 +764,19 @@ expect_error(
   "needs a stage column"
 )
 
+smooth_node <- data.frame(x = 0, y = 0, node_width = 0.4, node_label_width = 0.4, node_body_height = 0.8)
+for(direction in c(-1, 1)) {
+  edge <- node_width_bridge_curve_body(c(x = -0.2 * direction, y = -0.05),
+                                       c(x = 0.2 * direction, y = -0.15), smooth_node, side = "lower")
+  stopifnot(all(abs(diff(edge[, "x"])) > 1e-10 | abs(diff(edge[, "y"])) < 1e-10))
+}
+expanded_source <- graph_wide$from_nodes[graph_wide$from_nodes$id == 1, ]
+expanded_source$node_body_height <- 0.5
+expanded_source$node_label_width <- 0.08
+curved_body <- endpoint_node_body_polygon(graph_wide, expanded_source, which(graph_wide$flows$from == 1), "start")
+for(edge in list(attr(curved_body, "lower_border"), attr(curved_body, "upper_border"))) {
+  stopifnot(all(apply(edge, 1, function(p) any(rowSums(abs(sweep(curved_body, 2, p))) < 1e-10))))
+  stopifnot(all(abs(diff(edge[, "x"])) > 1e-10 | abs(diff(edge[, "y"])) < 1e-10))
+}
+
 cat("sankey tests passed\n")

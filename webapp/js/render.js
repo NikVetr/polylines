@@ -89,7 +89,7 @@
   // every node; otherwise centred in a node body, left of sources, right of sinks and above
   // flow-through nodes.
   function labelPlacement(n, style, textSize) {
-    const above = { X: n.X, Y: n.Y + Math.max(n.inPx, n.outPx) / 2 + 0.8 * textSize, anchor: 'middle' };
+    const above = { X: n.X, Y: n.Y + Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2 + 0.8 * textSize, anchor: 'middle' };
     if (style.labelPosition === 'above') return above;
     if (n.hasLabel && n.widthPx > 0) return { X: n.X, Y: n.Y, anchor: 'middle' };
     const role = S.nodeRole(n);
@@ -211,9 +211,6 @@
       `0.35 0 0 0 ${bgFade(colors.flatBg.r)} 0 0.35 0 0 ${bgFade(colors.flatBg.g)} 0 0 0.35 0 ${bgFade(colors.flatBg.b)} 0 0 0 1 0"/></filter>`];
     const ribbons = [];
     const trunks = [];
-    const borders = [];
-    const nodeBorders = [];
-    const outlines = [];
     const sums = [];
     const hits = [];
     const dots = [];
@@ -224,10 +221,10 @@
     const strokeAttrs = borderOn
       ? `fill="none" stroke="${borderPaint.color}" stroke-opacity="${borderPaint.opacity}" stroke-width="${style.borderWidth}" stroke-linejoin="round"`
       : '';
-    const outline = (edges) => {
+    const outline = (edges, layer) => {
       if (!style.thinOutline) return;
-      outlines.push(`<path class="plot-outline" d="${edges.map((edge) => pathD(edge, map, false)).join('')}" ` +
-        `fill="none" stroke="#000000" stroke-width="${THIN_LINE_WIDTH}" stroke-linejoin="round"/>`);
+      layer.push(`<g class="layer-outline"><path class="plot-outline" d="${edges.map((edge) => pathD(edge, map, false)).join('')}" ` +
+        `fill="none" stroke="#000000" stroke-width="${THIN_LINE_WIDTH}" stroke-linejoin="round"/></g>`);
     };
 
     // Strands. With flattened (opaque) trunks the full ribbon sits underneath; otherwise ribbons
@@ -244,26 +241,23 @@
         fill = fillAttrs(colors.flow[f.index]);
       }
       ribbons.push(`<path class="ribbon" data-flow="${f.index}" d="${pathD(polygon, map, true)}" ${fill}/>`);
-      outline(S.edgeSegments(f, cuts));
+      // Paint edges with their fill so later strands and nodes cover both consistently.
+      outline(S.edgeSegments(f, cuts), ribbons);
       const hitLine = cuts ? S.sliceByX(f.centerline, cuts[0], cuts[1]) : f.centerline;
       hits.push(`<path class="hit" data-flow="${f.index}" d="${pathD(hitLine, map, false)}" ` +
         `stroke-width="${fmt(Math.max(f.w, 7))}"/>`);
       if (borderOn) {
         S.edgeSegments(f, cuts).forEach((edge) => {
-          borders.push(`<path class="strand-border" data-flow="${f.index}" d="${pathD(edge, map, false)}" ${strokeAttrs}/>`);
+          ribbons.push(`<path class="strand-border" data-flow="${f.index}" d="${pathD(edge, map, false)}" ${strokeAttrs}/>`);
         });
       }
+      const polylines = extras && extras.substrandLines && extras.substrandLines[f.index];
+      if (polylines && polylines.length) {
+        const linePaint = C.paint(colors.flatBg);
+        ribbons.push(`<g class="layer-substrands"><path class="substrand-lines" data-flow="${f.index}" d="${polylines.map((line) => pathD(line, map, false)).join('')}" ` +
+          `fill="none" stroke="${linePaint.color}" stroke-opacity="0.6" stroke-width="${THIN_LINE_WIDTH}"/></g>`);
+      }
     });
-
-    const lines = [];
-    if (extras && extras.substrandLines) {
-      const linePaint = C.paint(colors.flatBg);
-      extras.substrandLines.forEach((polylines, k) => {
-        if (!polylines.length) return;
-        lines.push(`<path class="substrand-lines" data-flow="${k}" d="${polylines.map((line) => pathD(line, map, false)).join('')}" ` +
-          `fill="none" stroke="${linePaint.color}" stroke-opacity="0.6" stroke-width="${THIN_LINE_WIDTH}"/>`);
-      });
-    }
 
     const nodeFill = (n, id, polygon, x0, x1, stops) => {
       const gid = `gn${n.id}_${id}`;
@@ -285,7 +279,7 @@
         return [t, C.withAlpha(c, c.a * alpha(t))];
       });
       defs.push(linearGradient(gid, map.x(x0), map.x(Math.abs(x1 - x0) < 1e-9 ? x0 + 1 : x1), stops));
-      nodeBorders.push(`<path class="node-border" data-node="${n.id}" d="${pathD(line, map, false)}" fill="none" ` +
+      trunks.push(`<path class="node-border" data-node="${n.id}" d="${pathD(line, map, false)}" fill="none" ` +
         `stroke="url(#${gid})" stroke-width="${style.nodeBorderWidth}" stroke-linecap="butt"/>`);
     };
     const nodeBorderColor = (n) => {
@@ -303,7 +297,6 @@
       if (role === 'interior') {
         const shape = S.interiorTrunk(layout, n);
         if (!shape) return;
-        outline([shape.lower, shape.upper]);
         const span = shape.x1 - shape.x0;
         const labelBody = labelFades(n, style) && n.widthPx > 0 && span > 1e-9;
         if ((style.gradient || labelBody) && span > 1e-9) {
@@ -312,9 +305,10 @@
         } else {
           solidNode(n, shape.polygon, mergeColor);
         }
+        outline([shape.lower, shape.upper], trunks);
         if (borderOn) {
           [shape.lower, shape.upper].forEach((line) => {
-            borders.push(`<path class="node-outline" data-node="${n.id}" d="${pathD(line, map, false)}" ${strokeAttrs}/>`);
+            trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD(line, map, false)}" ${strokeAttrs}/>`);
           });
         }
         const bc = nodeBorderColor(n);
@@ -349,7 +343,6 @@
         const b = S.bundle(layout, n, side);
         if (b) edges.push([[b.faceX, b.lowerY], [b.faceX, b.upperY]]);
       }
-      outline(edges);
       if (body) {
         const tc = Math.abs(n.X - body.faceX) / Math.abs(body.outerX - body.faceX);
         // The trunk meets the body at the face in the trunk (merge) color, so the body starts there too.
@@ -370,13 +363,14 @@
         const b = S.bundle(layout, n, side);
         if (trunk) {
           [trunk.edges.lower, trunk.edges.upper].forEach((line) => {
-            borders.push(`<path class="node-outline" data-node="${n.id}" d="${pathD(line, map, false)}" ${strokeAttrs}/>`);
+            trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD(line, map, false)}" ${strokeAttrs}/>`);
           });
         }
         if (style.borderCaps && b) {
-          borders.push(`<path class="node-outline" data-node="${n.id}" d="${pathD([[b.faceX, b.lowerY], [b.faceX, b.upperY]], map, false)}" ${strokeAttrs}/>`);
+          trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD([[b.faceX, b.lowerY], [b.faceX, b.upperY]], map, false)}" ${strokeAttrs}/>`);
         }
       }
+      outline(edges, trunks);
     });
 
     if (style.nodeSums) {
@@ -415,11 +409,7 @@
       : '';
     return `<defs>${defs.join('')}</defs>${bg}` +
       `<g class="layer-ribbons">${ribbons.join('')}</g>` +
-      (lines.length ? `<g class="layer-substrands">${lines.join('')}</g>` : '') +
       `<g class="layer-trunks">${trunks.join('')}</g>` +
-      (outlines.length ? `<g class="layer-outline">${outlines.join('')}</g>` : '') +
-      `<g class="layer-borders">${borders.join('')}</g>` +
-      `<g class="layer-node-borders">${nodeBorders.join('')}</g>` +
       `<g class="layer-sums">${sums.join('')}</g>` +
       '<g class="layer-traces"></g>' +
       `<g class="layer-hits">${hits.join('')}</g>` +
