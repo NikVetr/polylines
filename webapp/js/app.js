@@ -32,7 +32,7 @@
     labelPosition: 'auto',
     labelColorBy: 'single',
     labelColor: '#1F2937',
-    labelCounts: false,
+    labelCounts: true,
     canvasWidth: null,
     canvasHeight: null,
     collision: 'wall',
@@ -65,6 +65,7 @@
   function blankState() {
     return {
       version: 1,
+      labelCountsVersion: 1,
       mode: 'layered',
       matrices: [],
       stageNames: [],
@@ -2480,8 +2481,11 @@
     // Only known style keys are restored (renamed or retired ones are dropped); the rest take defaults.
     next.style = Object.assign({}, DEFAULT_STYLE);
     Object.keys(DEFAULT_STYLE).forEach((k) => { if (obj.style && k in obj.style) next.style[k] = obj.style[k]; });
-    // Older saved views have no room reserved for the newly enabled endpoint counts.
-    if (next.paths && next.style.tracePaths && (!obj.style || !('traceCounts' in obj.style))) next.view = null;
+    // Older sessions stored the disabled default; enable counts once and fit their labels.
+    if (!obj.labelCountsVersion) {
+      next.style.labelCounts = true;
+      next.view = null;
+    }
     state = next;
     selection = null;
     routeScope = 'all';

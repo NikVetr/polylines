@@ -52,6 +52,7 @@ const keepOnly = async (page, column, value) => {
 test('renders the default example without errors', async ({ page }) => {
   await expect(page.locator('#plot .ribbon')).toHaveCount(14);
   await expect(page.locator('#plot .node-label')).toHaveCount(9);
+  await expect(page.locator('#ctl-labelCounts')).toBeChecked();
   await expect(page.locator('#banner')).toBeHidden();
 });
 
@@ -569,7 +570,8 @@ test('path gradients reach their node colors where strands meet the merge band',
 });
 
 const nodeAt = (page, label) => page.evaluate((l) => {
-  const n = window.SankeyApp.layout.nodes.find((x) => x.label === l);
+  const app = window.SankeyApp;
+  const n = app.layout.nodes.find((x) => app.state.loc[x.id].label === l || x.label === l);
   const box = document.querySelector('#plot').getBoundingClientRect();
   return { x: box.left + 18 + n.X, y: box.top + (box.height - 18) - n.Y, dataX: n.x };
 }, label);
@@ -632,7 +634,7 @@ test('an invalid edit keeps the last plot dimmed and offers undo', async ({ page
 test('labeled node bodies tuck under the merge band so no seam shows', async ({ page }) => {
   const overlap = await page.evaluate(() => {
     const L = window.SankeyApp.layout;
-    const n = L.nodes.find((x) => x.label === 'Outcome 1');
+    const n = L.nodes.find((x) => window.SankeyApp.state.loc[x.id].label === 'Outcome 1');
     const body = document.querySelector(`path[fill="url(#gn${n.id}_b)"]`).getBBox();
     const band = document.querySelector(`path[fill="url(#gn${n.id}_t)"]`).getBBox();
     return Math.min(body.x + body.width, band.x + band.width) - Math.max(body.x, band.x);
@@ -644,7 +646,7 @@ test('hovering traces every pathway through a strand or node; Ctrl traces the on
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const point = await page.evaluate(() => {
     const L = window.SankeyApp.layout;
-    const f = L.flows.find((x) => x.stage === 0 && L.nodes[x.from].label === 'Stage II' && L.nodes[x.to].label === 'Chemotherapy');
+    const f = L.flows.find((x) => x.stage === 0 && window.SankeyApp.state.loc[x.from].label === 'Stage II' && window.SankeyApp.state.loc[x.to].label === 'Chemotherapy');
     const c = f.centerline[Math.floor(f.centerline.length * 0.45)];
     const box = document.querySelector('#plot').getBoundingClientRect();
     return { x: box.left + 18 + c[0], y: box.top + (box.height - 18) - c[1] - f.w * 0.3 };
@@ -668,7 +670,7 @@ test('hovering traces every pathway through a strand or node; Ctrl traces the on
   await expect(page.locator('#plot .node-label.hl')).toHaveCount(7);
   // Labels sit above solid nodes, so traces run on through the sink's whole body.
   const reach = await page.evaluate(() => {
-    const n = window.SankeyApp.layout.nodes.find((x) => x.label === 'Remission');
+    const n = window.SankeyApp.layout.nodes.find((x) => window.SankeyApp.state.loc[x.id].label === 'Remission');
     const right = Math.max(...[...document.querySelectorAll('#plot .trace')].map((el) => { const b = el.getBBox(); return b.x + b.width; }));
     return right - (18 + n.X + n.widthPx / 2);
   });
@@ -687,7 +689,7 @@ test('hovering draws a bar under every node showing the share the selection fill
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const point = await page.evaluate(() => {
     const L = window.SankeyApp.layout;
-    const f = L.flows.find((x) => x.stage === 0 && L.nodes[x.from].label === 'Stage II' && L.nodes[x.to].label === 'Chemotherapy');
+    const f = L.flows.find((x) => x.stage === 0 && window.SankeyApp.state.loc[x.from].label === 'Stage II' && window.SankeyApp.state.loc[x.to].label === 'Chemotherapy');
     const c = f.centerline[Math.floor(f.centerline.length / 2)];
     const box = document.querySelector('#plot').getBoundingClientRect();
     return { x: box.left + 18 + c[0], y: box.top + (box.height - 18) - c[1], from: f.from };
@@ -696,7 +698,7 @@ test('hovering draws a bar under every node showing the share the selection fill
   await expect(page.locator('#plot .node-fill')).toHaveCount(11);
   await expect(page.locator('#plot .node-fill-solid')).toHaveCount(4);
   const missed = await page.evaluate(() => {
-    const n = window.SankeyApp.layout.nodes.find((x) => x.label === 'Stage I');
+    const n = window.SankeyApp.layout.nodes.find((x) => window.SankeyApp.state.loc[x.id].label === 'Stage I');
     return document.querySelector(`#plot .node-fill[data-fill="${n.id}"]`).textContent;
   });
   expect(missed).toBe('0%100%');
@@ -903,6 +905,7 @@ test('older saved sessions enable counts, default percentages off and fit space 
   await page.evaluate(() => {
     window.SankeyApp.loadExample('pathways');
     const app = window.SankeyApp;
+    delete app.state.labelCountsVersion;
     delete app.state.style.traceCounts;
     delete app.state.style.tracePercents;
     app.update({ fit: true });
@@ -1146,7 +1149,7 @@ test('Alt-clicked nodes in one column merge into a renamed node, laid out as if 
   await page.locator('#merge-name').press('Enter');
   await expect(page.locator('#merge-dialog')).toBeHidden();
   const after = await page.evaluate(() => ({
-    labels: window.SankeyApp.layout.nodes.filter((n) => n.set === 2).map((n) => n.label),
+    labels: window.SankeyApp.layout.nodes.filter((n) => n.set === 2).map((n) => window.SankeyApp.state.loc[n.id].label),
     loc: JSON.parse(JSON.stringify(window.SankeyApp.state.loc)),
     total: window.SankeyApp.state.paths.reduce((t, p) => t + p.weight, 0)
   }));
@@ -1177,7 +1180,7 @@ test('Alt-clicked nodes in one column merge into a renamed node, laid out as if 
 });
 
 test('nodes of matrix data can be picked and merged too, and merging can be cancelled', async ({ page }) => {
-  const ids = await page.evaluate(() => window.SankeyApp.layout.nodes.filter((n) => n.set === 1).slice(0, 2).map((n) => n.label));
+  const ids = await page.evaluate(() => window.SankeyApp.layout.nodes.filter((n) => n.set === 1).slice(0, 2).map((n) => window.SankeyApp.state.loc[n.id].label));
   for (const label of ids) {
     const n = await nodeAt(page, label);
     await page.mouse.move(n.x, n.y);
@@ -1221,7 +1224,7 @@ for (const label of ['Remission', 'Progression']) {
     const merged = await nodeAt(page, label);
     await page.mouse.click(merged.x, merged.y);
     await page.mouse.move(5, 5);
-    const total = await page.evaluate((name) => window.SankeyApp.layout.nodes.find((n) => n.label === name).inValue, label);
+    const total = await page.evaluate((name) => window.SankeyApp.layout.nodes.find((n) => window.SankeyApp.state.loc[n.id].label === name).inValue, label);
     await expect(page.locator('#inspector-main')).toContainText(`${total} patients`);
     if (label === 'Remission') await expect(page.locator('#inspector-main')).not.toContainText('→ Progression');
   });
@@ -1258,6 +1261,40 @@ test('totals can follow node labels', async ({ page }) => {
   expect(loc).toContain('Surgery (232)');
 });
 
+for (const storedCountSetting of [undefined, false]) {
+  test(`legacy sessions show node counts after refresh and retain a later opt-out (${storedCountSetting})`, async ({ page }) => {
+    await page.evaluate(storedCountSetting => {
+      const app = window.SankeyApp;
+      app.loadExample('pathways');
+      app.state.style.labelCounts = false;
+      app.update({ fit: true });
+      const saved = JSON.parse(JSON.stringify(app.state));
+      delete saved.labelCountsVersion;
+      if (storedCountSetting === undefined) delete saved.style.labelCounts;
+      localStorage.setItem('polylines-sankey-v1', JSON.stringify(saved));
+    }, storedCountSetting);
+    const before = await state(page);
+    await page.reload();
+    await expect(page.locator('#ctl-labelCounts')).toBeChecked();
+    const node = page.locator('#plot .node-label').filter({ hasText: 'Surgery' });
+    await expect(node).toHaveText('Surgery (232)');
+    expect((await state(page)).matrices).toEqual(before.matrices);
+    const clipped = await page.locator('#plot .node-label').evaluateAll(els => {
+      const plot = document.querySelector('#plot');
+      return els.some(el => { const b = el.getBBox(); return b.x < 0 || b.y < 0 || b.x + b.width > plot.width.baseVal.value || b.y + b.height > plot.height.baseVal.value; });
+    });
+    expect(clipped).toBe(false);
+    await page.locator('#ctl-labelCounts').uncheck();
+    await expect.poll(() => page.evaluate(() => {
+      const saved = JSON.parse(localStorage.getItem('polylines-sankey-v1'));
+      return { counts: saved?.style.labelCounts, version: saved?.labelCountsVersion };
+    })).toEqual({ counts: false, version: 1 });
+    await page.reload();
+    await expect(page.locator('#ctl-labelCounts')).not.toBeChecked();
+    await expect(node).toHaveText('Surgery');
+  });
+}
+
 test('node label counts use compact scientific notation above four digits without changing data', async ({ page }) => {
   const counts = [9999, 10000, 12345, 99999, 10000000, 1250000, 3.75];
   const suffixes = ['9,999', '1E04', '1E04', '1E05', '1E07', '1E06', '3.75'];
@@ -1291,8 +1328,8 @@ test('nodes and strands fully covered by traces hide their faded copies', async 
   await page.mouse.move(node.x, node.y);
   const ids = await page.evaluate(() => {
     const L = window.SankeyApp.layout;
-    const n = L.nodes.find((x) => x.label === 'Remission');
-    return { node: n.id, flow: n.inFlows[0], other: L.nodes.find((x) => x.label === 'Stable').id };
+    const n = L.nodes.find((x) => window.SankeyApp.state.loc[x.id].label === 'Remission');
+    return { node: n.id, flow: n.inFlows[0], other: L.nodes.find((x) => window.SankeyApp.state.loc[x.id].label === 'Stable').id };
   });
   const opacity = (sel) => page.locator(sel).first().evaluate((el) => getComputedStyle(el).opacity);
   await expect(page.locator(`#plot .trunk[data-node="${ids.node}"]`).first()).toHaveClass(/covered/);
@@ -1309,7 +1346,7 @@ test('imported tables label nodes above solid bodies in darker node colors', asy
   expect(s.style.labelColorBy).toBe('node');
   const check = await page.evaluate(() => {
     const L = window.SankeyApp.layout;
-    const n = L.nodes.find((x) => x.label === 'Surgery');
+    const n = L.nodes.find((x) => window.SankeyApp.state.loc[x.id].label === 'Surgery');
     const label = document.querySelector(`#plot .node-label[data-node="${n.id}"]`);
     const top = document.querySelector('#plot').getBoundingClientRect().height - 18 - (n.Y + Math.max(n.inPx, n.outPx) / 2);
     const body = document.querySelector(`#plot linearGradient[id="gn${n.id}_i"]`);
