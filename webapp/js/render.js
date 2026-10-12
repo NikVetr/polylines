@@ -201,6 +201,9 @@
 
   // ---------- main render ----------
 
+  // How visible a strand stays where it passes behind a node it does not touch.
+  const BEHIND_OPACITY = 0.3;
+
   // extras.substrandLines: per flow, polylines between substrands (paths.boundaryLines).
   function render(layout, colors, style, frame, extras) {
     const map = makeFrame(layout, frame);
@@ -210,6 +213,9 @@
     const defs = [`<filter id="dim-node" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="` +
       `0.35 0 0 0 ${bgFade(colors.flatBg.r)} 0 0.35 0 0 ${bgFade(colors.flatBg.g)} 0 0 0.35 0 ${bgFade(colors.flatBg.b)} 0 0 0 1 0"/></filter>`];
     const ribbons = [];
+    const strandOutlines = [];
+    const ribbonParts = [];
+    const nodePolygons = new Map();
     const trunks = [];
     const sums = [];
     const hits = [];
@@ -262,9 +268,11 @@
         fill = fillAttrs(colors.flow[f.index]);
       }
       ribbons.push(`<path class="ribbon" data-flow="${f.index}" d="${pathD(polygon, map, true)}" ${fill}/>`);
-      // Paint edges with their fill so later strands and nodes cover both consistently.
+      // Outlines go above every strand fill (strands are see-through), so where strands overlap each
+      // outline still runs all the way to its junctions.
       const edges = S.edgeSegments(f, style.flatten ? null : cuts);
-      outline(edges, ribbons);
+      outline(edges, strandOutlines);
+      ribbonParts[f.index] = { polygon, fill };
       const hitLine = cuts ? S.sliceByX(f.centerline, cuts[0], cuts[1]) : f.centerline;
       hits.push(`<path class="hit" data-flow="${f.index}" d="${pathD(hitLine, map, false)}" ` +
         `stroke-width="${fmt(Math.max(f.w, 7))}"/>`);
@@ -327,6 +335,7 @@
         } else {
           solidNode(n, shape.polygons, mergeColor);
         }
+        nodePolygons.set(n.id, shape.polygons);
         const mask = (style.thinOutline || borderOn) ? edgeMask(n, shape.polygons) : '';
         outline(shape.borderEdges, trunks, mask);
         if (borderOn) {
@@ -383,6 +392,7 @@
         }
       }
       const polygons = (trunk ? trunk.polygons : []).concat(body ? [body.polygon] : []);
+      if (polygons.length) nodePolygons.set(n.id, polygons);
       const mask = (style.thinOutline || borderOn) && polygons.length ? edgeMask(n, polygons) : '';
       if (borderOn) {
         const b = S.bundle(layout, n, side);
@@ -432,9 +442,32 @@
     const bg = colors.bg && colors.bg.a > 0
       ? `<rect class="background" x="0" y="0" width="${frame.width}" height="${frame.height}" ${fillAttrs(colors.bg)}/>`
       : '';
+    // Strands passing behind a node they do not touch show faintly through its opaque fill, so they
+    // read as running behind it rather than stopping at its edge (their outlines stay hidden).
+    const ghosts = [];
+    const box = (points) => {
+      const xs = points.map((p) => p[0]);
+      const ys = points.map((p) => p[1]);
+      return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    };
+    const flowBoxes = layout.flows.map((f) => box(f.upper.concat(f.lower)));
+    nodePolygons.forEach((polygons, id) => {
+      const nb = box(polygons.flat());
+      const behind = layout.flows.filter((f) => f.from !== id && f.to !== id && ribbonParts[f.index] &&
+        flowBoxes[f.index][0] < nb[1] && flowBoxes[f.index][1] > nb[0] && flowBoxes[f.index][2] < nb[3] && flowBoxes[f.index][3] > nb[2]);
+      if (!behind.length) return;
+      defs.push(`<clipPath id="behind${id}"><path d="${compoundD(polygons)}"/></clipPath>`);
+      behind.forEach((f) => {
+        const part = ribbonParts[f.index];
+        ghosts.push(`<path class="ribbon-ghost" data-flow="${f.index}" clip-path="url(#behind${id})" opacity="${BEHIND_OPACITY}" ` +
+          `d="${pathD(part.polygon, map, true)}" ${part.fill}/>`);
+      });
+    });
     return `<defs>${defs.join('')}</defs>${bg}` +
       `<g class="layer-ribbons">${ribbons.join('')}</g>` +
+      `<g class="layer-strand-outlines">${strandOutlines.join('')}</g>` +
       `<g class="layer-trunks">${trunks.join('')}</g>` +
+      `<g class="layer-ghosts">${ghosts.join('')}</g>` +
       `<g class="layer-sums">${sums.join('')}</g>` +
       '<g class="layer-traces"></g>' +
       `<g class="layer-hits">${hits.join('')}</g>` +

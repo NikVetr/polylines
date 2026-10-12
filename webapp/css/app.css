@@ -245,7 +245,9 @@ button, select, input, textarea { font: inherit; color: inherit; }
 #plot.dimmed .covered:not(.hit):not(.node-dot) { opacity: 0; }
 #plot .node-dot.selected { stroke-width: 3.5; }
 #plot.stale { opacity: 0.3; filter: grayscale(0.7); pointer-events: none; }
-#plot .layer-traces, #plot .layer-trace-labels, #plot .layer-substrands, #plot .layer-fills, #plot .layer-outline { pointer-events: none; }
+#plot .layer-traces, #plot .layer-trace-labels, #plot .layer-substrands, #plot .layer-fills, #plot .layer-outline, #plot .layer-ghosts { pointer-events: none; }
+/* Faint copies of strands behind nodes fade with their strands when something is in focus. */
+#plot.dimmed .ribbon-ghost:not(.hl) { opacity: 0.05; }
 .banner-action { margin-left: 8px; color: var(--error); border-color: #fecdca; }
 
 dialog {

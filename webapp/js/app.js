@@ -1350,6 +1350,17 @@
   // traced item too thin to see is widened around its slice instead of outlined.
   const MIN_SINGLE_PX = 4;
 
+  // Overlapping traces get darker with every extra trace: each adds a faint black silhouette, so n
+  // traces cover a point to 1 - (1 - silhouette)^n, and a filter maps that coverage to a shade that
+  // is clear for one trace and grows by `gain` per unit of coverage beyond it, up to `max`.
+  const OVERLAP = { silhouette: 0.12, gain: 0.8, max: 0.45 };
+  function overlapFilter() {
+    const { silhouette, gain, max } = OVERLAP;
+    const table = Array.from({ length: 41 }, (_, i) => Math.min(max, Math.max(0, gain * (i / 40 - silhouette - 0.005))).toFixed(4)).join(' ');
+    return `<filter id="trace-overlap" filterUnits="userSpaceOnUse" x="0" y="0" width="${frame.width}" height="${frame.height}">` +
+      '<feComponentTransfer><feFuncR type="linear" slope="0"/><feFuncG type="linear" slope="0"/><feFuncB type="linear" slope="0"/>' +
+      `<feFuncA type="table" tableValues="${table}"/></feComponentTransfer></filter>`;
+  }
   function traceMarkup(target) {
     const h = layout.view.height;
     const sx = (X) => Math.round((MARGIN + X) * 100) / 100;
@@ -1365,6 +1376,7 @@
     const alpha = Math.min(Math.max(Number(state.style.opacity) || 1, 0.05), 1);
     let defs = '';
     let body = '';
+    const shades = [];
     const annotations = [];
     units.forEach(([pi, mi], n) => {
       const t = P.tracePolygon(layout, traces.subs, pi, { member: mi, slots, tiled, fadeLabels: state.style.labelPosition !== 'above' });
@@ -1381,13 +1393,20 @@
       const grad = (id, tags) => `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${sx(x0)}" y1="0" x2="${sx(x1)}" y2="0">${tags}</linearGradient>`;
       defs += grad(`trace${n}`, fill) + grad(`trace-edge${n}`, edge);
       if ((target.single || mi >= 0) && t.thickness < MIN_SINGLE_PX) {
+        const widen = (MIN_SINGLE_PX - t.thickness).toFixed(2);
         body += `<g class="trace-group" opacity="${alpha}"><path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})" stroke="url(#trace${n})" ` +
-          `stroke-width="${(MIN_SINGLE_PX - t.thickness).toFixed(2)}" stroke-linejoin="round"/></g>`;
+          `stroke-width="${widen}" stroke-linejoin="round"/></g>`;
+        shades.push(`<path d="${line(t.polygon)}Z" fill="#000" stroke="#000" stroke-width="${widen}" stroke-linejoin="round"/>`);
         return;
       }
+      shades.push(`<path d="${line(t.polygon)}Z" fill="#000"/>`);
       body += `<g class="trace-group" opacity="${alpha}"><path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})"/>` +
         `<path class="trace-edge" d="${line(t.upper)}${line(t.lower)}" fill="none" stroke="url(#trace-edge${n})" stroke-width="0.6"/></g>`;
     });
+    if (shades.length > 1) {
+      defs += overlapFilter();
+      body += `<g class="trace-overlap" filter="url(#trace-overlap)">${shades.map((d) => `<g opacity="${OVERLAP.silhouette}">${d}</g>`).join('')}</g>`;
+    }
     return { paths: `<defs>${defs}</defs>${body}`, labels: traceLabelMarkup(annotations) };
   }
 

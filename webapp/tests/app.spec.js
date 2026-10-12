@@ -1407,6 +1407,33 @@ test('the wheel zooms about the pointer and dragging empty space pans', async ({
   expect(scroll1[0] + scroll1[1]).toBeGreaterThan(scroll0[0] + scroll0[1] + 50);
 });
 
+test('overlapping traces add a shade, strands show behind nodes, and outlines sit above strand fills', async ({ page }) => {
+  await page.evaluate(() => {
+    window.SankeyApp.loadExample('pathways');
+    window.SankeyApp.state.style.thinOutline = true;
+    window.SankeyApp.update();
+  });
+  // Faint clipped copies of strands that pass behind nodes they do not touch.
+  const ghosts = await page.evaluate(() => [...document.querySelectorAll('#plot .ribbon-ghost')].map((g) => {
+    const f = window.SankeyApp.layout.flows[Number(g.dataset.flow)];
+    const node = Number(g.getAttribute('clip-path').match(/behind(\d+)/)[1]);
+    return f.from !== node && f.to !== node;
+  }));
+  expect(ghosts.length).toBeGreaterThan(0);
+  expect(ghosts.every(Boolean)).toBe(true);
+  // Every strand outline comes after every strand fill.
+  expect(await page.evaluate(() => {
+    const layers = [...document.querySelector('#plot').children].map((el) => el.getAttribute('class'));
+    return layers.indexOf('layer-strand-outlines') === layers.indexOf('layer-ribbons') + 1 &&
+      document.querySelector('#plot .layer-strand-outlines .plot-outline') !== null &&
+      document.querySelector('#plot .layer-ribbons .plot-outline') === null;
+  })).toBe(true);
+  const node = await nodeAt(page, 'Remission');
+  await page.mouse.move(node.x, node.y);
+  await expect(page.locator('#plot .trace-overlap')).toHaveCount(1);
+  expect(await page.locator('#plot .trace-overlap > g').count()).toBe(await page.locator('#plot .trace').count());
+});
+
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
   await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
   await expect(page.locator('.topbar .actions > [data-export="png"]')).toBeVisible();
