@@ -694,7 +694,7 @@
       title: 'Canvas & dragging',
       items: [
         { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover', fit: true,
-          help: 'Hover a strand or node to trace every pathway through it; hold Alt or Ctrl/⌘ for a single pathway, or Shift for a single item. Above the hover limit, only single-substrand hover is enabled.',
+          help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ for a single pathway, or Alt/⌥ for a single item. Above the hover limit, only single-substrand hover is enabled.',
           showIf: () => !!state.paths },
         { key: 'maxHoverSubstrands', target: 'style', type: 'number', label: 'Max substrands for hover', min: 0, step: 50, integer: true,
           help: 'Disable ordinary hover effects above this many unique pathways (default 200). Alt, Ctrl/⌘ and Shift hover still work. Raising this can slow the browser.',
@@ -1458,17 +1458,19 @@
     return { kind: 'node', index: Number(el.dataset.node) };
   }
 
-  // Pathways to trace for a hover target: every pathway through the strand or node; with Alt or Ctrl/⌘
-  // the single pathway under the pointer; with Shift the single item (when items have ids). Null
-  // when tracing does not apply.
+  // Pathways to trace for a hover target: every pathway through the strand or node; with Ctrl/⌘
+  // the single pathway under the pointer; with Alt/⌥ the single item (when items have ids). Shift
+  // (for Shift-click picking and pooling) shows what a Shift-click adds: everything, or above the
+  // hover limit the single pathway. Null when tracing does not apply.
   function tracedPaths(target, event) {
     if (!traces || !target || !event) return null;
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+    const dense = traces.paths.length > state.style.maxHoverSubstrands;
+    if (event.altKey || event.ctrlKey || event.metaKey || (event.shiftKey && dense)) {
       const p = plotPoint(event);
       const hit = target.kind === 'flow'
         ? P.pathAt(layout, traces.subs, target.index, p.X, p.Y)
         : P.pathAtNode(layout, traces.subs, layout.nodes[target.index], p.X, p.Y);
-      return hit ? { paths: [hit.path], member: event.shiftKey ? hit.member : -1, single: true } : null;
+      return hit ? { paths: [hit.path], member: event.altKey ? hit.member : -1, single: true } : null;
     }
     const n = target.kind === 'node' ? layout.nodes[target.index] : null;
     const list = n
@@ -1710,9 +1712,9 @@
     return { nodes, flows };
   }
 
-  // ---------- pool (Alt-click) ----------
+  // ---------- pool (Shift-click) ----------
 
-  // Substrands gathered with Alt-click across strands and nodes: per path index, null for the whole
+  // Substrands gathered with Shift-click across strands and nodes: per path index, null for the whole
   // pathway or a Set of its items (member indices). It belongs to the pathway data it was built on.
   let pool = new Map();
   let poolPaths = null;
@@ -1752,7 +1754,7 @@
     });
   }
 
-  // Nodes picked with a plain Alt-click (on any data), e.g. to merge them. Keyed by node key and
+  // Nodes picked with a plain Shift-click (on any data), to drag or merge them together. Keyed by node key and
   // tied to the flow matrices they were picked on.
   let picked = new Set();
   let pickedFor = null;
@@ -1768,7 +1770,7 @@
 
   const pickedNodes = () => (layout && pickedFor === state.matrices ? layout.nodes.filter((n) => picked.has(n.key)) : []);
 
-  // What Alt-clicks gathered: the pool of substrands, else (without pathway data) the picked nodes.
+  // What Shift-clicks gathered: the pool of substrands, else (without pathway data) the picked nodes.
   function groupTarget() {
     const target = poolTarget();
     if (target) return target;
@@ -1942,12 +1944,12 @@
       ? `<p>Picked nodes: <b>${nodes.map((n) => esc(nodeDisplayName(n))).join(', ')}</b>.</p>`
       : '';
     if (target.kind === 'pool') {
-      return '<h2>Pool</h2><p class="muted small">Alt-click strands or nodes to add their substrands, or remove them when ' +
-        'they are all in already (with Ctrl/⌘ or Shift: one pathway or one item).</p>' +
+      return '<h2>Pool</h2><p class="muted small">Shift-click strands or nodes to add their substrands, or remove them when ' +
+        'they are all in already (with Ctrl/⌘ or Alt/⌥ too: one pathway or one item). Drag a picked node to move all picked nodes.</p>' +
         pickedLine + focusHtml(target) + '<button class="mini-btn wide" id="pool-clear">Clear pool (Esc)</button>';
     }
     if (target.kind === 'nodes') {
-      return '<h2>Picked nodes</h2><p class="muted small">Alt-click nodes to pick or unpick them.</p>' + pickedLine +
+      return '<h2>Picked nodes</h2><p class="muted small">Shift-click nodes to pick or unpick them; drag one to move them all.</p>' + pickedLine +
         '<button class="mini-btn wide" id="pool-clear">Clear (Esc)</button>';
     }
     if (target.kind === 'flow') {
@@ -1977,9 +1979,9 @@
     const rows = path.nodes.map((ni, s) => `<tr><td>${esc(setName(s))}</td><td>${esc(nodeDisplayName(nodeAtStage(s, ni)))}</td></tr>`).join('');
     const count = `<b>${fmtValue(path.weight)}</b> ${unitOf(path.weight)} on this pathway (${pct(path.weight, traces.total)} of all)` +
       (item && item.weight !== 1 ? ` · this one weighs <b>${fmtValue(item.weight)}</b>` : '');
-    const noIds = target.member >= 0 || path.members ? '' : ' (no item ids in this table, so Shift traces pathways too)';
+    const noIds = target.member >= 0 || path.members ? '' : ' (no item ids in this table, so Alt/⌥ traces pathways too)';
     return `<h3 class="focus-head">${item ? esc(item.id) : 'One pathway'}</h3><table class="focus-table">${rows}</table>` +
-      `<p>${count}</p><p class="muted small">Without Ctrl/⌘ or Shift, every pathway through this ${target.kind === 'flow' ? 'strand' : 'node'} is traced${noIds}.</p>`;
+      `<p>${count}</p><p class="muted small">Without Ctrl/⌘ or Alt/⌥, every pathway through this ${target.kind === 'flow' ? 'strand' : 'node'} is traced${noIds}.</p>`;
   }
 
   // Where the traced pathways run: their weight through each node and strand, as counts and as
@@ -2031,8 +2033,8 @@
     return `<h3 class="focus-head">${list.length} pathway${list.length === 1 ? '' : 's'} · ${fmtValue(total)} ${unitOf(total)} ` +
       `<span class="muted">(${pct(total, traces.total)} of all)</span></h3>` +
       `<table class="focus-table">${nodes}</table><table class="focus-table">${strands}</table><table class="focus-table">${pathways}</table>` +
-      (target.kind === 'pool' ? '' : `<p class="muted small">Hold Ctrl/⌘ to trace the single pathway under the pointer${items ? `, or Shift for the single ${unitOf(1)}` : ''}; ` +
-        'Alt-click to add these substrands to a pool.</p>');
+      (target.kind === 'pool' ? '' : `<p class="muted small">Hold Ctrl/⌘ to trace the single pathway under the pointer${items ? `, or Alt/⌥ for the single ${unitOf(1)}` : ''}; ` +
+        'Shift-click to add these substrands to a pool.</p>');
   }
 
   // Hover details replace the inspector's content until the pointer leaves the plot, so nothing
@@ -2082,8 +2084,12 @@
       ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey };
     if (target.kind === 'node') {
       const n = layout.nodes[target.index];
+      // Dragging one of several picked nodes moves them all.
+      const group = picked.has(n.key) ? pickedNodes().map((m) => m.id) : [];
+      const rows = group.length > 1 ? group : [n.id];
       drag = Object.assign(base, {
-        row: n.id, locX: state.loc[n.id].x, locY: state.loc[n.id].y, sx: layout.tf.sx * displayScale, sy: layout.tf.sy * displayScale,
+        row: n.id, rows, starts: rows.map((id) => ({ x: state.loc[id].x, y: state.loc[id].y })),
+        locX: state.loc[n.id].x, locY: state.loc[n.id].y, sx: layout.tf.sx * displayScale, sy: layout.tf.sy * displayScale,
         layout0: layout, startX: state.loc.map((r) => r.x)
       });
     } else {
@@ -2114,11 +2120,14 @@
     drag.moved = true;
     if (drag.target.kind === 'node') {
       // Placed once per frame in requestRender(), since collision checks run test layouts.
-      // Within the current view: a node dragged past the edge stops there.
-      const clamp = (v, [lo, hi]) => Math.min(Math.max(v, lo), hi);
+      // Within the current view: nodes dragged past the edge stop there.
+      const shift = (d, axis, [lo, hi]) => {
+        const v = drag.starts.map((s) => s[axis]);
+        return Math.min(Math.max(d, lo - Math.min(...v)), hi - Math.max(...v));
+      };
       drag.goal = {
-        x: clamp(event.shiftKey ? drag.locX : drag.locX + dx / drag.sx, state.view.xlim),
-        y: clamp(event.altKey ? drag.locY : drag.locY - dy / drag.sy, state.view.ylim)
+        x: drag.locX + (event.shiftKey ? 0 : shift(dx / drag.sx, 'x', state.view.xlim)),
+        y: drag.locY + (event.altKey ? 0 : shift(-dy / drag.sy, 'y', state.view.ylim))
       };
       requestRender();
       return;
@@ -2161,14 +2170,14 @@
     const L0 = d.layout0;
     const halfWidth = L0.nodes.map((n) => n.widthPx / 2 / L0.tf.sx);
     const minRun = MIN_RUN_PX / L0.tf.sx;
-    const queue = [d.row];
+    const queue = d.rows.slice();
     let budget = 20 * L0.flows.length;
     while (queue.length && budget-- > 0) {
       const u = queue.shift();
       L0.flows.forEach((f) => {
         if (f.from !== u && f.to !== u) return;
         const v = f.from === u ? f.to : f.from;
-        if (v === d.row) return;
+        if (d.rows.includes(v)) return;
         const dir = f.dir;
         const need = halfWidth[f.from] + halfWidth[f.to] + 1.02 * minRun;
         const run = dir * (state.loc[f.to].x - state.loc[f.from].x);
@@ -2180,16 +2189,19 @@
     }
   }
 
-  // Move the dragged node toward goal without ever producing an invalid layout. In push mode
-  // colliding neighbours move along; otherwise, or if it is still invalid, the node stops at the
-  // last valid point on the way there (an invisible wall).
+  // Move the dragged node (and the other picked nodes dragged with it, by the same amount) toward
+  // goal without ever producing an invalid layout. In push mode colliding neighbours move along;
+  // otherwise, or if it is still invalid, the nodes stop at the last valid point on the way there
+  // (an invisible wall).
   function placeNode(d, goal) {
     const row = state.loc[d.row];
     const from = { x: row.x, y: row.y };
     const tryAt = (p) => {
       state.loc.forEach((r, i) => { r.x = d.startX[i]; });
-      row.x = round(p.x);
-      row.y = round(p.y);
+      d.rows.forEach((id, k) => {
+        state.loc[id].x = round(d.starts[k].x + p.x - d.locX);
+        state.loc[id].y = round(d.starts[k].y + p.y - d.locY);
+      });
       if (state.style.collision === 'push') pushNeighbours(d);
       return dragIsValid(d);
     };
@@ -2221,13 +2233,14 @@
     if (!finished.moved) {
       const t = finished.target;
       const shown = hover && hover.kind === t.kind && hover.index === t.index ? hover : null;
-      // Preserve ordinary Alt-click pooling below the limit; dense plots only pool the single slice.
-      const pooled = finished.alt && !finished.ctrl && !finished.shift && traces && traces.paths.length <= state.style.maxHoverSubstrands
+      // A plain Shift-click pools everything through the target below the limit; dense plots only
+      // pool the single slice.
+      const pooled = finished.shift && !finished.ctrl && !finished.alt && traces && traces.paths.length <= state.style.maxHoverSubstrands
         ? Object.assign({}, t, tracedPaths(t, {})) : shown;
-      // Alt-click: a plain one on a node picks it (e.g. for merging); with pathway data, the
-      // substrands shown join or leave the pool.
-      const pickNode = finished.alt && t.kind === 'node' && !finished.ctrl && !finished.shift;
-      const poolIt = finished.alt && pooled && pooled.paths && traces;
+      // Shift-click: a plain one on a node picks it (to drag or merge picked nodes together); with
+      // pathway data, the substrands shown join or leave the pool.
+      const pickNode = finished.shift && t.kind === 'node' && !finished.ctrl && !finished.alt;
+      const poolIt = finished.shift && pooled && pooled.paths && traces;
       if (pickNode || poolIt) {
         if (pickNode) togglePicked(layout.nodes[t.index].key);
         if (poolIt) togglePool(pooled);
@@ -2349,10 +2362,11 @@
     }
     if (!sel) {
       host.innerHTML = '<h2>Inspector</h2><p class="muted">Hover a strand or node for details; click to select and edit it.</p>' +
-        (state.paths && state.paths.length > state.style.maxHoverSubstrands ? `<p class="muted small">Ordinary hover is paused for ${state.paths.length.toLocaleString()} pathways (limit ${state.style.maxHoverSubstrands}). Hold Alt or Ctrl/⌘ for one pathway, or Shift for one item. Change “Max substrands for hover” in Canvas & dragging to raise the limit.</p>` : '') +
+        (state.paths && state.paths.length > state.style.maxHoverSubstrands ? `<p class="muted small">Ordinary hover is paused for ${state.paths.length.toLocaleString()} pathways (limit ${state.style.maxHoverSubstrands}). Hold Ctrl/⌘ (or Shift) for one pathway, or Alt/⌥ for one item. Change “Max substrands for hover” in Canvas & dragging to raise the limit.</p>` : '') +
         '<ul class="tips"><li>Drag a node to move it (Shift: vertical only, Alt: horizontal only).</li>' +
         '<li>Drag a strand up or down to reorder it in the stack at its nearer end.</li>' +
-        (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Alt or Ctrl/⌘ for the single pathway under the pointer, or Shift for the single item. Click to pin the traces and breakdown.</li>' : '') +
+        (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Ctrl/⌘ for the single pathway under the pointer, or Alt/⌥ for the single item. Click to pin the traces and breakdown.</li>' : '') +
+        '<li>Shift-click nodes to pick several; drag one of them to move them all together.</li>' +
         '<li>Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo, F fit view, Esc deselect.</li></ul>';
       return;
     }

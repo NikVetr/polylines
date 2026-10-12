@@ -814,20 +814,20 @@ test('hovered substrands show endpoint counts and their share of each edge along
   expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).not.toContain('layer-trace-labels');
 });
 
-test('Shift-hover annotations use the patient slice count, and pools retain that slice', async ({ page }) => {
+test('Alt-hover annotations use the patient slice count, and pools retain that slice', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
   await page.locator('#ctl-tracePercents').check();
   const p = await pathwayPoint(page);
-  await page.keyboard.down('Shift');
+  await page.keyboard.down('Alt');
   await page.mouse.move(p.x, p.y);
   await expect(page.locator('#plot .trace-count')).toHaveText('1');
   expect(await page.locator('#plot .trace-percent').allTextContents()).toEqual(['1.6%', '1.4%']);
   const member = await page.locator('#plot .trace-count').getAttribute('data-member');
   expect(Number(member)).toBeGreaterThanOrEqual(0);
-  await page.keyboard.down('Alt');
+  await page.keyboard.down('Shift');
   await page.mouse.click(p.x, p.y);
-  await page.keyboard.up('Alt');
   await page.keyboard.up('Shift');
+  await page.keyboard.up('Alt');
   await page.mouse.move(5, 5);
   await expect(page.locator('#plot .trace-count')).toHaveText('1');
   await expect(page.locator('#plot .trace-count')).toHaveAttribute('data-member', member);
@@ -1154,44 +1154,44 @@ test('autosave keeps only non-default style, so later default changes reach rest
   expect(style.labelPosition).toBe('above');
 });
 
-test('Alt-click adds and removes substrands from a pool traced and tabulated together', async ({ page }) => {
+test('Shift-click adds and removes substrands from a pool traced and tabulated together', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
-  const altClick = async (label) => {
+  const shiftClick = async (label) => {
     const n = await nodeAt(page, label);
     await page.mouse.move(n.x, n.y);
-    await page.keyboard.down('Alt');
+    await page.keyboard.down('Shift');
     await page.mouse.click(n.x, n.y);
-    await page.keyboard.up('Alt');
+    await page.keyboard.up('Shift');
   };
-  await altClick('Surgery');
-  await altClick('Radiation');
+  await shiftClick('Surgery');
+  await shiftClick('Radiation');
   await page.mouse.move(5, 5);
   await expect(page.locator('#plot .trace')).toHaveCount(8);
   await expect(page.locator('#inspector-main h2').first()).toHaveText('Pool');
   await expect(page.locator('#inspector-main')).toContainText('8 pathways · 308 patients');
-  await altClick('Surgery');
+  await shiftClick('Surgery');
   await page.mouse.move(5, 5);
   await expect(page.locator('#inspector-main')).toContainText('4 pathways · 76 patients');
   await page.locator('#pool-clear').click();
   await expect(page.locator('#plot .trace')).toHaveCount(0);
 });
 
-test('Alt-clicked nodes in one column merge into a renamed node, laid out as if imported that way', async ({ page }) => {
+test('Shift-clicked nodes in one column merge into a renamed node, laid out as if imported that way', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
-  const altClick = async (label) => {
+  const shiftClick = async (label) => {
     const n = await nodeAt(page, label);
     await page.mouse.move(n.x, n.y);
-    await page.keyboard.down('Alt');
+    await page.keyboard.down('Shift');
     await page.mouse.click(n.x, n.y);
-    await page.keyboard.up('Alt');
+    await page.keyboard.up('Shift');
   };
   const merge = page.locator('#merge-nodes');
   await expect(merge).toBeHidden();
-  await altClick('Surgery');
-  await altClick('Stage I');
+  await shiftClick('Surgery');
+  await shiftClick('Stage I');
   await expect(merge).toBeHidden(); // different columns
-  await altClick('Stage I');
-  await altClick('Radiation');
+  await shiftClick('Stage I');
+  await shiftClick('Radiation');
   await expect(merge).toBeVisible();
   await expect(merge).toHaveText('Merge 2 nodes');
   await merge.click();
@@ -1236,9 +1236,9 @@ test('nodes of matrix data can be picked and merged too, and merging can be canc
   for (const label of ids) {
     const n = await nodeAt(page, label);
     await page.mouse.move(n.x, n.y);
-    await page.keyboard.down('Alt');
+    await page.keyboard.down('Shift');
     await page.mouse.click(n.x, n.y);
-    await page.keyboard.up('Alt');
+    await page.keyboard.up('Shift');
   }
   await page.mouse.move(5, 5);
   await expect(page.locator('#inspector-main h2').first()).toHaveText('Picked nodes');
@@ -1251,14 +1251,47 @@ test('nodes of matrix data can be picked and merged too, and merging can be canc
   await expect(page.locator('#plot .node-label', { hasText: `${ids[0]} + ${ids[1]}` })).toHaveCount(1);
 });
 
+test('dragging one of several Shift-clicked nodes moves them all by the same amount', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  for (const name of ['Surgery', 'Remission']) {
+    const n = await nodeAt(page, name);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(n.x, n.y);
+    await page.keyboard.up('Shift');
+  }
+  const ys = async () => page.evaluate(() => Object.fromEntries(window.SankeyApp.state.loc.map((r) => [r.label, r.y])));
+  const factor = await page.evaluate(() => {
+    const plot = document.querySelector('#plot');
+    return window.SankeyApp.layout.tf.sy * plot.getBoundingClientRect().height / Number(plot.getAttribute('height'));
+  });
+  const drag = async (name, dy) => {
+    const n = await nodeAt(page, name);
+    await page.mouse.move(n.x, n.y);
+    await page.mouse.down();
+    await page.mouse.move(n.x, n.y + dy, { steps: 5 });
+    await page.mouse.up();
+  };
+  const before = await ys();
+  await drag('Remission', 20);
+  const after = await ys();
+  const moved = Object.keys(before).filter((k) => after[k] !== before[k]);
+  expect(moved.sort()).toEqual(['Remission', 'Surgery']);
+  expect(after.Surgery - before.Surgery).toBeCloseTo(after.Remission - before.Remission, 6);
+  expect(before.Remission - after.Remission).toBeCloseTo(20 / factor, 3);
+  // An unpicked node still moves alone.
+  await drag('Chemotherapy', -10);
+  const last = await ys();
+  expect(Object.keys(after).filter((k) => last[k] !== after[k])).toEqual(['Chemotherapy']);
+});
+
 for (const label of ['Remission', 'Progression']) {
   test(`redoing a merge clears pinned ${label} pathways from the previous data`, async ({ page }) => {
     await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
     for (const name of ['Surgery', 'Radiation']) {
       const n = await nodeAt(page, name);
-      await page.keyboard.down('Alt');
+      await page.keyboard.down('Shift');
       await page.mouse.click(n.x, n.y);
-      await page.keyboard.up('Alt');
+      await page.keyboard.up('Shift');
     }
     await page.locator('#merge-nodes').click();
     await page.locator('#merge-name').fill('Local therapy');
@@ -1724,12 +1757,12 @@ test('one-row-per-patient data traces single patients and can draw substrand lin
   const p = await ribbonCenter(page, 0);
   await page.mouse.move(p.x, p.y);
   expect(await page.locator('#plot .trace').count()).toBeGreaterThan(1);
-  // Ctrl traces the pathway (a unique trajectory) under the pointer, Shift the single patient.
+  // Ctrl traces the pathway (a unique trajectory) under the pointer, Alt the single patient.
   await page.keyboard.down('Control');
   await expect(page.locator('#plot .trace')).toHaveCount(1);
   await expect(page.locator('#hover-info h3')).toHaveText('One pathway');
   await page.keyboard.up('Control');
-  await page.keyboard.down('Shift');
+  await page.keyboard.down('Alt');
   await expect(page.locator('#plot .trace')).toHaveCount(1);
   await expect(page.locator('#hover-info h3')).toHaveText(/^P\d{3}$/);
   await expect(page.locator('#hover-info')).toContainText(/patients? on this pathway/);
@@ -1737,7 +1770,7 @@ test('one-row-per-patient data traces single patients and can draw substrand lin
   await page.mouse.move(node.x - 10, node.y);
   await expect(page.locator('#plot .trace')).toHaveCount(1);
   await expect(page.locator('#hover-info h3')).toHaveText(/^P\d{3}$/);
-  await page.keyboard.up('Shift');
+  await page.keyboard.up('Alt');
   await page.evaluate(() => { window.SankeyApp.state.style.substrands = true; window.SankeyApp.update(); });
   await expect(page.locator('#plot .substrand-lines').first()).toBeAttached();
   const exported = await page.evaluate(() => window.SankeyApp.exportSvgText());
@@ -1828,10 +1861,13 @@ test('large pathway diagrams suppress ordinary hover but retain modifier hover a
   await expect(page.locator('#plot .node-fill')).toHaveCount(0);
   await expect(page.locator('#hover-info')).toBeHidden();
   await expect(page.locator('#inspector-main')).toContainText('201 pathways (limit 200)');
-  await page.keyboard.down('Alt');
-  await expect(page.locator('#plot .trace')).toHaveCount(1);
-  await expect(page.locator('#hover-info h3')).toHaveText('One pathway');
-  await page.keyboard.up('Alt');
+  // Alt traces one item (here, without item ids, one pathway); Shift above the limit one pathway.
+  for (const key of ['Alt', 'Shift']) {
+    await page.keyboard.down(key);
+    await expect(page.locator('#plot .trace')).toHaveCount(1);
+    await expect(page.locator('#hover-info h3')).toHaveText('One pathway');
+    await page.keyboard.up(key);
+  }
   await expect(page.locator('#plot .trace')).toHaveCount(0);
   await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
   await page.keyboard.down('Control');
@@ -1906,10 +1942,10 @@ test('zoomed pointer coordinates and drags follow the displayed geometry', async
     return { X, Y, member: app.state.paths[pi].members[0].id };
   });
   const p = await screenPoint(page, point);
-  await page.keyboard.down('Shift');
+  await page.keyboard.down('Alt');
   await page.mouse.move(p.x, p.y);
   await expect(page.locator('#hover-info h3')).toHaveText(point.member);
-  await page.keyboard.up('Shift');
+  await page.keyboard.up('Alt');
   const node = await page.evaluate(() => {
     const n = window.SankeyApp.layout.nodes.find(n => n.set === 1);
     return { X: n.X, Y: n.Y, row: n.id, before: n.y };
