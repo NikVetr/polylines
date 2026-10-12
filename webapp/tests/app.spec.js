@@ -1434,6 +1434,64 @@ test('overlapping traces add a shade, strands show behind nodes, and outlines si
   expect(await page.locator('#plot .trace-overlap > g').count()).toBe(await page.locator('#plot .trace').count());
 });
 
+test('the corner handle resizes the canvas while the plot keeps its scale', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const handle = page.locator('#canvas-resize');
+  const plot = await page.locator('#plot').boundingBox();
+  const h = await handle.boundingBox();
+  expect(Math.abs(h.x + h.width - (plot.x + plot.width))).toBeLessThan(1.5);
+  expect(Math.abs(h.y + h.height - (plot.y + plot.height))).toBeLessThan(1.5);
+  const before = await page.evaluate(() => ({ sx: window.SankeyApp.layout.tf.sx, sy: window.SankeyApp.layout.tf.sy, width: Number(document.querySelector('#plot').getAttribute('width')) }));
+  await page.mouse.move(h.x + 8, h.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(h.x + 8 - 60, h.y + 8 - 40, { steps: 4 });
+  await page.mouse.move(h.x + 8 + 150, h.y + 8 + 90, { steps: 6 });
+  await page.mouse.up();
+  const after = await page.evaluate(() => ({ sx: window.SankeyApp.layout.tf.sx, sy: window.SankeyApp.layout.tf.sy, width: Number(document.querySelector('#plot').getAttribute('width')), style: window.SankeyApp.state.style }));
+  expect(after.width).toBeGreaterThan(before.width + 50);
+  expect(after.style.canvasWidth).toBe(after.width);
+  // Same scale, up to the rounding of view limits and whole-pixel canvas sizes.
+  expect(Math.abs(after.sx / before.sx - 1)).toBeLessThan(1e-4);
+  expect(Math.abs(after.sy / before.sy - 1)).toBeLessThan(1e-4);
+});
+
+test('dragging a node redraws without fade transitions', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const node = await nodeAt(page, 'Surgery');
+  await page.mouse.move(node.x, node.y);
+  await page.mouse.down();
+  await page.mouse.move(node.x + 10, node.y + 20, { steps: 3 });
+  const durations = await page.evaluate(() => [...document.querySelectorAll('#plot .ribbon, #plot .trunk')].map((el) => getComputedStyle(el).transitionDuration));
+  await page.mouse.up();
+  expect(durations.every((d) => d === '0s')).toBe(true);
+  const idle = await page.evaluate(() => getComputedStyle(document.querySelector('#plot .ribbon')).transitionDuration);
+  expect(idle).not.toBe('0s');
+});
+
+test('Align lines up the top and bottom nodes of every column; double-click fits the canvas', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  await page.locator('#align').click();
+  const edges = await page.evaluate(() => {
+    const L = window.SankeyApp.layout;
+    const h = (n) => Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0);
+    const sets = [...new Set(L.nodes.map((n) => n.set))];
+    return sets.map((s) => {
+      const g = L.nodes.filter((n) => n.set === s);
+      return { top: Math.max(...g.map((n) => n.Y + h(n) / 2)), bottom: Math.min(...g.map((n) => n.Y - h(n) / 2)), xs: [...new Set(g.map((n) => window.SankeyApp.state.loc[n.id].x))].length };
+    });
+  });
+  edges.forEach((e) => {
+    expect(Math.abs(e.top - edges[0].top)).toBeLessThan(1);
+    expect(Math.abs(e.bottom - edges[0].bottom)).toBeLessThan(1);
+    expect(e.xs).toBe(1);
+  });
+  await page.keyboard.press('Control+z');
+  await page.locator('#zoom-in').click();
+  const plot = await page.locator('#plot').boundingBox();
+  await page.mouse.dblclick(plot.x + 6, plot.y + 6);
+  expect(await page.evaluate(() => window.SankeyApp.state.presentation.mode)).toBe('panel');
+});
+
 test('labels above nodes keep clear of their own strands', async ({ page }) => {
   await page.evaluate((text) => {
     const T = window.SK.transform;

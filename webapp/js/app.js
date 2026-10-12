@@ -278,6 +278,13 @@
     displayScale = base * zoom;
     svg.style.width = `${frame.width * displayScale}px`;
     svg.style.height = `${frame.height * displayScale}px`;
+    // The resize handle sits on the canvas's bottom-right corner, in the panel's scrolled content
+    // (SVG elements have no offsetLeft/offsetTop, so measure against the panel).
+    const handle = $('#canvas-resize');
+    const plot = svg.getBoundingClientRect();
+    const panel = stageEl.getBoundingClientRect();
+    handle.style.left = `${plot.left - panel.left + stageEl.scrollLeft + frame.width * displayScale - 16}px`;
+    handle.style.top = `${plot.top - panel.top + stageEl.scrollTop + frame.height * displayScale - 16}px`;
     $('#fit-panel').setAttribute('aria-pressed', String(mode === 'panel'));
     $('#fit-height').setAttribute('aria-pressed', String(mode === 'height'));
     $('#zoom-out').disabled = zoom <= 0.1;
@@ -297,6 +304,44 @@
     stageEl.scrollLeft += after.left + fx * after.width - cx;
     stageEl.scrollTop += after.top + fy * after.height - cy;
     scheduleSave();
+  }
+
+  // The handle at the canvas's bottom-right corner resizes it. The plot keeps its on-screen size and
+  // scale (the view grows or shrinks with the canvas), so the new room opens on the right and below.
+  function bindCanvasResize() {
+    const handle = $('#canvas-resize');
+    let start = null;
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || !layout || !state.view) return;
+      event.preventDefault();
+      event.stopPropagation();
+      handle.setPointerCapture(event.pointerId);
+      if (state.presentation.mode !== 'native') state.presentation = { mode: 'native', zoom: displayScale };
+      start = { x: event.clientX, y: event.clientY, width: frame.width, height: frame.height,
+        plotW: frame.width - 2 * MARGIN, plotH: frame.height - frame.margin.top - MARGIN, view: JSON.parse(JSON.stringify(state.view)) };
+      svg.classList.add('resizing');
+    });
+    handle.addEventListener('pointermove', (event) => {
+      if (!start) return;
+      const width = Math.max(320, Math.round(start.width + (event.clientX - start.x) / displayScale));
+      const height = Math.max(240, Math.round(start.height + (event.clientY - start.y) / displayScale));
+      const kx = (width - start.width + start.plotW) / start.plotW;
+      const ky = (height - start.height + start.plotH) / start.plotH;
+      const { xlim, ylim } = start.view;
+      state.style.canvasWidth = width;
+      state.style.canvasHeight = height;
+      state.view = { xlim: [xlim[0], round(xlim[0] + (xlim[1] - xlim[0]) * kx)], ylim: [round(ylim[1] - (ylim[1] - ylim[0]) * ky), ylim[1]] };
+      requestRender();
+    });
+    const end = (event) => {
+      if (!start) return;
+      start = null;
+      svg.classList.remove('resizing');
+      if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+      update({ commit: true });
+    };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
   }
 
   function changePresentation(mode, factor = 1) {
@@ -411,8 +456,8 @@
   function update(options) {
     const opts = options || {};
     // Fitting recomputes how wide an imported table's canvas must be, so a canvas widened earlier
-    // shrinks back unless the current layout still needs the room.
-    if (opts.fit && state.sourceTable) state.sourceTable.minCanvasWidth = 0;
+    // shrinks back unless the current layout still needs the room (keepCanvas: refit within it).
+    if (opts.fit && !opts.keepCanvas && state.sourceTable) state.sourceTable.minCanvasWidth = 0;
     computeFrame();
     try {
       if (!state.matrices.length || !state.loc.length) {
@@ -1196,6 +1241,47 @@
     const tallest = Math.max(...sets.map((g) => g.reduce((s, n) => s + n.height * state.valueScale, 0)));
     const ys = stackColumn(sets[set - 1], STACK_FILL * H / tallest, H);
     state.loc.forEach((r) => { if (Number(r.set) === set) r.y = ys[Number(r.node) - 1]; });
+  }
+
+  // "Align": each column's nodes share one x; the top edges of the top nodes and the bottom edges
+  // of the bottom nodes of all columns sit on two common lines (moved apart if the fullest column
+  // needs more room), and the nodes in between are evenly spaced in their current order. Node
+  // heights follow the x scale while positions follow the y scale, so after refitting the view the
+  // columns are aligned once more.
+  function alignColumns(opts = {}) {
+    if (!layout) update();
+    if (!layout) return;
+    const minGap = state.style.labels && state.style.labelPosition === 'above'
+      ? state.style.fontSize * 1.5 + FILL_BAR.height + FILL_BAR.gap + 4 : 8;
+    const once = () => {
+      const height = (n) => Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0);
+      const columns = new Map();
+      layout.nodes.forEach((n) => columns.set(n.set, (columns.get(n.set) || []).concat(n)));
+      let top = Math.max(...layout.nodes.map((n) => n.Y + height(n) / 2));
+      let bottom = Math.min(...layout.nodes.map((n) => n.Y - height(n) / 2));
+      const need = Math.max(...[...columns.values()].map((g) => g.reduce((t, n) => t + height(n), 0) + minGap * (g.length - 1)));
+      if (need > top - bottom) {
+        const mid = (top + bottom) / 2;
+        top = mid + need / 2;
+        bottom = mid - need / 2;
+      }
+      columns.forEach((g) => {
+        g.sort((a, b) => b.Y - a.Y);
+        const x = round(g.reduce((t, n) => t + Number(state.loc[n.id].x), 0) / g.length);
+        const used = g.reduce((t, n) => t + height(n), 0);
+        const gap = g.length > 1 ? (top - bottom - used) / (g.length - 1) : 0;
+        let y = g.length > 1 ? top : (top + bottom + used) / 2;
+        g.forEach((n) => {
+          state.loc[n.id].x = x;
+          state.loc[n.id].y = round(layout.tf.y(y - height(n) / 2));
+          y -= height(n) + gap;
+        });
+      });
+    };
+    once();
+    update({ fit: true, keepCanvas: true });
+    once();
+    update({ commit: opts.commit !== false });
   }
 
   // Default loc: node sets in evenly spaced columns, stacked to fill most of the height.
@@ -2746,6 +2832,16 @@
     $('#undo').addEventListener('click', () => restore(history.index - 1));
     $('#redo').addEventListener('click', () => restore(history.index + 1));
     $('#fit').addEventListener('click', () => update({ fit: true, commit: true }));
+    $('#align').addEventListener('click', () => {
+      try {
+        alignColumns();
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+    // Double-click the canvas to see all of it in the panel.
+    svg.addEventListener('dblclick', () => changePresentation('panel'));
+    bindCanvasResize();
     $('#fit-panel').addEventListener('click', () => changePresentation('panel'));
     $('#fit-height').addEventListener('click', () => changePresentation('height'));
     $('#zoom-in').addEventListener('click', () => changePresentation(null, 1.25));

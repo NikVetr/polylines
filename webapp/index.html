@@ -22,6 +22,7 @@
       <button id="zoom-out" class="btn icon-btn" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8"/></svg></button>
       <button id="zoom-in" class="btn icon-btn" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8m-4-4v8"/></svg></button>
       <button id="fit" class="btn" title="Fit the view to the content (F)">Fit view</button>
+      <button id="align" class="btn" title="Line up the columns: one x per column, top and bottom nodes on shared lines, even gaps">Align</button>
       <button id="merge-nodes" class="btn danger" hidden>Merge nodes</button>
       <button class="btn" data-export="svg" title="Download the plot as shown, focused substrands included, as an SVG image">SVG</button>
       <button class="btn" data-export="png" title="Download the plot as shown, focused substrands included, as a PNG image (2×)">PNG</button>
@@ -94,6 +95,7 @@
         <div id="notice" class="banner info" role="status" hidden></div>
       </div>
       <svg id="plot" xmlns="http://www.w3.org/2000/svg" text-rendering="geometricPrecision"></svg>
+      <div id="canvas-resize" class="canvas-resize" title="Drag to resize the canvas (the plot keeps its scale)"></div>
       <div id="drop-overlay" class="drop-overlay" hidden>Drop CSV or project files to load them</div>
     </section>
 
