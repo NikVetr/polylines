@@ -98,7 +98,7 @@
     return above;
   }
 
-  // A label above its node can be wider than the node (widths are capped), so its ends overhang the
+  // A label above its node can be wider than the node (e.g. a loc width), so its ends overhang the
   // faces where the node's strands curve in and out. An end node's label shifts (n.labelShift, px)
   // to its free side, starting at the face its strands use; an interior node's label lifts
   // (n.labelLift, px) just above any of its strands crossing it, by at most four text heights.

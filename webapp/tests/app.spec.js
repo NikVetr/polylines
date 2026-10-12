@@ -1519,6 +1519,38 @@ test('labels above nodes keep clear of their own strands', async ({ page }) => {
   expect(crossed).toEqual([]);
 });
 
+test('imported tables fit labels in their nodes and spread tight columns, also on a fixed canvas', async ({ page }) => {
+  const importTight = () => page.evaluate((text) => {
+    const T = window.SK.transform;
+    window.SankeyApp.applyImport(T.build(T.parseTable(text), { format: 'wide', id: 'participant_id', columns: ['activity', 'training', 'suspension', 'sharing'], weight: null, missing: 'drop' }, { order: 'appearance' }), { labels: 'above' });
+  }, tightTable());
+  const check = () => page.evaluate(() => {
+    const app = window.SankeyApp, L = app.layout, R = window.SK.render, m = R.makeMeasure(app.state.style);
+    const overhang = Math.max(...L.nodes.map((n) => {
+      const pos = R.labelPlacement(n, app.state.style, app.state.style.fontSize * n.cex);
+      const half = m(n.label, n.cex, n.font).width / 2;
+      return Math.max(n.X - n.widthPx / 2 - (pos.X - half), pos.X + half - (n.X + n.widthPx / 2));
+    }));
+    const steepest = Math.max(...L.flows.map((f) => Math.abs(f.endY + f.endOffset - f.startY - f.startOffset) / (f.endX - f.startX)));
+    return { overhang, steepest, width: Number(document.querySelector('#plot').getAttribute('width')), banner: !document.querySelector('#banner').hidden };
+  });
+  await importTight();
+  const auto = await check();
+  expect(auto.overhang).toBeLessThanOrEqual(0);
+  expect(auto.steepest).toBeLessThan(2.1);
+  // Fit view keeps the room the generated layout needs.
+  await page.locator('#fit').click();
+  expect((await check()).width).toBe(auto.width);
+  // A fixed canvas width too narrow for these turns still draws: the columns move apart and the
+  // drawing shrinks instead of the canvas growing.
+  await page.evaluate(() => { window.SankeyApp.state.style.canvasWidth = 900; });
+  await importTight();
+  const fixed = await check();
+  expect(fixed.banner).toBe(false);
+  expect(fixed.width).toBe(900);
+  expect(fixed.overhang).toBeLessThanOrEqual(0);
+});
+
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
   await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
   await expect(page.locator('.topbar .actions > [data-export="png"]')).toBeVisible();
