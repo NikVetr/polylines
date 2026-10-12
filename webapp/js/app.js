@@ -664,8 +664,9 @@
         { key: 'default_node_width', target: 'params', type: 'number', label: 'Default node width', min: 0, step: 0.01 },
         { key: 'node_label_pad', target: 'params', type: 'number', label: 'Label padding', min: 0, step: 0.005,
           help: 'Horizontal padding (x units) added on each side of label-derived node widths.' },
-        { key: 'node_label_pad_frac', target: 'params', type: 'number', label: 'Label padding (frac.)', min: 0, step: 0.01 },
-        { key: 'adjust_loc', target: 'params', type: 'checkbox', label: 'Adjust node y positions',
+        { key: 'node_label_pad_frac', target: 'params', type: 'number', label: 'Label padding, relative', min: 0, step: 0.01,
+          help: 'Padding added on each side of label-derived node widths, as a fraction of the median label width.' },
+        { key: 'adjust_loc', target: 'params', type: 'checkbox', label: 'Keep nodes apart',
           help: 'Isotonic adjustment so neighbouring node bundles do not overlap (adjust_loc).' },
         { key: 'min_node_gap', target: 'params', type: 'number', label: 'Minimum node gap', min: 0, step: 0.005,
           showIf: () => state.params.adjust_loc },
@@ -673,9 +674,11 @@
           showIf: () => state.params.adjust_loc },
         { key: 'adjust_node_height', target: 'params', type: 'select', label: 'Fit labels by',
           options: [['none', 'nothing'], ['label', 'shrinking labels'], ['node', 'growing node bodies']] },
-        { key: 'node_label_vpad', target: 'params', type: 'number', label: 'Label v-padding', min: 0, step: 0.005,
+        { key: 'node_label_vpad', target: 'params', type: 'number', label: 'Label vertical padding', min: 0, step: 0.005,
+          help: 'Padding (y units) above and below labels when fitting them to node heights.',
           showIf: () => state.params.adjust_node_height !== 'none' },
-        { key: 'node_label_vpad_frac', target: 'params', type: 'number', label: 'Label v-padding (frac.)', min: 0, step: 0.05,
+        { key: 'node_label_vpad_frac', target: 'params', type: 'number', label: 'Label vertical padding, relative', min: 0, step: 0.05,
+          help: 'Padding above and below labels when fitting them to node heights, as a fraction of the tallest label.',
           showIf: () => state.params.adjust_node_height !== 'none' },
         { key: 'require_forward', target: 'params', type: 'checkbox', label: 'Require left-to-right',
           showIf: () => state.mode === 'graph' },
@@ -732,7 +735,7 @@
         { key: 'nodeBorderWidth', target: 'style', type: 'number', label: 'Node border width', min: 0.1, step: 0.1,
           showIf: () => state.style.nodeBorder !== 'none' },
         { key: 'labels', target: 'style', type: 'checkbox', label: 'Show labels' },
-        { key: 'showIndices', target: 'style', type: 'checkbox', label: 'Label unlabeled nodes by index',
+        { key: 'showIndices', target: 'style', type: 'checkbox', label: 'Number unlabeled nodes',
           showIf: () => state.style.labels },
         { key: 'fontSize', target: 'style', type: 'number', label: 'Font size (px)', min: 4, step: 0.5, fit: true },
         { key: 'labelPosition', target: 'style', type: 'select', label: 'Label position',
@@ -753,7 +756,7 @@
         { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover', fit: true,
           help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ for a single pathway, or Alt/⌥ for a single item. Above the hover limit, only single-substrand hover is enabled.',
           showIf: () => !!state.paths },
-        { key: 'maxHoverSubstrands', target: 'style', type: 'number', label: 'Max substrands for hover', min: 0, step: 50, integer: true,
+        { key: 'maxHoverSubstrands', target: 'style', type: 'number', label: 'Hover limit (pathways)', min: 0, step: 50, integer: true,
           help: 'Disable ordinary hover effects above this many unique pathways (default 200). Alt, Ctrl/⌘ and Shift hover still work. Raising this can slow the browser.',
           showIf: () => !!state.paths },
         { key: 'traceCounts', target: 'style', type: 'checkbox', label: 'Substrand counts', fit: true,
@@ -2462,7 +2465,7 @@
     }
     if (!sel) {
       host.innerHTML = '<h2>Inspector</h2><p class="muted">Hover a strand or node for details; click to select and edit it.</p>' +
-        (state.paths && state.paths.length > state.style.maxHoverSubstrands ? `<p class="muted small">Ordinary hover is paused for ${state.paths.length.toLocaleString()} pathways (limit ${state.style.maxHoverSubstrands}). Hold Ctrl/⌘ (or Shift) for one pathway, or Alt/⌥ for one item. Change “Max substrands for hover” in Canvas & dragging to raise the limit.</p>` : '') +
+        (state.paths && state.paths.length > state.style.maxHoverSubstrands ? `<p class="muted small">Ordinary hover is paused for ${state.paths.length.toLocaleString()} pathways (limit ${state.style.maxHoverSubstrands}). Hold Ctrl/⌘ (or Shift) for one pathway, or Alt/⌥ for one item. Change “Hover limit (pathways)” in Canvas & dragging to raise the limit.</p>` : '') +
         '<ul class="tips"><li>Drag a node to move it (Shift: vertical only, Alt: horizontal only).</li>' +
         '<li>Drag a strand up or down to reorder it in the stack at its nearer end.</li>' +
         (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Ctrl/⌘ for the single pathway under the pointer, or Alt/⌥ for the single item. Click to pin the traces and breakdown.</li>' : '') +
@@ -2531,7 +2534,7 @@
       colorEditor('node', 'Node color', colors.node[n.id], !!(state.nodeColors[n.key] || row.color)) +
       colorEditor('merge', 'Trunk color', colors.merge[n.id], !!(state.mergeColors[n.key] || row.merge_col)) +
       '<button class="mini-btn wide" id="ins-reset-order">Reset stack order at this node</button>' +
-      (state.params.adjust_loc ? '<p class="muted small">y is adjusted by "Adjust node y positions"; edits change the requested y.</p>' : '');
+      (state.params.adjust_loc ? '<p class="muted small">y is adjusted by "Keep nodes apart"; edits change the requested y.</p>' : '');
     bindPool(host);
     host.querySelector('#ins-label').addEventListener('change', (e) => {
       row.label = e.target.value;

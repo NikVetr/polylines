@@ -1716,6 +1716,19 @@ test('toolbar arrangements center columns, spread nodes evenly and even out colu
   await expect(page.locator('#banner')).toBeHidden();
 });
 
+test('setting names wrap instead of being cut off', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  const cut = await page.evaluate(() => [...document.querySelectorAll('.sidebar .row > label')].filter((l) => {
+    const row = l.closest('.row');
+    const hidden = row.hidden;
+    row.hidden = false;
+    const over = l.scrollWidth > l.clientWidth + 1;
+    row.hidden = hidden;
+    return over;
+  }).map((l) => l.textContent));
+  expect(cut).toEqual([]);
+});
+
 test('drag bars resize the settings panel and the inspector, persist, and reset on double-click', async ({ page }) => {
   const widths = () => page.evaluate(() => ({
     sidebar: Math.round(document.querySelector('.sidebar').getBoundingClientRect().width),
