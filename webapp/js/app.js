@@ -511,19 +511,23 @@
   const countGapFor = displacement => displacement > 1
     ? Math.min(TRACE_LABEL.maxGap, Math.max(TRACE_LABEL.crowdedGap, TRACE_LABEL.countGap + displacement / 2)) : TRACE_LABEL.countGap;
 
+  // Room for count labels beside the rightmost node where the most pathways end: a hover or pin
+  // labels each pathway once. (Pools of many single items can fan out farther; exports still fit
+  // them, as they crop to what is drawn.)
   function countGutter(lay, data) {
     const nodes = new Map(lay.nodes.map(n => [n.key, n]));
     const counts = new Map();
     data.paths.forEach(path => {
       const n = path.nodes.map((ni, s) => nodes.get(`${s + 1}:${ni + 1}`))
         .reduce((a, b) => a.X + a.widthPx / 2 >= b.X + b.widthPx / 2 ? a : b);
-      counts.set(n.id, (counts.get(n.id) || 0) + (path.members ? Math.max(1, path.members.length) : 1));
+      counts.set(n.id, (counts.get(n.id) || 0) + 1);
     });
     return countGapFor((Math.max(...counts.values()) - 1) * TRACE_LABEL.countSpacing);
   }
 
-  // Data limits that contain every strand, node body and label (a few refinement passes,
-  // because strand thickness in pixels depends on the limits themselves).
+  // Data limits that contain every strand, node body and label, VIEW_PAD plot px clear of them (a
+  // few refinement passes, because strand thickness in pixels depends on the limits themselves).
+  const VIEW_PAD = 6;
   function fitView(data = state, opts = {}) {
     if (!data.loc.length) throw new L.SankeyError('No node locations (loc) are loaded.');
     const xs = data.loc.map((r) => r.x);
@@ -548,13 +552,7 @@
         const width = Math.max(...data.paths.map((p) => countMeasure(fmtValue(p.weight), 1, 1).width));
         box.x1 = Math.max(box.x1, labelRightEdge(nodeLabelBounds(lay, data))) + countGutter(lay, data) + width;
       }
-      const x0 = lay.tf.x(box.x0);
-      const x1 = lay.tf.x(box.x1);
-      const y0 = lay.tf.y(box.y0);
-      const y1 = lay.tf.y(box.y1);
-      const padX = 0.02 * (x1 - x0);
-      const padY = 0.03 * (y1 - y0);
-      view = { xlim: [x0 - padX, x1 + padX], ylim: [y0 - padY, y1 + padY] };
+      view = { xlim: [lay.tf.x(box.x0 - VIEW_PAD), lay.tf.x(box.x1 + VIEW_PAD)], ylim: [lay.tf.y(box.y0 - VIEW_PAD), lay.tf.y(box.y1 + VIEW_PAD)] };
     }
     return { xlim: view.xlim.map((v) => round(v)), ylim: view.ylim.map((v) => round(v)) };
   }
@@ -2579,11 +2577,34 @@
 
   // ---------- exports ----------
 
-  function exportSvgText() {
+  // SVG and PNG exports crop to what is drawn, EXPORT_PAD canvas px around it, unless the canvas
+  // size was set: then they keep that size exactly.
+  const EXPORT_PAD = 12;
+  function exportBox() {
+    if (state.style.canvasWidth || state.style.canvasHeight) return { x: 0, y: 0, width: frame.width, height: frame.height };
+    // Everything drawn except the background and the invisible hit areas.
+    const skip = [...svg.querySelectorAll(':scope > .background, :scope > .layer-hits')];
+    skip.forEach((el) => { el.style.display = 'none'; });
+    let box;
+    try {
+      box = svg.getBBox();
+    } finally {
+      skip.forEach((el) => el.style.removeProperty('display'));
+    }
+    const x = Math.floor(box.x - EXPORT_PAD), y = Math.floor(box.y - EXPORT_PAD);
+    return { x, y, width: Math.ceil(box.x + box.width + EXPORT_PAD) - x, height: Math.ceil(box.y + box.height + EXPORT_PAD) - y };
+  }
+
+  function exportSvgText(box = exportBox()) {
     if (!layout) throw new L.SankeyError('Nothing to export: the current data does not produce a plot.');
     const clone = svg.cloneNode(true);
     clone.style.removeProperty('width');
     clone.style.removeProperty('height');
+    clone.setAttribute('width', box.width);
+    clone.setAttribute('height', box.height);
+    clone.setAttribute('viewBox', `${box.x} ${box.y} ${box.width} ${box.height}`);
+    const bg = clone.querySelector(':scope > .background');
+    if (bg) Object.entries(box).forEach(([k, v]) => bg.setAttribute(k, v));
     // The app's CSS dims or hides parts of the plot around a focus; copy those computed styles
     // onto the export so it shows the focused view, traces and fill bars included.
     const copies = clone.querySelectorAll('*');
@@ -2604,14 +2625,15 @@
   }
 
   function exportPng() {
-    const text = exportSvgText();
+    const box = exportBox();
+    const text = exportSvgText(box);
     const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
     const img = new Image();
     img.onload = () => {
       const scale = 2;
       const canvas = document.createElement('canvas');
-      canvas.width = frame.width * scale;
-      canvas.height = frame.height * scale;
+      canvas.width = box.width * scale;
+      canvas.height = box.height * scale;
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(url);
       canvas.toBlob((blob) => download('sankey.png', blob), 'image/png');

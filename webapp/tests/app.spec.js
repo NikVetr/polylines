@@ -1052,7 +1052,10 @@ test('a covered strand outline stays hidden beneath an opaque node polygon', asy
     const pixel = async (thinOutline) => {
       app.state.style.thinOutline = thinOutline;
       app.update();
-      const url = URL.createObjectURL(new Blob([app.exportSvgText()], { type: 'image/svg+xml' }));
+      const text = app.exportSvgText();
+      // Exports crop to the drawing: their viewBox starts at its corner.
+      const [vx, vy] = new DOMParser().parseFromString(text, 'image/svg+xml').documentElement.getAttribute('viewBox').split(' ').map(Number);
+      const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
       const image = new Image();
       await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url; });
       const canvas = document.createElement('canvas');
@@ -1060,7 +1063,7 @@ test('a covered strand outline stays hidden beneath an opaque node polygon', asy
       const ctx = canvas.getContext('2d');
       ctx.drawImage(image, 0, 0);
       URL.revokeObjectURL(url);
-      return [...ctx.getImageData(Math.round(X), Math.round(Y), 1, 1).data];
+      return [...ctx.getImageData(Math.round(X - vx), Math.round(Y - vy), 1, 1).data];
     };
     return { on: await pixel(true), off: await pixel(false) };
   });
@@ -1590,6 +1593,34 @@ test('imported tables fit labels in their nodes and spread tight columns, also o
   expect(fixed.banner).toBe(false);
   expect(fixed.width).toBe(900);
   expect(fixed.overhang).toBeLessThanOrEqual(0);
+});
+
+test('exports crop to the drawing with a small margin, unless the canvas size is fixed', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  const exported = () => page.evaluate(() => {
+    const doc = new DOMParser().parseFromString(window.SankeyApp.exportSvgText(), 'image/svg+xml').documentElement;
+    const svg = document.querySelector('#plot');
+    const hidden = [...svg.querySelectorAll(':scope > .background, :scope > .layer-hits')];
+    hidden.forEach((el) => { el.style.display = 'none'; });
+    const b = svg.getBBox();
+    hidden.forEach((el) => el.style.removeProperty('display'));
+    return { viewBox: doc.getAttribute('viewBox').split(' ').map(Number), width: Number(doc.getAttribute('width')),
+      canvas: [Number(svg.getAttribute('width')), Number(svg.getAttribute('height'))], drawing: [b.x, b.y, b.x + b.width, b.y + b.height],
+      background: doc.querySelector('.background') && doc.querySelector('.background').getAttribute('width') };
+  });
+  const cropped = await exported();
+  const [x, y, w, h] = cropped.viewBox;
+  expect(cropped.width).toBe(w);
+  // 12 px around the drawing, rounded out to whole pixels.
+  [cropped.drawing[0] - x, cropped.drawing[1] - y, x + w - cropped.drawing[2], y + h - cropped.drawing[3]].forEach((m) => {
+    expect(m).toBeGreaterThanOrEqual(12);
+    expect(m).toBeLessThan(13);
+  });
+  expect(w).toBeLessThan(cropped.canvas[0]);
+  if (cropped.background) expect(Number(cropped.background)).toBe(w);
+  await page.evaluate(() => { window.SankeyApp.state.style.canvasWidth = 900; window.SankeyApp.update(); });
+  const fixed = await exported();
+  expect(fixed.viewBox).toEqual([0, 0, ...fixed.canvas]);
 });
 
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
