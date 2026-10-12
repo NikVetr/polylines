@@ -1716,6 +1716,25 @@ test('toolbar arrangements center columns, spread nodes evenly and even out colu
   await expect(page.locator('#banner')).toBeHidden();
 });
 
+test('setting cartoons show slider ends, the chosen option and what a checkbox does', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  const row = (id) => page.locator(`.sidebar .row:has(#${id})`);
+  await expect(row('ctl-curvature').locator('svg.glyph')).toHaveCount(2);
+  const routeGlyph = () => row('ctl-route').locator('svg.glyph').evaluate((el) => el.innerHTML);
+  await expect(row('ctl-route').locator('svg.glyph title')).toHaveText('Bezier curves');
+  const bezier = await routeGlyph();
+  await page.locator('#ctl-route').selectOption('boundary');
+  await expect(row('ctl-route').locator('svg.glyph title')).toHaveText('Packed boundaries');
+  expect(await routeGlyph()).not.toBe(bezier);
+  const gather = row('ctl-gatherInNodes').locator('.with-glyph');
+  await expect(gather).toHaveClass(/off/);
+  await page.locator('#ctl-gatherInNodes').check();
+  await expect(gather).not.toHaveClass(/off/);
+  await expect(row('ctl-merge_frac').locator('svg.glyph')).toHaveCount(1);
+  // Settings without a cartoon keep their plain control.
+  await expect(row('ctl-maxHoverSubstrands').locator('svg.glyph')).toHaveCount(0);
+});
+
 test('setting names wrap instead of being cut off', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
   const cut = await page.evaluate(() => [...document.querySelectorAll('.sidebar .row > label')].filter((l) => {

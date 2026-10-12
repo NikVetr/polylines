@@ -79,7 +79,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .menu-list button:hover { background: var(--accent-soft); }
 
 .layout {
-  --sidebar-width: 290px;
+  --sidebar-width: 310px;
   --inspector-width: 300px;
   position: relative;
   flex: 1;
@@ -142,6 +142,14 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
 .row input[type="checkbox"] { justify-self: start; }
 .row input[type="color"] { width: 40px; height: 24px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
 .range { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: center; gap: 6px; }
+.range.glyphed { grid-template-columns: auto minmax(0, 1fr) auto 30px; gap: 4px; }
+/* Setting cartoons (glyphs.js) beside their controls; a checkbox's fades while it is off. */
+.glyph-slot { display: inline-flex; flex: none; }
+.glyph { display: block; width: 30px; height: 18px; }
+.range .glyph { width: 24px; height: 14.4px; }
+.with-glyph { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.with-glyph > select, .with-glyph > input[type="number"] { flex: 1; min-width: 0; }
+.with-glyph.off .glyph { opacity: 0.35; filter: grayscale(1); }
 .range input { width: 100%; }
 .range output { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
 .combo, .pair, .color-edit { display: flex; align-items: center; gap: 6px; min-width: 0; }

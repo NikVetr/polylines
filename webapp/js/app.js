@@ -673,7 +673,7 @@
         { key: 'adjust_loc_expand', target: 'params', type: 'checkbox', label: 'Allow expanding y range',
           showIf: () => state.params.adjust_loc },
         { key: 'adjust_node_height', target: 'params', type: 'select', label: 'Fit labels by',
-          options: [['none', 'nothing'], ['label', 'shrinking labels'], ['node', 'growing node bodies']] },
+          options: [['none', 'nothing'], ['label', 'shrinking labels'], ['node', 'growing nodes']] },
         { key: 'node_label_vpad', target: 'params', type: 'number', label: 'Label vertical padding', min: 0, step: 0.005,
           help: 'Padding (y units) above and below labels when fitting them to node heights.',
           showIf: () => state.params.adjust_node_height !== 'none' },
@@ -692,7 +692,8 @@
       items: [
         { key: 'route', target: 'stage', type: 'select', label: 'Route', options: [['bezier', 'Bezier curves'], ['boundary', 'Packed boundaries']] },
         { key: 'boundary_group', target: 'stage', type: 'select', label: 'Boundary group',
-          options: [['target', 'by target (fan-in)'], ['source', 'by source (fan-out)'], ['stage', 'whole stage']], showIf: isBoundary },
+          options: [['target', 'by target'], ['source', 'by source'], ['stage', 'whole stage']], showIf: isBoundary,
+          help: 'Which strands ease together: those into one target (fan-in), out of one source (fan-out), or the whole stage.' },
         { key: 'boundary_compensation', target: 'stage', type: 'select', label: 'Width compensation',
           options: [['none', 'none'], ['full', 'full'], ['gap_budget', 'gap budget']], showIf: isBoundary },
         { key: 'boundary_ease', target: 'stage', type: 'range', label: 'Boundary easing', min: 0.3, max: 3, step: 0.05, showIf: isBoundary },
@@ -704,8 +705,8 @@
       title: 'Colors',
       items: [
         { key: 'colorBy', target: 'style', type: 'select', label: 'Strand colors',
-          options: () => [['file', 'from color files'], ['source', 'palette by source'], ['target', 'palette by target'],
-            ['stage', 'palette by stage'], ['single', 'single color']].filter((o) => o[0] !== 'file' || state.colorMatrices) },
+          options: () => [['file', 'color files'], ['source', 'by source'], ['target', 'by target'],
+            ['stage', 'by stage'], ['single', 'one color']].filter((o) => o[0] !== 'file' || state.colorMatrices) },
         { key: 'palette', target: 'style', type: 'select', label: 'Palette', options: PALETTE_OPTIONS,
           showIf: () => ['source', 'target', 'stage'].includes(state.style.colorBy) },
         { key: 'singleColor', target: 'style', type: 'color', label: 'Color', showIf: () => state.style.colorBy === 'single' },
@@ -713,7 +714,8 @@
           showIf: () => state.style.colorBy !== 'file' },
         { key: 'gradient', target: 'style', type: 'checkbox', label: 'Gradients' },
         { key: 'gradientMode', target: 'style', type: 'select', label: 'Gradient mode',
-          options: [['merge', 'merge (fade near nodes)'], ['path', 'path (along strand)']], showIf: () => state.style.gradient },
+          options: [['merge', 'near nodes'], ['path', 'along strands']], showIf: () => state.style.gradient,
+          help: 'Near nodes: strands keep their color and shade into the node colors only next to the nodes. Along strands: one gradient from node to node.' },
         { key: 'useMid', target: 'style', type: 'checkbox', label: 'Use mid colors',
           showIf: () => state.style.gradient && !!state.midMatrices },
         { key: 'flatten', target: 'style', type: 'checkbox', label: 'Opaque node trunks',
@@ -739,10 +741,11 @@
           showIf: () => state.style.labels },
         { key: 'fontSize', target: 'style', type: 'number', label: 'Font size (px)', min: 4, step: 0.5, fit: true },
         { key: 'labelPosition', target: 'style', type: 'select', label: 'Label position',
-          options: [['auto', 'in node bodies, else beside'], ['above', 'above nodes']],
-          help: 'Above nodes, labels leave node bodies solid instead of fading them to a clear centre.' },
+          options: [['auto', 'inside nodes'], ['above', 'above nodes']],
+          help: 'Inside nodes: labels sit in node bodies (beside nodes without one), which fade to a clear centre behind them. Above nodes: node bodies stay solid.' },
         { key: 'labelColorBy', target: 'style', type: 'select', label: 'Label color by',
-          options: [['single', 'one color'], ['node', 'darker node color']] },
+          options: [['single', 'one color'], ['node', 'node color']],
+          help: 'One color for every label, or a darker shade of each node\'s color.' },
         { key: 'labelColor', target: 'style', type: 'color', label: 'Label color', showIf: () => state.style.labelColorBy === 'single' },
         { key: 'labelCounts', target: 'style', type: 'checkbox', label: 'Totals in labels', fit: true,
           help: 'Follow each label with its node total in parentheses, e.g. "Surgery (232)". Counts of 10,000 or more use compact scientific notation, e.g. "Cohort (1E04)"; hover details retain the full count.' },
@@ -775,8 +778,8 @@
           help: 'Thin lines dividing each strand into its pathways, or into single items when the data has item ids.',
           showIf: () => !!state.paths },
         { key: 'collision', target: 'style', type: 'select', label: 'Dragged node hits',
-          options: [['wall', 'a wall (stops)'], ['push', 'neighbours (pushes them)']],
-          help: 'What happens when a dragged node would leave a strand no horizontal room.' },
+          options: [['wall', 'a wall'], ['push', 'neighbours']],
+          help: 'What happens when a dragged node would leave a strand no horizontal room: it stops at a wall, or pushes its neighbours along.' },
         { key: 'canvasWidth', target: 'style', type: 'number', label: 'Width (px)', min: 200, step: 10, nullable: true, placeholder: 'fit', integer: true },
         { key: 'canvasHeight', target: 'style', type: 'number', label: 'Height (px)', min: 150, step: 10, nullable: true, placeholder: 'fit', integer: true },
         { key: 'xlim', target: 'view', type: 'pair', label: 'x limits' },
@@ -963,9 +966,57 @@
       });
     }
     input.id = id;
-    row.appendChild(input);
+    row.appendChild(withGlyph(item, input, sync, (s) => { sync = s; }));
     controlRefs.push({ item, row, sync });
     return row;
+  }
+
+  // A cartoon of what the setting does (glyphs.js) beside its control: at both ends of a slider,
+  // the chosen option of a select (following the value), and the effect of a checkbox (faded while
+  // off) or of a number. Returns the element to place in the row; setSync replaces the sync.
+  function withGlyph(item, input, sync, setSync) {
+    const G = window.SK.glyphs;
+    const wrap = (...parts) => {
+      const span = document.createElement('span');
+      span.className = 'with-glyph';
+      span.append(...parts);
+      return span;
+    };
+    const pic = (name, title) => {
+      const span = document.createElement('span');
+      span.className = 'glyph-slot';
+      span.innerHTML = G.markup(name, esc(title));
+      return span;
+    };
+    if (item.type === 'range' && G.has(`${item.key}:min`)) {
+      const slider = input.querySelector('input');
+      slider.before(pic(`${item.key}:min`, `${item.label}: ${item.min}`));
+      slider.after(pic(`${item.key}:max`, `${item.label}: ${item.max}`));
+      input.classList.add('glyphed');
+      return input;
+    }
+    if (item.type === 'select') {
+      const options = () => (typeof item.options === 'function' ? item.options() : item.options);
+      if (!options().some(([value]) => G.has(`${item.key}:${value}`))) return input;
+      const slot = pic('', '');
+      setSync((v) => {
+        sync(v);
+        const option = options().find(([value]) => value === input.value);
+        slot.innerHTML = G.markup(`${item.key}:${input.value}`, esc(option ? option[1] : ''));
+      });
+      return wrap(slot, input);
+    }
+    if ((item.type === 'checkbox' || item.type === 'number') && G.has(item.key)) {
+      const slot = pic(item.key, item.label);
+      if (item.type === 'number') return wrap(slot, input);
+      const span = wrap(input, slot);
+      setSync((v) => {
+        sync(v);
+        span.classList.toggle('off', !v);
+      });
+      return span;
+    }
+    return input;
   }
 
   function refreshControls() {
