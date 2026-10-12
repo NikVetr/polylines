@@ -1298,6 +1298,45 @@ test('"No overlaps in nodes" is off by default and can be switched on; traces ar
   }
 });
 
+test('dragging a node past the edge or into the next column never grows the canvas', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const before = await page.evaluate(() => ({ width: document.querySelector('#plot').getAttribute('width'), view: JSON.stringify(window.SankeyApp.state.view) }));
+  const drag = async (label, dx, dy) => {
+    const p = await page.evaluate((l) => {
+      const n = window.SankeyApp.layout.nodes.find((x) => window.SankeyApp.state.loc[x.id].label === l);
+      const r = [...document.querySelectorAll(`#plot .trunk[data-node="${n.id}"]`)].map((el) => el.getBoundingClientRect());
+      return { x: (Math.min(...r.map((b) => b.left)) + Math.max(...r.map((b) => b.right))) / 2, y: (Math.min(...r.map((b) => b.top)) + Math.max(...r.map((b) => b.bottom))) / 2 };
+    }, label);
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    for (let k = 1; k <= 20; k++) await page.mouse.move(p.x + (dx * k) / 20, p.y + (dy * k) / 20);
+    await page.mouse.up();
+  };
+  await drag('Surgery', 700, 0);
+  await drag('Remission', 900, 0);
+  const after = await page.evaluate(() => ({
+    width: document.querySelector('#plot').getAttribute('width'),
+    view: JSON.stringify(window.SankeyApp.state.view),
+    minCanvasWidth: window.SankeyApp.state.sourceTable.minCanvasWidth,
+    maxX: Math.max(...window.SankeyApp.state.loc.map((r) => r.x)),
+    xlim: window.SankeyApp.state.view.xlim
+  }));
+  expect(after.width).toBe(before.width);
+  expect(after.view).toBe(before.view);
+  expect(after.minCanvasWidth || 0).toBe(0);
+  expect(after.maxX).toBeLessThanOrEqual(after.xlim[1] + 1e-9);
+  await expect(page.locator('#banner')).toBeHidden();
+});
+
+test('fit view shrinks a canvas that an earlier edit widened', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const normal = await page.evaluate(() => document.querySelector('#plot').getAttribute('width'));
+  await page.evaluate(() => { window.SankeyApp.state.sourceTable.minCanvasWidth = 4000; window.SankeyApp.update(); });
+  expect(await page.evaluate(() => document.querySelector('#plot').getAttribute('width'))).toBe('4000');
+  await page.locator('#fit').click();
+  expect(await page.evaluate(() => document.querySelector('#plot').getAttribute('width'))).toBe(normal);
+});
+
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
   await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
   await expect(page.locator('.topbar .actions > [data-export="png"]')).toBeVisible();

@@ -249,7 +249,9 @@
     for (let pass = 0; pass <= data.matrices.length * 2; pass++) {
       try { return L.computeLayout(model(data), viewFor(view), { measure: measure(data) }); }
       catch (err) {
-        if (!err.requiredRun || !err.flow || !data.sourceTable || data.style.canvasWidth || err.flow.dir < 0) throw err;
+        // Imported tables spread later columns when a strand needs more run. Never during a drag:
+        // the drag must stop at a drawable position instead of growing the canvas frame by frame.
+        if (drag || !err.requiredRun || !err.flow || !data.sourceTable || data.style.canvasWidth || err.flow.dir < 0) throw err;
         const f = err.flow;
         const sx = (frame.width - 2 * MARGIN) / (view.xlim[1] - view.xlim[0]);
         const extra = (err.requiredRun - f.dir * (f.endX - f.startX)) / sx;
@@ -392,6 +394,9 @@
 
   function update(options) {
     const opts = options || {};
+    // Fitting recomputes how wide an imported table's canvas must be, so a canvas widened earlier
+    // shrinks back unless the current layout still needs the room.
+    if (opts.fit && state.sourceTable) state.sourceTable.minCanvasWidth = 0;
     computeFrame();
     try {
       if (!state.matrices.length || !state.loc.length) {
@@ -1928,9 +1933,11 @@
     drag.moved = true;
     if (drag.target.kind === 'node') {
       // Placed once per frame in requestRender(), since collision checks run test layouts.
+      // Within the current view: a node dragged past the edge stops there.
+      const clamp = (v, [lo, hi]) => Math.min(Math.max(v, lo), hi);
       drag.goal = {
-        x: event.shiftKey ? drag.locX : drag.locX + dx / drag.sx,
-        y: event.altKey ? drag.locY : drag.locY - dy / drag.sy
+        x: clamp(event.shiftKey ? drag.locX : drag.locX + dx / drag.sx, state.view.xlim),
+        y: clamp(event.altKey ? drag.locY : drag.locY - dy / drag.sy, state.view.ylim)
       };
       requestRender();
       return;
@@ -1967,6 +1974,18 @@
     });
   }
 
+  // The drawn (full-resolution) layout must also work: the quick check can miss constant-width
+  // turns that only fail at full resolution.
+  function drawable() {
+    try {
+      L.computeLayout(model(), viewFor(state.view), { measure: measure() });
+      return true;
+    } catch (err) {
+      if (err instanceof L.SankeyError) return false;
+      throw err;
+    }
+  }
+
   // Push mode: shove nodes along each strand's direction until every strand touching a moved node
   // keeps a minimum horizontal run between node faces (positions relative to the drag start).
   function pushNeighbours(d) {
@@ -1998,29 +2017,33 @@
   function placeNode(d, goal) {
     const row = state.loc[d.row];
     const from = { x: row.x, y: row.y };
-    const tryAt = (p) => {
+    const tryAt = (p, full) => {
       state.loc.forEach((r, i) => { r.x = d.startX[i]; });
       row.x = round(p.x);
       row.y = round(p.y);
       if (state.style.collision === 'push') pushNeighbours(d);
-      return dragIsValid(d);
+      return dragIsValid(d) && (!full || drawable());
     };
     // Furthest valid point on the segment a -> b, given that a is valid.
-    const approach = (a, b) => {
-      if (tryAt(b)) return b;
+    const approach = (a, b, full) => {
+      if (tryAt(b, full)) return b;
       let lo = 0;
       let hi = 1;
       for (let i = 0; i < 12; i++) {
         const mid = (lo + hi) / 2;
-        if (tryAt({ x: a.x + (b.x - a.x) * mid, y: a.y + (b.y - a.y) * mid })) lo = mid;
+        if (tryAt({ x: a.x + (b.x - a.x) * mid, y: a.y + (b.y - a.y) * mid }, full)) lo = mid;
         else hi = mid;
       }
       return { x: a.x + (b.x - a.x) * lo, y: a.y + (b.y - a.y) * lo };
     };
-    if (tryAt(goal)) return;
-    // Blocked: slide along the wall by settling y first, then x.
-    let p = approach(from, { x: from.x, y: goal.y });
-    p = approach(p, { x: goal.x, y: p.y });
+    let p = goal;
+    if (!tryAt(goal)) {
+      // Blocked: slide along the wall by settling y first, then x.
+      p = approach(from, { x: from.x, y: goal.y });
+      p = approach(p, { x: goal.x, y: p.y });
+    }
+    // Only where the quick check passes but the full drawing cannot turn a strand, back off further.
+    if (!tryAt(p, true)) p = approach(from, p, true);
     tryAt(p);
   }
 
