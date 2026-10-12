@@ -235,31 +235,44 @@
   const viewFor = (v) => ({ xlim: v.xlim, ylim: v.ylim, width: frame.width - 2 * MARGIN, height: frame.height - frame.margin.top - MARGIN });
   const measure = (data = state) => R.makeMeasure(data.style);
 
-  // How far (plot px) to move each stage's later columns so that no forward strand rises more than
-  // MAX_RISE_PER_RUN times its run between node faces: short stages gain run, lent first by stages
-  // that can spare it (each keeping its own strands within the limit and lending at most LEND of
-  // its run); the moves sum to how much the canvas must grow. Within a fixed width, short stages
-  // only gain what others lend. Empty when no stage is short.
+  // How far (plot px) to move each stage's later columns so that the steepest forward strand of
+  // every gap has the same slope (rise over run between node faces), with no gap narrower than
+  // MIN_GAP_SHARE of the widest (a strand's rise counts as at least that share of the largest rise)
+  // nor too narrow to draw its turns. Within the current width when that slope is at most
+  // MAX_RISE_PER_RUN (or the width is fixed); otherwise at that slope, and the moves sum to how much
+  // the canvas must grow. Empty when no column needs to move.
   const MAX_RISE_PER_RUN = 2;
-  const LEND = 0.25;
+  const MIN_GAP_SHARE = 0.5;
   function spreadMoves(lay, fixed) {
-    const stages = new Map();
-    if (lay.mode !== 'layered') return stages;
-    lay.flows.forEach((f) => {
-      if (f.dir < 0) return;
-      const run = f.endX - f.startX;
-      const over = Math.abs(f.endY + f.endOffset - f.startY - f.startOffset) / MAX_RISE_PER_RUN - run;
-      const s = stages.get(f.stage) || { need: 0, spare: Infinity };
-      stages.set(f.stage, { need: Math.max(s.need, over), spare: Math.min(s.spare, -over, LEND * run) });
-    });
-    const short = [...stages].filter(([, s]) => s.need > 0.5);
-    const lenders = [...stages].filter(([, s]) => s.need <= 0.5 && s.spare > 0);
-    const need = short.reduce((t, [, s]) => t + s.need, 0);
-    const spare = lenders.reduce((t, [, s]) => t + s.spare, 0);
-    const lent = short.length ? Math.min(need, spare) : 0;
-    if (fixed && !(lent > 0.5)) return new Map();
-    const gain = fixed ? lent / need : 1;
-    return new Map(short.map(([k, s]) => [k, s.need * gain]).concat(lent > 0 ? lenders.map(([k, s]) => [k, -s.spare * lent / spare]) : []));
+    if (lay.mode !== 'layered') return new Map();
+    const flows = lay.flows.filter((f) => f.dir > 0).map((f) => ({ stage: f.stage, run: f.endX - f.startX,
+      w: f.w, rise: Math.abs(f.endY + f.endOffset - f.startY - f.startOffset) }));
+    const top = Math.max(0, ...flows.map((f) => f.rise));
+    if (!(top > 0)) return new Map();
+    // The shortest run at which layout.js roundedRibbon can still turn the strand, with a margin.
+    const drawable = (f) => 1.15 * (f.rise > 1.1 * f.w ? 1.1 * f.w : Math.sqrt(f.rise * (2.2 * f.w - f.rise)));
+    const shifts = (slope) => {
+      const by = new Map();
+      flows.forEach((f) => {
+        const px = Math.max(Math.max(f.rise, MIN_GAP_SHARE * top) / slope, drawable(f)) - f.run;
+        by.set(f.stage, Math.max(by.has(f.stage) ? by.get(f.stage) : -Infinity, px));
+      });
+      return by;
+    };
+    const sum = (m) => [...m.values()].reduce((t, px) => t + px, 0);
+    // The moves shrink as the slope grows: bisect for the slope that keeps the width.
+    let lo = 1e-6, hi = 1e6;
+    for (let i = 0; i < 100; i++) {
+      const mid = Math.sqrt(lo * hi);
+      if (sum(shifts(mid)) > 0) lo = mid; else hi = mid;
+    }
+    const balanced = fixed || hi <= MAX_RISE_PER_RUN;
+    const moves = shifts(balanced ? hi : MAX_RISE_PER_RUN);
+    if (balanced) {
+      const rest = sum(moves) / moves.size;
+      moves.forEach((px, k) => moves.set(k, px - rest));
+    }
+    return [...moves.values()].some((px) => Math.abs(px) > 0.5) ? moves : new Map();
   }
 
   // Imported tables move later columns apart when strands need more run: always where a

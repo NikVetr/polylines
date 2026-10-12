@@ -1531,16 +1531,24 @@ test('imported tables fit labels in their nodes and spread tight columns, also o
       const half = m(n.label, n.cex, n.font).width / 2;
       return Math.max(n.X - n.widthPx / 2 - (pos.X - half), pos.X + half - (n.X + n.widthPx / 2));
     }));
-    const steepest = Math.max(...L.flows.map((f) => Math.abs(f.endY + f.endOffset - f.startY - f.startOffset) / (f.endX - f.startX)));
-    return { overhang, steepest, width: Number(document.querySelector('#plot').getAttribute('width')), banner: !document.querySelector('#banner').hidden };
+    const slopes = [];
+    L.flows.forEach((f) => { slopes[f.stage] = Math.max(slopes[f.stage] || 0, Math.abs(f.endY + f.endOffset - f.startY - f.startOffset) / (f.endX - f.startX)); });
+    return { overhang, slopes, steepest: Math.max(...slopes), width: Number(document.querySelector('#plot').getAttribute('width')), banner: !document.querySelector('#banner').hidden };
   });
   await importTight();
   const auto = await check();
   expect(auto.overhang).toBeLessThanOrEqual(0);
   expect(auto.steepest).toBeLessThan(2.1);
+  // Every gap's steepest strand has the same slope.
+  expect(auto.steepest / Math.min(...auto.slopes)).toBeLessThan(1.05);
   // Fit view keeps the room the generated layout needs.
   await page.locator('#fit').click();
   expect((await check()).width).toBe(auto.width);
+  // Gaps within the limit are balanced as well: one steep and one gentle gap meet in the middle.
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const example = await check();
+  expect(example.steepest).toBeLessThan(2.1);
+  expect(example.steepest / Math.min(...example.slopes)).toBeLessThan(1.05);
   // A fixed canvas width too narrow for these turns still draws: the columns move apart and the
   // drawing shrinks instead of the canvas growing.
   await page.evaluate(() => { window.SankeyApp.state.style.canvasWidth = 900; });
