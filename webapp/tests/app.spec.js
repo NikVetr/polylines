@@ -1552,8 +1552,8 @@ test('imported tables fit labels in their nodes and spread tight columns, also o
 });
 
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
-  await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
-  await expect(page.locator('.topbar .actions > [data-export="png"]')).toBeVisible();
+  await expect(page.locator('.topbar .tool-group > [data-export="svg"]')).toBeVisible();
+  await expect(page.locator('.topbar .tool-group > [data-export="png"]')).toBeVisible();
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const node = await nodeAt(page, 'Remission');
   await page.mouse.click(node.x, node.y);
@@ -1565,6 +1565,24 @@ test('SVG and PNG export in one click and keep the focused view', async ({ page 
   expect(svg).toContain('opacity="0.16"');
   expect(svg).toContain('filter="url(#dim-node)"');
   expect(svg).not.toContain('stroke-dasharray');
+});
+
+test('toolbar groups alternate backgrounds; Auto-layout sits between Fit view and Align', async ({ page }) => {
+  const backgrounds = await page.locator('.topbar .tool-group').evaluateAll((els) => els.map((el) => getComputedStyle(el).backgroundColor));
+  expect(backgrounds.length).toBeGreaterThan(3);
+  backgrounds.forEach((bg, i) => expect(bg).toBe(backgrounds[i % 2]));
+  expect(backgrounds[0]).not.toBe(backgrounds[1]);
+  await expect(page.locator('.topbar #fit + #auto-layout + #align')).toHaveCount(1);
+  await expect(page.locator('.sidebar #auto-layout')).toHaveCount(0);
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const fresh = await page.evaluate(() => window.SankeyApp.state.loc.map((r) => [r.x, r.y]));
+  await page.evaluate(() => { window.SankeyApp.state.loc[0].y -= 0.05; window.SankeyApp.update({ commit: true }); });
+  await page.locator('#auto-layout').click();
+  const after = await page.evaluate(() => window.SankeyApp.state.loc.map((r) => [r.x, r.y]));
+  after.forEach(([x, y], i) => {
+    expect(x).toBeCloseTo(fresh[i][0], 6);
+    expect(y).toBeCloseTo(fresh[i][1], 6);
+  });
 });
 
 test('totals can follow node labels', async ({ page }) => {

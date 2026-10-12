@@ -10,32 +10,45 @@
   <header class="topbar">
     <div class="brand">polylines <span>Sankey</span></div>
     <div class="actions">
-      <label class="btn primary" title="Load flow matrices, a loc table, color matrices or a project file (CSV/TSV/JSON)">
-        Open files…<input id="file-input" type="file" multiple accept=".csv,.tsv,.txt,.json" hidden>
-      </label>
-      <button class="btn" data-open-import title="Build a Sankey from a long or wide data table">Import table…</button>
-      <select id="example-select" aria-label="Load an example"></select>
-      <button id="undo" class="btn" title="Undo (Ctrl/⌘+Z)" aria-label="Undo">↶</button>
-      <button id="redo" class="btn" title="Redo (Ctrl/⌘+Shift+Z)" aria-label="Redo">↷</button>
-      <button id="fit-panel" class="btn icon-btn" title="Fit the whole drawing inside the panel" aria-label="Fit plot to panel" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 7 3 3m-3 0h3V7m7 10-3-3m3 0h-3v3"/></svg></button>
-      <button id="fit-height" class="btn icon-btn" title="Fill the panel height and scroll horizontally" aria-label="Fit plot to height" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18m-4-4 4 4-4 4M7 8l-4 4 4 4M8 3h8M8 21h8"/></svg></button>
-      <button id="zoom-out" class="btn icon-btn" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8"/></svg></button>
-      <button id="zoom-in" class="btn icon-btn" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8m-4-4v8"/></svg></button>
-      <button id="fit" class="btn" title="Fit the view to the content (F)">Fit view</button>
-      <button id="align" class="btn" title="Line up the columns: one x per column, top and bottom nodes on shared lines, even gaps">Align</button>
-      <button id="merge-nodes" class="btn danger" hidden>Merge nodes</button>
-      <button class="btn" data-export="svg" title="Download the plot as shown, focused substrands included, as an SVG image">SVG</button>
-      <button class="btn" data-export="png" title="Download the plot as shown, focused substrands included, as a PNG image (2×)">PNG</button>
-      <div class="menu">
-        <button id="export-btn" class="btn">Export ▾</button>
-        <div id="export-menu" class="menu-list" hidden>
-          <button data-export="loc">Node locations (loc.csv)</button>
-          <button data-export="bundle">R bundle (.zip: CSVs + sankey.R)</button>
-          <button data-export="rcode">Show R code…</button>
-          <button data-export="project">Project file (.json)</button>
+      <div class="tool-group">
+        <label class="btn primary" title="Load flow matrices, a loc table, color matrices or a project file (CSV/TSV/JSON)">
+          Open files…<input id="file-input" type="file" multiple accept=".csv,.tsv,.txt,.json" hidden>
+        </label>
+        <button class="btn" data-open-import title="Build a Sankey from a long or wide data table">Import table…</button>
+        <select id="example-select" aria-label="Load an example"></select>
+      </div>
+      <div class="tool-group">
+        <button id="undo" class="btn" title="Undo (Ctrl/⌘+Z)" aria-label="Undo">↶</button>
+        <button id="redo" class="btn" title="Redo (Ctrl/⌘+Shift+Z)" aria-label="Redo">↷</button>
+      </div>
+      <div class="tool-group">
+        <button id="fit-panel" class="btn icon-btn" title="Fit the whole drawing inside the panel" aria-label="Fit plot to panel" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 7 3 3m-3 0h3V7m7 10-3-3m3 0h-3v3"/></svg></button>
+        <button id="fit-height" class="btn icon-btn" title="Fill the panel height and scroll horizontally" aria-label="Fit plot to height" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18m-4-4 4 4-4 4M7 8l-4 4 4 4M8 3h8M8 21h8"/></svg></button>
+        <button id="zoom-out" class="btn icon-btn" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8"/></svg></button>
+        <button id="zoom-in" class="btn icon-btn" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M6 10h8m-4-4v8"/></svg></button>
+      </div>
+      <div class="tool-group">
+        <button id="fit" class="btn" title="Fit the view to the content (F)">Fit view</button>
+        <button id="auto-layout" class="btn" title="Generate node locations from the matrices, spaced as on import (replaces moved positions; Ctrl/⌘+Z undoes)">Auto-layout</button>
+        <button id="align" class="btn" title="Line up the columns: one x per column, top and bottom nodes on shared lines, even gaps">Align</button>
+        <button id="merge-nodes" class="btn danger" hidden>Merge nodes</button>
+      </div>
+      <div class="tool-group">
+        <button class="btn" data-export="svg" title="Download the plot as shown, focused substrands included, as an SVG image">SVG</button>
+        <button class="btn" data-export="png" title="Download the plot as shown, focused substrands included, as a PNG image (2×)">PNG</button>
+        <div class="menu">
+          <button id="export-btn" class="btn">Export ▾</button>
+          <div id="export-menu" class="menu-list" hidden>
+            <button data-export="loc">Node locations (loc.csv)</button>
+            <button data-export="bundle">R bundle (.zip: CSVs + sankey.R)</button>
+            <button data-export="rcode">Show R code…</button>
+            <button data-export="project">Project file (.json)</button>
+          </div>
         </div>
       </div>
-      <button id="help-btn" class="btn" title="Help (?)" aria-label="Help">?</button>
+      <div class="tool-group">
+        <button id="help-btn" class="btn" title="Help (?)" aria-label="Help">?</button>
+      </div>
     </div>
   </header>
 
@@ -79,7 +92,6 @@
         </div>
         <div class="button-grid">
           <button class="mini-btn wide-cell" data-open-import title="Build flows from a long or wide data table">Import a data table…</button>
-          <button id="auto-layout" class="mini-btn" title="Generate node locations from the matrices">Auto-layout nodes</button>
           <button id="bake-loc" class="mini-btn" title="Write adjusted y positions into loc">Bake adjusted y</button>
           <button id="clear-order" class="mini-btn" title="Forget strand orders set by dragging">Reset strand order</button>
           <button id="download-examples" class="mini-btn" title="Download the current example's input files">Example files</button>
@@ -152,6 +164,7 @@
           (⌥-click) to add or remove substrands from a pool that is traced and tabulated together.</li>
         <li>The toolbar's fit-panel and fit-height buttons scale the whole drawing, including text. Fit-height
           allows horizontal scrolling; the magnifier buttons zoom in and out.</li>
+        <li><b>Auto-layout</b> (toolbar) places the nodes afresh, as an import would.</li>
         <li>The SVG and PNG buttons export the plot as shown, including any focused substrands.</li>
         <li>Alt-click two or more nodes in one column to merge them with the <b>Merge</b> button that appears (Ctrl/⌘+Z undoes).</li>
         <li>Dragging a node into a neighbour stops at a wall, or pushes it along (Canvas &amp; dragging).</li>
