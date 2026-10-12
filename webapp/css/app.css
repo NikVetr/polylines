@@ -15,6 +15,8 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); }
+/* The panels fill whatever height the toolbar leaves, however many rows it wraps to. */
+body { display: flex; flex-direction: column; }
 button, select, input, textarea { font: inherit; color: inherit; }
 
 .topbar {
@@ -28,9 +30,9 @@ button, select, input, textarea { font: inherit; color: inherit; }
 }
 .brand { font-weight: 700; font-size: 15px; letter-spacing: 0.01em; white-space: nowrap; }
 .brand span { color: var(--accent); }
-.actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 /* Toolbar groups alternate light grey and white so each set of related buttons reads as one. */
-.tool-group { display: flex; align-items: center; gap: 4px; padding: 3px; border-radius: 8px; }
+.tool-group { display: flex; align-items: center; gap: 4px; padding: 2px; border-radius: 7px; }
 .tool-group:nth-child(odd) { background: #e9edf2; }
 
 .btn {
@@ -55,7 +57,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .icon-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 #merge-dialog .row { grid-template-columns: 120px minmax(0, 1fr); min-width: 380px; }
 /* Without a cap the examples menu is as wide as its longest title; the open list shows them in full. */
-.actions select { padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); max-width: 180px; }
+.actions select { padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); max-width: 150px; }
 
 .menu { position: relative; }
 .menu-list {
@@ -77,10 +79,22 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .menu-list button:hover { background: var(--accent-soft); }
 
 .layout {
+  --sidebar-width: 290px;
+  --inspector-width: 300px;
+  position: relative;
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 290px minmax(0, 1fr) 300px;
-  height: calc(100% - 47px);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--inspector-width);
 }
+/* Drag bars over the side panels' inner borders (widths set in app.js bindPanelResize). */
+.panel-resize { position: absolute; top: 0; bottom: 0; z-index: 6; width: 8px; cursor: col-resize; touch-action: none; }
+.panel-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; border-radius: 1px; }
+.panel-resize:hover::after, .panel-resize:focus-visible::after, .panel-resize.active::after { background: var(--accent); }
+.panel-resize:focus { outline: none; }
+#resize-sidebar { left: calc(var(--sidebar-width) - 4px); }
+#resize-inspector { right: calc(var(--inspector-width) - 4px); }
+body.resizing-panels { cursor: col-resize; user-select: none; }
 
 .sidebar, .inspector {
   overflow-y: auto;
@@ -323,8 +337,8 @@ dialog.import { width: min(880px, 94vw); max-width: none; }
 .button-grid .wide-cell { grid-column: 1 / -1; }
 
 @media (max-width: 1100px) {
-  .layout { grid-template-columns: 260px minmax(0, 1fr); }
-  .inspector { display: none; }
+  .layout { --sidebar-width: 260px; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+  .inspector, #resize-inspector { display: none; }
   /* Without the side panel, hover details float in the corner instead. */
   .inspector.hovering {
     display: block;

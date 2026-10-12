@@ -1193,7 +1193,7 @@ test('Shift-clicked nodes in one column merge into a renamed node, laid out as i
   await shiftClick('Stage I');
   await shiftClick('Radiation');
   await expect(merge).toBeVisible();
-  await expect(merge).toHaveText('Merge 2 nodes');
+  await expect(merge).toHaveText('Merge 2');
   await merge.click();
   await expect(page.locator('#merge-dialog')).toBeVisible();
   await expect(page.locator('#merge-name')).toHaveValue('Surgery + Radiation');
@@ -1683,6 +1683,40 @@ test('toolbar arrangements center columns, spread nodes evenly and even out colu
   });
   expect(Math.max(...slopes) / Math.min(...slopes)).toBeLessThan(1.05);
   await expect(page.locator('#banner')).toBeHidden();
+});
+
+test('drag bars resize the settings panel and the inspector, persist, and reset on double-click', async ({ page }) => {
+  const widths = () => page.evaluate(() => ({
+    sidebar: Math.round(document.querySelector('.sidebar').getBoundingClientRect().width),
+    stage: Math.round(document.querySelector('#stage').getBoundingClientRect().width),
+    inspector: Math.round(document.querySelector('#inspector').getBoundingClientRect().width),
+    canvas: Number(document.querySelector('#plot').getAttribute('width')),
+    overflow: document.documentElement.scrollHeight - window.innerHeight
+  }));
+  const dragBar = async (id, dx) => {
+    const box = await page.locator(id).boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + dx, box.y + 200, { steps: 4 });
+    await page.mouse.up();
+  };
+  const before = await widths();
+  expect(before.overflow).toBeLessThanOrEqual(0);
+  await dragBar('#resize-sidebar', 100);
+  await dragBar('#resize-inspector', -80);
+  const after = await widths();
+  expect(after.sidebar).toBe(before.sidebar + 100);
+  expect(after.inspector).toBe(before.inspector + 80);
+  expect(after.stage).toBe(before.stage - 180);
+  // The automatic canvas follows the narrower plot panel.
+  await expect.poll(async () => (await widths()).canvas).toBeLessThan(before.canvas);
+  await page.reload();
+  const reloaded = await widths();
+  expect([reloaded.sidebar, reloaded.inspector]).toEqual([after.sidebar, after.inspector]);
+  await page.locator('#resize-sidebar').dblclick();
+  await page.locator('#resize-inspector').dblclick();
+  const reset = await widths();
+  expect([reset.sidebar, reset.inspector]).toEqual([before.sidebar, before.inspector]);
 });
 
 test('totals can follow node labels', async ({ page }) => {

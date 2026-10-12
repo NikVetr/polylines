@@ -359,6 +359,63 @@
 
   // The handle at the canvas's bottom-right corner resizes it. The plot keeps its on-screen size and
   // scale (the view grows or shrinks with the canvas), so the new room opens on the right and below.
+  // Drag bars between the settings panel, the plot and the inspector set the side panels' widths
+  // (kept in this browser; double-click restores the default). The plot panel keeps at least
+  // MIN_STAGE px, and redraws through its ResizeObserver.
+  const PANELS_KEY = 'polylines-panels';
+  const MIN_PANEL = 180;
+  const MIN_STAGE = 320;
+  function bindPanelResize() {
+    const root = $('.layout');
+    let widths = {};
+    try { widths = JSON.parse(localStorage.getItem(PANELS_KEY)) || {}; } catch (err) { widths = {}; }
+    const save = () => { try { localStorage.setItem(PANELS_KEY, JSON.stringify(widths)); } catch (err) { /* private window */ } };
+    const panelOf = { sidebar: $('.sidebar'), inspector: $('#inspector') };
+    const set = (name, px) => {
+      const other = name === 'sidebar' ? 'inspector' : 'sidebar';
+      const room = root.getBoundingClientRect().width - panelOf[other].getBoundingClientRect().width - MIN_STAGE;
+      widths[name] = Math.round(Math.max(MIN_PANEL, Math.min(px, room)));
+      root.style.setProperty(`--${name}-width`, `${widths[name]}px`);
+    };
+    Object.entries(widths).forEach(([name, px]) => { if (panelOf[name]) root.style.setProperty(`--${name}-width`, `${px}px`); });
+    [['sidebar', 1], ['inspector', -1]].forEach(([name, sign]) => {
+      const bar = $(`#resize-${name}`);
+      bar.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        bar.setPointerCapture(event.pointerId);
+        bar.classList.add('active');
+        document.body.classList.add('resizing-panels');
+        const x0 = event.clientX;
+        const start = panelOf[name].getBoundingClientRect().width;
+        const move = (e) => set(name, start + sign * (e.clientX - x0));
+        const end = () => {
+          bar.removeEventListener('pointermove', move);
+          bar.removeEventListener('pointerup', end);
+          bar.removeEventListener('pointercancel', end);
+          bar.classList.remove('active');
+          document.body.classList.remove('resizing-panels');
+          save();
+        };
+        bar.addEventListener('pointermove', move);
+        bar.addEventListener('pointerup', end);
+        bar.addEventListener('pointercancel', end);
+      });
+      bar.addEventListener('keydown', (event) => {
+        const step = { ArrowLeft: -16, ArrowRight: 16 }[event.key];
+        if (!step) return;
+        event.preventDefault();
+        set(name, panelOf[name].getBoundingClientRect().width + sign * step);
+        save();
+      });
+      bar.addEventListener('dblclick', () => {
+        delete widths[name];
+        root.style.removeProperty(`--${name}-width`);
+        save();
+      });
+    });
+  }
+
   function bindCanvasResize() {
     const handle = $('#canvas-resize');
     let start = null;
@@ -1840,8 +1897,8 @@
     const nodes = mergeCandidates();
     button.hidden = !nodes;
     if (nodes) {
-      button.textContent = `Merge ${nodes.length} nodes`;
-      button.title = `Merge ${nodes.map(nodeDisplayName).join(', ')} into one node (Ctrl/⌘+Z undoes)`;
+      button.textContent = `Merge ${nodes.length}`;
+      button.title = `Merge the ${nodes.length} picked nodes (${nodes.map(nodeDisplayName).join(', ')}) into one node (Ctrl/⌘+Z undoes)`;
     }
   }
 
@@ -1866,6 +1923,10 @@
     const autoLoc = state.locName === 'auto-generated' || /^built from /.test(state.locName);
     const set = nodes[0].set;
     state = window.SK.edit.mergeNodes(state, set, nodes.map((n) => n.node - 1), label);
+    // Hide the Merge button first: it can wrap the toolbar, and the plot panel's height feeds
+    // the layout below.
+    picked = new Set();
+    refreshMerge();
     if (autoLoc) {
       // Columns go back to auto-layout's spacing, to be spread for the merged data as on import.
       if (state.sourceTable) Object.assign(state.sourceTable, { minCanvasWidth: 0, spreadWidth: 0 });
@@ -1874,7 +1935,6 @@
       state.loc.forEach((r) => { r.x = fresh.loc.find((f) => f.set === Number(r.set)).x; });
       restackColumn(set);
     }
-    picked = new Set();
     pool = new Map();
     selection = null;
     hover = null;
@@ -3046,6 +3106,7 @@
     buildControls();
     bindChrome();
     bindPlotEvents();
+    bindPanelResize();
     let restored = false;
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
