@@ -58,6 +58,7 @@
   let selection = null; // { kind: 'flow' | 'node', key, paths, member, single }: traces pinned by the click
   let hover = null;
   let drag = null;
+  let pan = null; // { x0, y0, left, top, moved } while dragging empty space to scroll the panel
   let routeScope = 'all';
   let renderQueued = false;
   let saveTimer = null;
@@ -281,6 +282,21 @@
     $('#fit-height').setAttribute('aria-pressed', String(mode === 'height'));
     $('#zoom-out').disabled = zoom <= 0.1;
     $('#zoom-in').disabled = zoom >= 10;
+  }
+
+  // Zoom the display about a screen point (the content under it stays put).
+  function zoomAt(cx, cy, factor) {
+    const zoom = Math.max(0.1, Math.min(10, state.presentation.zoom * factor));
+    if (zoom === state.presentation.zoom) return;
+    const before = svg.getBoundingClientRect();
+    const fx = (cx - before.left) / before.width;
+    const fy = (cy - before.top) / before.height;
+    state.presentation = Object.assign({}, state.presentation, { zoom });
+    scalePresentation();
+    const after = svg.getBoundingClientRect();
+    stageEl.scrollLeft += after.left + fx * after.width - cx;
+    stageEl.scrollTop += after.top + fy * after.height - cy;
+    scheduleSave();
   }
 
   function changePresentation(mode, factor = 1) {
@@ -1333,6 +1349,7 @@
   // sides only and fade where the fill fades, so traces open smoothly into node bodies. A single
   // traced item too thin to see is widened around its slice instead of outlined.
   const MIN_SINGLE_PX = 4;
+
   function traceMarkup(target) {
     const h = layout.view.height;
     const sx = (X) => Math.round((MARGIN + X) * 100) / 100;
@@ -1887,11 +1904,10 @@
     if (event.button !== 0) return;
     const target = targetOf(event);
     if (!target) {
-      if (selection) {
-        selection = null;
-        applyHighlight();
-        refreshInspector();
-      }
+      // Empty space: drag to pan the plot panel; a click that does not move clears the selection.
+      event.preventDefault();
+      svg.setPointerCapture(event.pointerId);
+      pan = { x0: event.clientX, y0: event.clientY, left: stageEl.scrollLeft, top: stageEl.scrollTop, moved: false };
       return;
     }
     event.preventDefault();
@@ -1956,13 +1972,13 @@
 
   const MIN_RUN_PX = 16;
 
-  // A quick, low-resolution layout tells whether a candidate drag position is drawable, keeps every
-  // strand's direction, and leaves each strand a minimum horizontal run (or its run at drag start).
+  // A layout at the drawing's own resolution (constant-width turns that draw at full resolution can
+  // fail at a coarser one) tells whether a candidate drag position is drawable, keeps every strand's
+  // direction, and leaves each strand a minimum horizontal run (or its run at drag start).
   function dragIsValid(d) {
     let lay;
     try {
-      lay = L.computeLayout(Object.assign(model(), { params: Object.assign({}, state.params, { n: 4 }) }),
-        viewFor(state.view), { measure: measure() });
+      lay = L.computeLayout(model(), viewFor(state.view), { measure: measure() });
     } catch (err) {
       if (err instanceof L.SankeyError) return false;
       throw err;
@@ -1972,18 +1988,6 @@
       return f.dir === f0.dir &&
         f.dir * (f.endX - f.startX) >= Math.min(MIN_RUN_PX, f0.dir * (f0.endX - f0.startX)) - 1e-9;
     });
-  }
-
-  // The drawn (full-resolution) layout must also work: the quick check can miss constant-width
-  // turns that only fail at full resolution.
-  function drawable() {
-    try {
-      L.computeLayout(model(), viewFor(state.view), { measure: measure() });
-      return true;
-    } catch (err) {
-      if (err instanceof L.SankeyError) return false;
-      throw err;
-    }
   }
 
   // Push mode: shove nodes along each strand's direction until every strand touching a moved node
@@ -2017,33 +2021,29 @@
   function placeNode(d, goal) {
     const row = state.loc[d.row];
     const from = { x: row.x, y: row.y };
-    const tryAt = (p, full) => {
+    const tryAt = (p) => {
       state.loc.forEach((r, i) => { r.x = d.startX[i]; });
       row.x = round(p.x);
       row.y = round(p.y);
       if (state.style.collision === 'push') pushNeighbours(d);
-      return dragIsValid(d) && (!full || drawable());
+      return dragIsValid(d);
     };
-    // Furthest valid point on the segment a -> b, given that a is valid.
-    const approach = (a, b, full) => {
-      if (tryAt(b, full)) return b;
+    // Furthest valid point on the segment a -> b, given that a is valid (to 1/256 of the segment).
+    const approach = (a, b) => {
+      if (tryAt(b)) return b;
       let lo = 0;
       let hi = 1;
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 8; i++) {
         const mid = (lo + hi) / 2;
-        if (tryAt({ x: a.x + (b.x - a.x) * mid, y: a.y + (b.y - a.y) * mid }, full)) lo = mid;
+        if (tryAt({ x: a.x + (b.x - a.x) * mid, y: a.y + (b.y - a.y) * mid })) lo = mid;
         else hi = mid;
       }
       return { x: a.x + (b.x - a.x) * lo, y: a.y + (b.y - a.y) * lo };
     };
-    let p = goal;
-    if (!tryAt(goal)) {
-      // Blocked: slide along the wall by settling y first, then x.
-      p = approach(from, { x: from.x, y: goal.y });
-      p = approach(p, { x: goal.x, y: p.y });
-    }
-    // Only where the quick check passes but the full drawing cannot turn a strand, back off further.
-    if (!tryAt(p, true)) p = approach(from, p, true);
+    if (tryAt(goal)) return;
+    // Blocked: slide along the wall by settling y first, then x.
+    let p = approach(from, { x: from.x, y: goal.y });
+    p = approach(p, { x: goal.x, y: p.y });
     tryAt(p);
   }
 
@@ -2091,18 +2091,46 @@
     update({ commit: true });
   }
 
+  function endPan(event) {
+    const clicked = !pan.moved;
+    pan = null;
+    svg.classList.remove('panning');
+    if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
+    if (clicked && selection) {
+      selection = null;
+      applyHighlight();
+      refreshInspector();
+    }
+  }
+
   function bindPlotEvents() {
     svg.addEventListener('pointerdown', startDrag);
     svg.addEventListener('pointermove', (event) => {
       lastPointer = { clientX: event.clientX, clientY: event.clientY, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey };
+      if (pan) {
+        const dx = event.clientX - pan.x0;
+        const dy = event.clientY - pan.y0;
+        if (!pan.moved && Math.hypot(dx, dy) < 3) return;
+        pan.moved = true;
+        svg.classList.add('panning');
+        stageEl.scrollLeft = pan.left - dx;
+        stageEl.scrollTop = pan.top - dy;
+        return;
+      }
       if (drag) {
         moveDrag(event);
         return;
       }
       setHover(targetOf(event), event);
     });
-    svg.addEventListener('pointerup', (event) => { if (drag) endDrag(event); });
-    svg.addEventListener('pointercancel', (event) => { if (drag) endDrag(event); });
+    svg.addEventListener('pointerup', (event) => { if (pan) endPan(event); else if (drag) endDrag(event); });
+    svg.addEventListener('pointercancel', (event) => { if (pan) endPan(event); else if (drag) endDrag(event); });
+    // The wheel (or a trackpad pinch) over the plot panel zooms about the pointer.
+    stageEl.addEventListener('wheel', (event) => {
+      if (!layout) return;
+      event.preventDefault();
+      zoomAt(event.clientX, event.clientY, Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015)));
+    }, { passive: false });
     svg.addEventListener('pointerleave', () => {
       if (!drag) { lastPointer = null; setHover(null); }
     });

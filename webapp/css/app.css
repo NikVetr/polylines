@@ -233,6 +233,8 @@ button, select, input, textarea { font: inherit; color: inherit; }
 #plot .layer-hits path { fill: none; stroke: transparent; stroke-linecap: butt; cursor: ns-resize; }
 #plot .trunk, #plot .node-dot, #plot .node-label { cursor: move; }
 #plot.dragging, #plot.dragging * { cursor: grabbing !important; }
+#plot { cursor: grab; }
+#plot.panning, #plot.panning * { cursor: grabbing !important; }
 #plot .ribbon, #plot .trunk, #plot .strand-border, #plot .node-outline, #plot .node-border { transition: opacity 120ms ease; }
 #plot.dimmed .ribbon:not(.hl), #plot.dimmed .strand-border:not(.hl), #plot.dimmed .substrand-lines:not(.hl) { opacity: 0.16; }
 #plot.dimmed .trunk:not(.hl) { filter: url(#dim-node); }

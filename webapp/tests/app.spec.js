@@ -1337,6 +1337,76 @@ test('fit view shrinks a canvas that an earlier edit widened', async ({ page }) 
   expect(await page.evaluate(() => document.querySelector('#plot').getAttribute('width'))).toBe(normal);
 });
 
+// Wide table (as in the stand-in for the user's data) whose constant-width turns only draw at the
+// plot's own resolution.
+function tightTable() {
+  let seed = 3;
+  const next = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const pick = (w) => { let u = next() * w.reduce((a, b) => a + b, 0); return w.findIndex((v) => (u -= v) < 0); };
+  const rows = ['participant_id,activity,training,suspension,sharing'];
+  for (let k = 0; k < 1029; k++) {
+    const a = pick([0.27, 0.73]);
+    const b = pick(a ? [0.45, 0.35, 0.2] : [0.5, 0.35, 0.15]);
+    const c = pick(b === 2 ? [0.25, 0.75] : [0.2, 0.8]);
+    const d = pick(c === 1 ? [0.25, 0.72, 0.03] : [0.35, 0.6, 0.05]);
+    rows.push(`P${k},${['Highly Active', 'Sedentary'][a]},${['Resistance', 'Endurance', 'Control'][b]},${['Pre-Suspension', 'Post-Suspension'][c]},${['Low-risk only', 'Open/all data', 'No open sharing'][d]}`);
+  }
+  return rows.join('\n') + '\n';
+}
+
+test('nodes of tightly bent imported tables can still be dragged', async ({ page }) => {
+  await page.evaluate((text) => {
+    const T = window.SK.transform;
+    window.SankeyApp.applyImport(T.build(T.parseTable(text), { format: 'wide', id: 'participant_id', columns: ['activity', 'training', 'suspension', 'sharing'], weight: null, missing: 'drop' }, { order: 'appearance' }), { labels: 'above' });
+  }, tightTable());
+  const box = await page.evaluate(() => {
+    const app = window.SankeyApp;
+    const id = app.state.loc.findIndex((r) => r.label === 'Endurance');
+    const r = [...document.querySelectorAll(`#plot .trunk[data-node="${id}"]`)].map((el) => el.getBoundingClientRect());
+    return { id, y: app.state.loc[id].y, x: (Math.min(...r.map((b) => b.left)) + Math.max(...r.map((b) => b.right))) / 2, top: (Math.min(...r.map((b) => b.top)) + Math.max(...r.map((b) => b.bottom))) / 2 };
+  });
+  await page.mouse.move(box.x, box.top);
+  await page.mouse.down();
+  for (let k = 1; k <= 8; k++) await page.mouse.move(box.x, box.top - 15 * k);
+  await page.mouse.up();
+  expect(await page.evaluate((id) => window.SankeyApp.state.loc[id].y, box.id)).toBeGreaterThan(box.y + 0.01);
+  await expect(page.locator('#banner')).toBeHidden();
+});
+
+test('the wheel zooms about the pointer and dragging empty space pans', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const plot = await page.locator('#plot').boundingBox();
+  const at = { x: plot.x + plot.width * 0.6, y: plot.y + plot.height * 0.5 };
+  const before = await page.evaluate(() => window.SankeyApp.state.presentation.zoom);
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.wheel(0, -600);
+  await expect.poll(() => page.evaluate(() => window.SankeyApp.state.presentation.zoom)).toBeGreaterThan(before * 1.5);
+  // The content point under the pointer stays (about) where it was.
+  const after = await page.locator('#plot').boundingBox();
+  const fx = (at.x - plot.x) / plot.width;
+  expect(Math.abs(after.x + fx * after.width - at.x)).toBeLessThan(3);
+  // Grab empty space (top-left corner of the plot) and drag: the panel scrolls.
+  const scroll0 = await page.evaluate(() => [document.querySelector('#stage').scrollLeft, document.querySelector('#stage').scrollTop]);
+  const empty = await page.evaluate(() => {
+    const r = document.querySelector('#plot').getBoundingClientRect();
+    const stage = document.querySelector('#stage').getBoundingClientRect();
+    for (let x = Math.max(r.left, stage.left) + 4; x < stage.right - 4; x += 6) {
+      for (let y = Math.max(r.top, stage.top) + 4; y < stage.bottom - 4; y += 6) {
+        const el = document.elementFromPoint(x, y);
+        if (el && (el.id === 'plot' || el.classList.contains('background'))) return { x, y };
+      }
+    }
+    return null;
+  });
+  expect(empty).not.toBeNull();
+  await page.mouse.move(empty.x, empty.y);
+  await page.mouse.down();
+  await page.mouse.move(empty.x - 120, empty.y - 80, { steps: 6 });
+  await page.mouse.up();
+  const scroll1 = await page.evaluate(() => [document.querySelector('#stage').scrollLeft, document.querySelector('#stage').scrollTop]);
+  expect(scroll1[0] + scroll1[1]).toBeGreaterThan(scroll0[0] + scroll0[1] + 50);
+});
+
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
   await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
   await expect(page.locator('.topbar .actions > [data-export="png"]')).toBeVisible();
