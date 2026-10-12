@@ -150,9 +150,10 @@
     return subs.nodeSlots.get(n.id);
   }
 
-  // Constant normal width through the body, with horizontal tangents at the faces
-  // and the weighted stack. Members share the same centreline and curve samples.
-  // tiled: instead ease every edge vertically on one shared curve (face, centre, face), so
+  // Constant normal width through the body, with horizontal tangents at the faces: one S-curve
+  // from the in-face to the out-face, so substrands start to part as they enter the node; gathered
+  // paths bend through their bundle place at the centre instead. Members share the same centreline
+  // and curve samples. tiled: instead ease every edge vertically on one shared curve, so
   // substrands that keep their order through the node never overlap, though they thin where steep.
   function packedBridge(layout, subs, n, pi, member, a, b, edge, gathered, tiled) {
     // Keep the real slice through each merge band: the bundle envelope can cut across
@@ -166,18 +167,17 @@
       a = last(incoming);
       b = first(outgoing);
     }
-    const slot = nodeSlots(layout, subs, n).get(pi);
     const cuts = member >= 0 && subs.memberCuts[pi] ? subs.memberCuts[pi].slice(member, member + 2) : [0, 1];
-    const centerY = gathered ? (gathered[0] + gathered[1]) / 2 : n.Y + n.inPx * ((slot.a + slot.b) / 2 - 0.5);
+    const centerY = gathered ? (gathered[0] + gathered[1]) / 2 : null;
     if (tiled) {
       const part = subs.byFlow[f.index].find((p) => p.path === pi);
       const width = f.w * (part.b - part.a);
       const center = [n.X, centerY + width * (cuts[edge] - 0.5)];
-      const body = S.bridgeCurve(a, center, 25).concat(S.bridgeCurve(center, b, 25).slice(1));
+      const body = gathered ? S.bridgeCurve(a, center, 25).concat(S.bridgeCurve(center, b, 25).slice(1)) : S.bridgeCurve(a, b, 49);
       return incoming.slice(0, -1).concat(body, outgoing.slice(1));
     }
     if (!subs.nodeRibbons) subs.nodeRibbons = new Map();
-    const key = `${n.id}:${pi}:${centerY}`;
+    const key = `${n.id}:${pi}:${gathered ? centerY : 'direct'}`;
     if (!subs.nodeRibbons.has(key)) {
       const part = subs.byFlow[f.index].find(p => p.path === pi);
       const width = f.w * (part.b - part.a);
@@ -186,9 +186,10 @@
         return SK.layout.pointAtX(lerpEdge(flow, (lo + up) / 2), x);
       };
       const center = [n.X, centerY];
-      const left = SK.layout.roundedRibbon(mid(f, a[0]), center, width, 60);
-      const right = SK.layout.roundedRibbon(center, mid(g, b[0]), width, 60);
-      subs.nodeRibbons.set(key, { lower: left.lower.concat(right.lower.slice(1)), upper: left.upper.concat(right.upper.slice(1)) });
+      const legs = gathered ? [[mid(f, a[0]), center], [center, mid(g, b[0])]] : [[mid(f, a[0]), mid(g, b[0])]];
+      const parts = legs.map(([p, q]) => SK.layout.roundedRibbon(p, q, width, 60));
+      const join = (side) => parts.flatMap((r, i) => r[side].slice(i ? 1 : 0));
+      subs.nodeRibbons.set(key, { lower: join('lower'), upper: join('upper') });
     }
     const ribbon = subs.nodeRibbons.get(key);
     const t = cuts[edge];
@@ -435,9 +436,7 @@
         const xx = g.startX + g.dir * bandLength(layout, g);
         lower = packedBridge(layout, subs, n, pi, -1, at(f, a, x), at(g, c, xx), 0);
         upper = packedBridge(layout, subs, n, pi, -1, at(f, b, x), at(g, d, xx), 1);
-        const slot = nodeSlots(layout, subs, n).get(pi);
-        const centerY = n.Y + n.inPx * ((slot.a + slot.b) / 2 - 0.5);
-        body = subs.nodeRibbons.get(`${n.id}:${pi}:${centerY}`);
+        body = subs.nodeRibbons.get(`${n.id}:${pi}:direct`);
       } else {
         const source = n.outFlows.length > 0;
         const f = layout.flows[source ? first(ks) : last(ks)];
@@ -461,9 +460,9 @@
   // Resolve the slice at the pointer's actual x, including widened node bodies.
   function pathAtNode(layout, subs, n, X, Y) {
     const shape = nodeShape(layout, n);
-    // The packed body has constant fractions: avoid constructing every path's bridge on hover.
+    // An end node's body has constant fractions: avoid constructing every path's slice on hover.
     const dir = layout.flows[n.outFlows[0] ?? n.inFlows[0]].dir;
-    if (shape && Math.abs(X - n.X) <= n.widthPx / 4 + 1e-9 && (!n.inFlows.length || !n.outFlows.length || dir * (X - n.X) <= 0)) {
+    if (shape && Math.abs(X - n.X) <= n.widthPx / 4 + 1e-9 && (!n.inFlows.length || !n.outFlows.length)) {
       const height = Math.max(n.inPx, n.outPx);
       const lo = n.Y - height / 2, up = n.Y + height / 2;
       const t = Math.min(Math.max((Y - lo) / Math.max(up - lo, 1e-12), 0), 1);

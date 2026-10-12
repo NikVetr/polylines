@@ -239,29 +239,55 @@ test('member hit positions invert the drawn offset edges on steep strands', () =
   }
 });
 
-test('reordered pathways tile the weighted stack without expanding to the label body', () => {
+function middleNodeTraces() {
   const r = T.build(T.parseTable(wide), { format: 'wide', columns: ['a', 'b', 'c'], weight: 'n' });
   const layout = buildLayout(r, {}, { width: 0.35, height: 0.4, label: 'Node' });
   const subs = SK.paths.substrands(layout, r.paths);
-  layout.nodes.filter(n => n.set === 2).forEach(n => {
+  return layout.nodes.filter(n => n.set === 2).map(n => {
     const paths = r.paths.map((p, pi) => p.nodes[1] === n.node - 1 ? pi : -1).filter(pi => pi >= 0);
-    for (const dx of [-0.2, 0]) {
+    const traces = paths.map(pi => SK.paths.tracePolygon(layout, subs, pi));
+    const span = (i, X) => [SK.layout.pointAtX(traces[i].lower, X)[1], SK.layout.pointAtX(traces[i].upper, X)[1]];
+    return { layout, subs, n, paths, span };
+  });
+}
+
+test('reordered pathways tile the weighted stack at node faces without expanding to the label body', () => {
+  middleNodeTraces().forEach(({ layout, subs, n, paths, span }) => {
+    const lo = n.Y - n.inPx / 2, up = n.Y + n.inPx / 2;
+    for (const dx of [-0.5, -0.2, 0, 0.2, 0.5]) {
       const X = n.X + n.widthPx * dx;
-      const lo = n.Y - n.inPx / 2, up = n.Y + n.inPx / 2;
-      const spans = paths.map(pi => {
-        const trace = SK.paths.tracePolygon(layout, subs, pi);
-        return [SK.layout.pointAtX(trace.lower, X)[1], SK.layout.pointAtX(trace.upper, X)[1]];
-      }).sort((a, b) => a[0] - b[0]);
-      assert.ok(Math.abs(spans[0][0] - lo) < 1e-8 && Math.abs(spans[spans.length - 1][1] - up) < 1e-8);
-      spans.slice(1).forEach((s, i) => assert.ok(Math.abs(s[0] - spans[i][1]) < 1e-8));
+      const spans = paths.map((_, i) => span(i, X));
+      spans.forEach(([a, b]) => assert.ok(a >= lo - 1e-8 && b <= up + 1e-8));
+      if (Math.abs(dx) === 0.5) {
+        const sorted = spans.slice().sort((a, b) => a[0] - b[0]);
+        assert.ok(Math.abs(sorted[0][0] - lo) < 1e-8 && Math.abs(sorted[sorted.length - 1][1] - up) < 1e-8);
+        sorted.slice(1).forEach((s, i) => assert.ok(Math.abs(s[0] - sorted[i][1]) < 1e-8));
+      }
       for (const t of [0.01, 0.05, 0.5, 0.95, 0.99]) {
         const Y = lo + (up - lo) * t;
-        const hit = SK.paths.pathAtNode(layout, subs, n, X, Y);
-        const trace = SK.paths.tracePolygon(layout, subs, hit.path);
-        assert.ok(Y >= SK.layout.pointAtX(trace.lower, X)[1] - 1e-8 && Y <= SK.layout.pointAtX(trace.upper, X)[1] + 1e-8);
+        // Inside the body, substrands that change places can leave gaps beside them.
+        if (!spans.some(([a, b]) => Y >= a && Y <= b)) continue;
+        const [a, b] = span(paths.indexOf(SK.paths.pathAtNode(layout, subs, n, X, Y).path), X);
+        assert.ok(Y >= a - 1e-8 && Y <= b + 1e-8);
       }
     }
   });
+});
+
+test('substrands that change places part from the in-face and cross at the node centre', () => {
+  let moved = 0;
+  middleNodeTraces().forEach(({ n, paths, span }) => {
+    const mid = (i, dx) => span(i, n.X + n.widthPx * dx).reduce((a, b) => a + b) / 2;
+    paths.forEach((_, i) => {
+      const y0 = mid(i, -0.5), y1 = mid(i, 0.5);
+      if (Math.abs(y1 - y0) < 1e-6) return;
+      moved++;
+      const progress = (dx) => (mid(i, dx) - y0) / (y1 - y0);
+      assert.ok(progress(-0.2) > 0.1 && progress(-0.2) < 0.5, `progress ${progress(-0.2)} at 30% of the node`);
+      assert.ok(Math.abs(progress(0) - 0.5) < 1e-6);
+    });
+  });
+  assert.ok(moved >= 2);
 });
 
 test('node traces follow their exact weighted slices through incoming and outgoing merge bands', () => {
