@@ -227,7 +227,7 @@
     if (data.sourceTable && data.matrices.length) {
       const sets = nodeSets(data);
       const longestLabel = Math.max(...sets.flat().map((n) => measure(data)(n.label, 1, 1).width));
-      if (!data.style.canvasWidth) width = Math.max(width, data.sourceTable.minCanvasWidth || 0,
+      if (!data.style.canvasWidth) width = Math.max(width, data.sourceTable.minCanvasWidth || 0, data.sourceTable.spreadWidth || 0,
         Math.ceil((sets.length - 1) * Math.max(160, longestLabel + 50) + 2 * MARGIN));
       // Allow scrolling when many categories need more room than the viewport can give them.
       minHeight = Math.max(minHeight, Math.ceil((Math.max(...sets.map((g) => g.length)) - 1) *
@@ -246,22 +246,69 @@
   const viewFor = (v) => ({ xlim: v.xlim, ylim: v.ylim, width: frame.width - 2 * MARGIN, height: frame.height - frame.margin.top - MARGIN });
   const measure = (data = state) => R.makeMeasure(data.style);
 
-  function computeLayout(data, view) {
-    for (let pass = 0; pass <= data.matrices.length * 2; pass++) {
-      try { return R.liftLabels(L.computeLayout(model(data), viewFor(view), { measure: measure(data) }), data.style); }
-      catch (err) {
-        // Imported tables spread later columns when a strand needs more run. Never during a drag:
-        // the drag must stop at a drawable position instead of growing the canvas frame by frame.
-        if (drag || !err.requiredRun || !err.flow || !data.sourceTable || data.style.canvasWidth || err.flow.dir < 0) throw err;
-        const f = err.flow;
-        const sx = (frame.width - 2 * MARGIN) / (view.xlim[1] - view.xlim[0]);
-        const extra = (err.requiredRun - f.dir * (f.endX - f.startX)) / sx;
-        if (!(extra > 0)) throw err;
-        data.loc.filter(n => n.set >= f.stage + 2).forEach(n => { n.x += extra; });
-        view.xlim[1] += extra;
-        frame.width += Math.ceil(extra * sx);
-        data.sourceTable.minCanvasWidth = frame.width;
+  // How far (plot px) to move each stage's later columns so that no forward strand rises more than
+  // MAX_RISE_PER_RUN times its run between node faces: short stages gain run, lent first by stages
+  // that can spare it (each keeping its own strands within the limit and lending at most LEND of
+  // its run); the moves sum to how much the canvas must grow. Within a fixed width, short stages
+  // only gain what others lend. Empty when no stage is short.
+  const MAX_RISE_PER_RUN = 2;
+  const LEND = 0.25;
+  function spreadMoves(lay, fixed) {
+    const stages = new Map();
+    if (lay.mode !== 'layered') return stages;
+    lay.flows.forEach((f) => {
+      if (f.dir < 0) return;
+      const run = f.endX - f.startX;
+      const over = Math.abs(f.endY + f.endOffset - f.startY - f.startOffset) / MAX_RISE_PER_RUN - run;
+      const s = stages.get(f.stage) || { need: 0, spare: Infinity };
+      stages.set(f.stage, { need: Math.max(s.need, over), spare: Math.min(s.spare, -over, LEND * run) });
+    });
+    const short = [...stages].filter(([, s]) => s.need > 0.5);
+    const lenders = [...stages].filter(([, s]) => s.need <= 0.5 && s.spare > 0);
+    const need = short.reduce((t, [, s]) => t + s.need, 0);
+    const spare = lenders.reduce((t, [, s]) => t + s.spare, 0);
+    const lent = short.length ? Math.min(need, spare) : 0;
+    if (fixed && !(lent > 0.5)) return new Map();
+    const gain = fixed ? lent / need : 1;
+    return new Map(short.map(([k, s]) => [k, s.need * gain]).concat(lent > 0 ? lenders.map(([k, s]) => [k, -s.spare * lent / spare]) : []));
+  }
+
+  // Imported tables move later columns apart when strands need more run: always where a
+  // constant-width turn cannot be drawn, and with opts.spread (a freshly generated layout) per
+  // spreadMoves. The canvas widens to keep the scale, unless its width is fixed (then turns that
+  // cannot be drawn widen the view, shrinking the drawing). Growth for drawable turns is kept in minCanvasWidth,
+  // which Fit view resets (to be grown again as the layout needs); growth for spreadMoves in
+  // spreadWidth, which belongs to the generated layout. Never during a drag: the drag must stop at
+  // a drawable position instead of moving columns frame by frame.
+  function computeLayout(data, view, opts = {}) {
+    const grows = !drag && data.sourceTable;
+    const move = (moves, key) => {
+      const sx = (frame.width - 2 * MARGIN) / (view.xlim[1] - view.xlim[0]);
+      moves.forEach((px, stage) => data.loc.filter(n => n.set >= stage + 2).forEach(n => { n.x += px / sx; }));
+      const growth = [...moves.values()].reduce((t, px) => t + px, 0);
+      if (growth > 1e-9) {
+        view.xlim[1] += growth / sx;
+        if (data.style.canvasWidth) return;
+        frame.width += Math.ceil(growth);
+        data.sourceTable[key] = frame.width;
       }
+    };
+    // A fixed canvas shrinks the drawing as columns move, so each move gains less: allow more passes.
+    const passes = data.matrices.length * (opts.spread ? 4 : 2) * (data.style.canvasWidth ? 3 : 1);
+    for (let pass = 0; pass <= passes; pass++) {
+      let lay;
+      try { lay = R.liftLabels(L.computeLayout(model(data), viewFor(view), { measure: measure(data) }), data.style); }
+      catch (err) {
+        if (!grows || !err.requiredRun || !err.flow || err.flow.dir < 0) throw err;
+        const px = err.requiredRun - err.flow.dir * (err.flow.endX - err.flow.startX);
+        if (!(px > 0)) throw err;
+        move(new Map([[err.flow.stage, px]]), 'minCanvasWidth');
+        continue;
+      }
+      // Lay out the moved columns once more; the last pass draws as is.
+      const moves = opts.spread && grows && pass < passes ? spreadMoves(lay, !!data.style.canvasWidth) : new Map();
+      if (!moves.size) return lay;
+      move(moves, 'spreadWidth');
     }
     throw new L.SankeyError('Could not find enough column spacing for constant-width ribbons. Increase column spacing or reduce the value scale.');
   }
@@ -416,7 +463,7 @@
 
   // Data limits that contain every strand, node body and label (a few refinement passes,
   // because strand thickness in pixels depends on the limits themselves).
-  function fitView(data = state) {
+  function fitView(data = state, opts = {}) {
     if (!data.loc.length) throw new L.SankeyError('No node locations (loc) are loaded.');
     const xs = data.loc.map((r) => r.x);
     const ys = data.loc.map((r) => r.y);
@@ -427,7 +474,7 @@
       ylim: [Math.min(...ys) - 0.15 * spanY, Math.max(...ys) + 0.15 * spanY]
     };
     for (let pass = 0; pass < 4; pass++) {
-      const lay = computeLayout(data, view);
+      const lay = computeLayout(data, view, opts);
       const box = S.geometryBounds(lay);
       labelBoxes(lay, data).forEach((p) => {
         box.x0 = Math.min(box.x0, p[0]);
@@ -457,7 +504,11 @@
     const opts = options || {};
     // Fitting recomputes how wide an imported table's canvas must be, so a canvas widened earlier
     // shrinks back unless the current layout still needs the room (keepCanvas: refit within it).
-    if (opts.fit && !opts.keepCanvas && state.sourceTable) state.sourceTable.minCanvasWidth = 0;
+    // spread: a freshly generated layout, whose tight column gaps computeLayout widens.
+    if (opts.fit && !opts.keepCanvas && state.sourceTable) {
+      state.sourceTable.minCanvasWidth = 0;
+      if (opts.spread) state.sourceTable.spreadWidth = 0;
+    }
     computeFrame();
     try {
       if (!state.matrices.length || !state.loc.length) {
@@ -466,7 +517,7 @@
         svg.classList.remove('stale');
         showError(state.matrices.length ? 'Load node locations (loc) or use "Auto-layout nodes".' : '');
       } else {
-        if (opts.fit || !state.view) state.view = fitView();
+        if (opts.fit || !state.view) state.view = fitView(state, { spread: opts.spread });
         layout = computeLayout(state, state.view);
         colors = R.resolveColors(layout, colorData(), state.style);
         const warnings = layout.warnings.slice();
@@ -1336,7 +1387,7 @@
     next.trustedNames = true;
     next.sourceTable = opts.sourceTable || (result.source ? window.SK.tableControls.create(result.source,
       { name: opts.name || 'pasted table', labels: opts.labels || 'inside' }) : null);
-    if (next.sourceTable) next.sourceTable = Object.assign({}, next.sourceTable, { minCanvasWidth: 0 });
+    if (next.sourceTable) next.sourceTable = Object.assign({}, next.sourceTable, { minCanvasWidth: 0, spreadWidth: 0 });
     if (next.sourceTable && !next.sourceTable.summary) next.sourceTable.summary = Object.assign({ rowsFiltered: next.sourceTable.table.rows.length, unit: result.unit }, result.summary);
     Object.assign(next.params, opts.params || {});
     const previousFrame = frame;
@@ -1345,8 +1396,8 @@
       autoLocate({ labels: opts.labels }, next);
       next.locName = opts.name ? `built from ${opts.name}` : 'built from table';
       if (opts.example) next.example = opts.example;
-      next.view = fitView(next);
-      const candidate = L.computeLayout(model(next), viewFor(next.view), { measure: measure(next) });
+      next.view = fitView(next, { spread: true });
+      const candidate = computeLayout(next, next.view);
       R.resolveColors(candidate, colorData(next), next.style);
     } catch (err) {
       frame = previousFrame;
@@ -1769,12 +1820,19 @@
     const autoLoc = state.locName === 'auto-generated' || /^built from /.test(state.locName);
     const set = nodes[0].set;
     state = window.SK.edit.mergeNodes(state, set, nodes.map((n) => n.node - 1), label);
-    if (autoLoc) restackColumn(set);
+    if (autoLoc) {
+      // Columns go back to auto-layout's spacing, to be spread for the merged data as on import.
+      if (state.sourceTable) Object.assign(state.sourceTable, { minCanvasWidth: 0, spreadWidth: 0 });
+      const fresh = Object.assign({}, state);
+      autoLocate(undefined, fresh);
+      state.loc.forEach((r) => { r.x = fresh.loc.find((f) => f.set === Number(r.set)).x; });
+      restackColumn(set);
+    }
     picked = new Set();
     pool = new Map();
     selection = null;
     hover = null;
-    update({ fit: true, commit: true });
+    update({ fit: true, commit: true, spread: autoLoc });
     notify(`Merged into "${label}" (Ctrl/⌘+Z undoes).`);
   }
 
@@ -2797,7 +2855,7 @@
     $('#auto-layout').addEventListener('click', () => {
       try {
         autoLocate();
-        update({ fit: true, commit: true });
+        update({ fit: true, commit: true, spread: true });
       } catch (err) {
         showError(err.message);
       }
