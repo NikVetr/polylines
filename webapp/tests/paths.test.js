@@ -420,3 +420,55 @@ test('x clipping preserves every crossing of a folded edge', () => {
     assert.equal(Math.abs(piece[0][0] - piece[piece.length - 1][0]), 1);
   });
 });
+
+// Four stages where substrands bound for one sink pass a node interleaved with others, so they
+// slide by different amounts to close up at its out-face (deterministic stand-in data).
+function interleaved() {
+  let seed = 3;
+  const next = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const pick = (w) => { let u = next() * w.reduce((a, b) => a + b, 0); return w.findIndex((v) => (u -= v) < 0); };
+  const rows = ['id,a,b,c,d'];
+  for (let k = 0; k < 600; k++) {
+    const b = pick([0.45, 0.35, 0.2]);
+    const c = pick(b === 2 ? [0.25, 0.75] : [0.2, 0.8]);
+    const d = pick(c === 1 ? [0.25, 0.72, 0.03] : [0.35, 0.6, 0.05]);
+    rows.push(`P${k},${'AB'[pick([0.3, 0.7])]},${'XYZ'[b]},${'PQ'[c]},${'RST'[d]}`);
+  }
+  const r = T.build(T.parseTable(rows.join('\n') + '\n'), { format: 'wide', id: 'id', columns: ['a', 'b', 'c', 'd'] });
+  const counts = r.dimnames.map((d) => d.rows.length).concat([r.dimnames[r.dimnames.length - 1].cols.length]);
+  const loc = [];
+  counts.forEach((count, s) => { for (let k = 0; k < count; k++) loc.push({ set: s + 1, node: k + 1, x: s, y: 1 - (k + 0.5) / count, width: 0.25 }); });
+  const layout = SK.layout.computeLayout({ mode: 'layered', matrices: r.matrices, loc, params: { n: 60 }, valueScale: 0.0012 },
+    { xlim: [-0.4, counts.length - 0.6], ylim: [-0.1, 1.1], width: 900, height: 600 });
+  return { r, layout, subs: SK.paths.substrands(layout, r.paths) };
+}
+
+// Worst vertical overlap inside node n between traces that keep their order through it.
+function orderedOverlap(n, traces) {
+  const at = (pts, x) => SK.layout.pointAtX(pts, x)[1];
+  const xs = Array.from({ length: 81 }, (_, k) => n.X - n.widthPx / 2 + (n.widthPx * k) / 80);
+  const mid = (t, x) => at(t.upper, x) + at(t.lower, x);
+  let worst = 0;
+  traces.forEach((A, i) => traces.slice(i + 1).forEach((B) => {
+    const o = Math.sign(mid(A, xs[0]) - mid(B, xs[0]));
+    if (Math.sign(mid(A, xs[80]) - mid(B, xs[80])) !== o || Math.sign(mid(A, n.X) - mid(B, n.X)) !== o) return;
+    xs.forEach((x) => { worst = Math.max(worst, Math.min(at(A.upper, x), at(B.upper, x)) - Math.max(at(A.lower, x), at(B.lower, x))); });
+  }));
+  return worst;
+}
+
+test('nodes where same-order substrands would overlap cross on one shared curve instead', () => {
+  const { r, layout, subs } = interleaved();
+  const sink = layout.nodes.find((n) => n.set === 4 && n.node === 2);
+  const units = r.paths.map((p, pi) => (p.nodes[3] === 1 ? [pi, -1] : null)).filter(Boolean);
+  const tiled = SK.paths.tiledNodes(layout, subs, units);
+  const n = layout.nodes.find((x) => x.set === 3 && x.node === 1);
+  assert.ok(tiled.has(n.id));
+  const through = units.filter(([pi]) => r.paths[pi].nodes[2] === 0);
+  const trace = (opts) => through.map(([pi]) => SK.paths.tracePolygon(layout, subs, pi, Object.assign({ fadeLabels: false }, opts)));
+  assert.ok(orderedOverlap(n, trace({})) > 5);
+  assert.ok(orderedOverlap(n, trace({ tiled })) < 1e-6);
+  // Nodes without such collisions keep their constant-width crossings.
+  assert.ok(layout.nodes.some((x) => x.inFlows.length && x.outFlows.length && !tiled.has(x.id)));
+  assert.ok(sink);
+});

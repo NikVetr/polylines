@@ -41,6 +41,7 @@
     traceCounts: true,
     tracePercents: false,
     gatherInNodes: false,
+    tileInNodes: true,
     substrands: false
   };
 
@@ -587,6 +588,9 @@
           showIf: () => !!state.paths && state.style.tracePaths },
         { key: 'gatherInNodes', target: 'style', type: 'checkbox', label: 'Gather traces in nodes',
           help: 'Traced pathways close up into one contiguous bundle along the top or bottom of each node they share, fanning back out to their strands at the node edges.',
+          showIf: () => !!state.paths && state.style.tracePaths },
+        { key: 'tileInNodes', target: 'style', type: 'checkbox', label: 'No overlaps in nodes',
+          help: 'Where traced substrands that keep their order would overlap inside a node, cross that node on one shared curve (they thin a little on steep stretches). Off: every substrand keeps its full width and may overlap its neighbours.',
           showIf: () => !!state.paths && state.style.tracePaths },
         { key: 'substrands', target: 'style', type: 'checkbox', label: 'Substrand lines',
           help: 'Thin lines dividing each strand into its pathways, or into single items when the data has item ids.',
@@ -1333,11 +1337,12 @@
     const units = unitsOf(target);
     const slots = !target.single && state.style.gatherInNodes && units.length > 1 && units.every(([, mi]) => mi < 0)
       ? P.gatherSlots(layout, traces.subs, units.map(([pi]) => pi)) : null;
+    const tiled = state.style.tileInNodes ? P.tiledNodes(layout, traces.subs, units, { slots }) : null;
     let defs = '';
     let body = '';
     const annotations = [];
     units.forEach(([pi, mi], n) => {
-      const t = P.tracePolygon(layout, traces.subs, pi, { member: mi, slots, fadeLabels: state.style.labelPosition !== 'above' });
+      const t = P.tracePolygon(layout, traces.subs, pi, { member: mi, slots, tiled, fadeLabels: state.style.labelPosition !== 'above' });
       annotations.push({ path: pi, member: mi, weight: unitWeight([pi, mi]), geometry: t });
       const xs = t.polygon.map((p) => p[0]);
       const x0 = Math.min(...xs);

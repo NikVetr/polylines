@@ -152,7 +152,9 @@
 
   // Constant normal width through the body, with horizontal tangents at the faces
   // and the weighted stack. Members share the same centreline and curve samples.
-  function packedBridge(layout, subs, n, pi, member, a, b, edge, gathered) {
+  // tiled: instead ease every edge vertically on one shared curve (face, centre, face), so
+  // substrands that keep their order through the node never overlap, though they thin where steep.
+  function packedBridge(layout, subs, n, pi, member, a, b, edge, gathered, tiled) {
     // Keep the real slice through each merge band: the bundle envelope can cut across
     // other strands, producing a notch where the trace joins its ribbon.
     let incoming = [a], outgoing = [b];
@@ -167,6 +169,13 @@
     const slot = nodeSlots(layout, subs, n).get(pi);
     const cuts = member >= 0 && subs.memberCuts[pi] ? subs.memberCuts[pi].slice(member, member + 2) : [0, 1];
     const centerY = gathered ? (gathered[0] + gathered[1]) / 2 : n.Y + n.inPx * ((slot.a + slot.b) / 2 - 0.5);
+    if (tiled) {
+      const part = subs.byFlow[f.index].find((p) => p.path === pi);
+      const width = f.w * (part.b - part.a);
+      const center = [n.X, centerY + width * (cuts[edge] - 0.5)];
+      const body = S.bridgeCurve(a, center, 25).concat(S.bridgeCurve(center, b, 25).slice(1));
+      return incoming.slice(0, -1).concat(body, outgoing.slice(1));
+    }
     if (!subs.nodeRibbons) subs.nodeRibbons = new Map();
     const key = `${n.id}:${pi}:${centerY}`;
     if (!subs.nodeRibbons.has(key)) {
@@ -185,6 +194,57 @@
     const t = cuts[edge];
     const body = ribbon.lower.map((lo, i) => [lo[0] * (1 - t) + ribbon.upper[i][0] * t, lo[1] * (1 - t) + ribbon.upper[i][1] * t]);
     return incoming.slice(0, -1).concat(body, outgoing.slice(1));
+  }
+
+  // Interior nodes where traced units ([path, member] pairs) that keep their order through the node
+  // would overlap as separate constant-width ribbons (beyond `tolerance` px), or where such ribbons
+  // cannot turn at all (too tight a bend). Traces cross those nodes on packedBridge's shared ease;
+  // pairs that swap order must cross either way and are ignored.
+  function tiledNodes(layout, subs, units, opts) {
+    const { slots = null, tolerance = 0.5 } = opts || {};
+    const SAMPLES = 40;
+    const tiled = new Set();
+    const byNode = new Map();
+    units.forEach(([pi, mi]) => {
+      const ps = pieces(layout, subs, pi, mi);
+      for (let s = 1; s < ps.length; s++) {
+        const n = layout.nodes[ps[s].f.from];
+        if (tiled.has(n.id)) continue;
+        const gathered = slots && slots.get(n.id).get(pi);
+        const edge = (k) => packedBridge(layout, subs, n, pi, mi, last(ps[s - 1][k ? 'up' : 'lo']), first(ps[s][k ? 'up' : 'lo']), k, gathered, false);
+        let lower;
+        let upper;
+        try {
+          lower = edge(0);
+          upper = edge(1);
+        } catch (err) {
+          if (!(err instanceof SK.layout.SankeyError) || !/constant-width/i.test(err.message)) throw err;
+          tiled.add(n.id);
+          continue;
+        }
+        if (!byNode.has(n.id)) byNode.set(n.id, []);
+        byNode.get(n.id).push({ lower, upper });
+      }
+    });
+    byNode.forEach((items, id) => {
+      if (items.length < 2 || tiled.has(id)) return;
+      const n = layout.nodes[id];
+      // The node body, or the bridge between band edges for a node without width.
+      const x0 = n.widthPx > 0 ? n.X - n.widthPx / 2 : Math.max(...items.map((e) => e.lower[0][0]));
+      const x1 = n.widthPx > 0 ? n.X + n.widthPx / 2 : Math.min(...items.map((e) => last(e.lower)[0]));
+      const xs = Array.from({ length: SAMPLES + 1 }, (_, k) => x0 + ((x1 - x0) * k) / SAMPLES);
+      const spans = items.map((e) => xs.map((x) => [SK.layout.pointAtX(e.lower, x)[1], SK.layout.pointAtX(e.upper, x)[1]]));
+      const order = (i, j, k) => Math.sign(spans[i][k][0] + spans[i][k][1] - spans[j][k][0] - spans[j][k][1]);
+      const collide = spans.some((_, i) => spans.some((__, j) => {
+        if (j <= i) return false;
+        // Same order at both faces and at the centre: these two need not cross.
+        const o = order(i, j, 0);
+        if (!o || order(i, j, SAMPLES) !== o || order(i, j, SAMPLES / 2) !== o) return false;
+        return xs.some((_x, k) => Math.min(spans[i][k][1], spans[j][k][1]) - Math.max(spans[i][k][0], spans[j][k][0]) > tolerance);
+      }));
+      if (collide) tiled.add(id);
+    });
+    return tiled;
   }
 
   // Central label positions along a substrand, with local tangents and widths.
@@ -274,14 +334,14 @@
 
   // Edges (plot pixels) tracing path pi, and the trace's smallest strand thickness. Options:
   // member (>= 0: just that member's slice), slots (gatherSlots: bend through the path's place in
-  // each node's gathered bundle at the node centre) and fadeLabels
-  // (labeled end-node bodies fade out at their centre, so traces stop there).
+  // each node's gathered bundle at the node centre), tiled (tiledNodes: node ids crossed on the
+  // shared ease) and fadeLabels (labeled end-node bodies fade out at their centre, so traces stop there).
   function tracePolygon(layout, subs, pi, opts) {
-    const { member = -1, slots = null, fadeLabels = true } = opts || {};
+    const { member = -1, slots = null, tiled = null, fadeLabels = true } = opts || {};
     const ps = pieces(layout, subs, pi, member);
     const placeAt = (id, k) => (slots ? slots.get(id).get(pi)[k] : undefined);
     const cross = (n, a, b, edge) => {
-      return packedBridge(layout, subs, n, pi, member, a, b, edge, slots && slots.get(n.id).get(pi)).slice(1, -1);
+      return packedBridge(layout, subs, n, pi, member, a, b, edge, slots && slots.get(n.id).get(pi), !!(tiled && tiled.has(n.id))).slice(1, -1);
     };
     const intoBody = (n, end, reach, y, edge) => {
       if (y !== undefined && Math.abs(reach - end[0]) > 1e-9) {
@@ -454,6 +514,6 @@
     });
   }
 
-  SK.paths = { consistent, substrands, gatherSlots, tracePolygon, pathAt, pathAtNode, boundaryLines };
+  SK.paths = { consistent, substrands, gatherSlots, tiledNodes, tracePolygon, pathAt, pathAtNode, boundaryLines };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

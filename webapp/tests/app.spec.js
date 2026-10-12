@@ -1282,6 +1282,20 @@ for (const label of ['Remission', 'Progression']) {
   });
 }
 
+test('"No overlaps in nodes" is on by default and can be switched off', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  expect(await page.evaluate(() => window.SankeyApp.state.style.tileInNodes)).toBe(true);
+  const box = page.locator('#ctl-tileInNodes');
+  await expect(box).toBeAttached();
+  for (const on of [true, false]) {
+    await page.evaluate((v) => { window.SankeyApp.state.style.tileInNodes = v; window.SankeyApp.update(); }, on);
+    const node = await nodeAt(page, 'Remission');
+    await page.mouse.move(node.x, node.y);
+    expect(await page.locator('#plot .trace').count()).toBeGreaterThan(1);
+    await page.mouse.move(5, 5);
+  }
+});
+
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
   await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
   await expect(page.locator('.topbar .actions > [data-export="png"]')).toBeVisible();
