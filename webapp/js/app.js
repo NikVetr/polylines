@@ -653,31 +653,32 @@
     {
       title: 'Layout',
       items: [
-        { key: 'valueScale', target: 'state', type: 'number', label: 'Value scale', min: 0, positive: true, step: 'any',
+        { key: 'valueScale', target: 'state', type: 'range', label: 'Value scale', min: 0, positive: true, log: true,
           help: 'Strand thickness = value × scale, in x units. Tooltips and the inspector show raw values.' },
-        { key: 'n', target: 'params', type: 'number', label: 'Samples per strand', min: 2, step: 1, integer: true },
-        { key: 'curvature', target: 'params', type: 'range', label: 'Curvature', min: 0, max: 1, step: 0.01 },
-        { key: 'merge_frac', target: 'params', type: 'number', label: 'Merge fraction', min: 0, step: 0.005,
+        { key: 'n', target: 'params', type: 'range', label: 'Samples per strand', min: 2, max: 400, step: 1, integer: true },
+        { key: 'curvature', target: 'params', type: 'range', label: 'Curvature', min: 0, max: 1, step: 0.01, bounded: true },
+        { key: 'merge_frac', target: 'params', type: 'range', label: 'Merge fraction', min: 0, max: 0.3, step: 0.005,
           help: 'Length of the merged trunk near nodes, as a fraction of the shortest strand.' },
-        { key: 'merge_length', target: 'params', type: 'number', label: 'Merge length', min: 0, step: 0.01,
-          nullable: true, placeholder: 'auto', help: 'Fixed merge length in x units; overrides the fraction.' },
-        { key: 'default_node_width', target: 'params', type: 'number', label: 'Default node width', min: 0, step: 0.01 },
-        { key: 'node_label_pad', target: 'params', type: 'number', label: 'Label padding', min: 0, step: 0.005,
+        { key: 'merge_length', target: 'params', type: 'range', label: 'Merge length', min: 0, max: 0.5, step: 0.005,
+          nullable: true, placeholder: 'auto', auto: () => (layout ? layout.mergeLength / layout.tf.sx : 0),
+          help: 'Fixed merge length in x units; overrides the fraction. Clear the number for auto.' },
+        { key: 'default_node_width', target: 'params', type: 'range', label: 'Default node width', min: 0, max: 0.5, step: 0.005 },
+        { key: 'node_label_pad', target: 'params', type: 'range', label: 'Label padding', min: 0, max: 0.1, step: 0.001,
           help: 'Horizontal padding (x units) added on each side of label-derived node widths.' },
-        { key: 'node_label_pad_frac', target: 'params', type: 'number', label: 'Label padding, relative', min: 0, step: 0.01,
+        { key: 'node_label_pad_frac', target: 'params', type: 'range', label: 'Label padding, relative', min: 0, max: 0.5, step: 0.01,
           help: 'Padding added on each side of label-derived node widths, as a fraction of the median label width.' },
         { key: 'adjust_loc', target: 'params', type: 'checkbox', label: 'Keep nodes apart',
           help: 'Isotonic adjustment so neighbouring node bundles do not overlap (adjust_loc).' },
-        { key: 'min_node_gap', target: 'params', type: 'number', label: 'Minimum node gap', min: 0, step: 0.005,
+        { key: 'min_node_gap', target: 'params', type: 'range', label: 'Minimum node gap', min: 0, max: 0.2, step: 0.005,
           showIf: () => state.params.adjust_loc },
         { key: 'adjust_loc_expand', target: 'params', type: 'checkbox', label: 'Allow expanding y range',
           showIf: () => state.params.adjust_loc },
         { key: 'adjust_node_height', target: 'params', type: 'select', label: 'Fit labels by',
           options: [['none', 'nothing'], ['label', 'shrinking labels'], ['node', 'growing nodes']] },
-        { key: 'node_label_vpad', target: 'params', type: 'number', label: 'Label vertical padding', min: 0, step: 0.005,
+        { key: 'node_label_vpad', target: 'params', type: 'range', label: 'Label vertical padding', min: 0, max: 0.1, step: 0.001,
           help: 'Padding (y units) above and below labels when fitting them to node heights.',
           showIf: () => state.params.adjust_node_height !== 'none' },
-        { key: 'node_label_vpad_frac', target: 'params', type: 'number', label: 'Label vertical padding, relative', min: 0, step: 0.05,
+        { key: 'node_label_vpad_frac', target: 'params', type: 'range', label: 'Label vertical padding, relative', min: 0, max: 1, step: 0.05,
           help: 'Padding above and below labels when fitting them to node heights, as a fraction of the tallest label.',
           showIf: () => state.params.adjust_node_height !== 'none' },
         { key: 'require_forward', target: 'params', type: 'checkbox', label: 'Require left-to-right',
@@ -696,7 +697,7 @@
           help: 'Which strands ease together: those into one target (fan-in), out of one source (fan-out), or the whole stage.' },
         { key: 'boundary_compensation', target: 'stage', type: 'select', label: 'Width compensation',
           options: [['none', 'none'], ['full', 'full'], ['gap_budget', 'gap budget']], showIf: isBoundary },
-        { key: 'boundary_ease', target: 'stage', type: 'range', label: 'Boundary easing', min: 0.3, max: 3, step: 0.05, showIf: isBoundary },
+        { key: 'boundary_ease', target: 'stage', type: 'range', label: 'Boundary easing', min: 0.3, max: 3, step: 0.05, bounded: true, showIf: isBoundary },
         { key: 'source_order', target: 'stage', type: 'select', label: 'Order at sources', options: L.SOURCE_ORDERS.map((o) => [o, o]) },
         { key: 'target_order', target: 'stage', type: 'select', label: 'Order at targets', options: L.TARGET_ORDERS.map((o) => [o, o]) }
       ]
@@ -710,7 +711,7 @@
         { key: 'palette', target: 'style', type: 'select', label: 'Palette', options: PALETTE_OPTIONS,
           showIf: () => ['source', 'target', 'stage'].includes(state.style.colorBy) },
         { key: 'singleColor', target: 'style', type: 'color', label: 'Color', showIf: () => state.style.colorBy === 'single' },
-        { key: 'opacity', target: 'style', type: 'range', label: 'Opacity', min: 0.05, max: 1, step: 0.01,
+        { key: 'opacity', target: 'style', type: 'range', label: 'Opacity', min: 0.05, max: 1, step: 0.01, bounded: true,
           showIf: () => state.style.colorBy !== 'file' },
         { key: 'gradient', target: 'style', type: 'checkbox', label: 'Gradients' },
         { key: 'gradientMode', target: 'style', type: 'select', label: 'Gradient mode',
@@ -729,17 +730,17 @@
         { key: 'thinOutline', target: 'style', type: 'checkbox', label: 'Thin plot outline',
           help: 'A thin black outline around strands and nodes, hidden while a selection is in focus.' },
         { key: 'border', target: 'style', type: 'optionalColor', label: 'Strand borders', defaultColor: '#333333' },
-        { key: 'borderWidth', target: 'style', type: 'number', label: 'Border width', min: 0.1, step: 0.1,
+        { key: 'borderWidth', target: 'style', type: 'range', label: 'Border width', min: 0.1, max: 5, step: 0.1,
           showIf: () => state.style.border !== 'none' },
         { key: 'borderCaps', target: 'style', type: 'checkbox', label: 'Border caps at nodes',
           showIf: () => state.style.border !== 'none' },
         { key: 'nodeBorder', target: 'style', type: 'nodeBorder', label: 'Node borders' },
-        { key: 'nodeBorderWidth', target: 'style', type: 'number', label: 'Node border width', min: 0.1, step: 0.1,
+        { key: 'nodeBorderWidth', target: 'style', type: 'range', label: 'Node border width', min: 0.1, max: 5, step: 0.1,
           showIf: () => state.style.nodeBorder !== 'none' },
         { key: 'labels', target: 'style', type: 'checkbox', label: 'Show labels' },
         { key: 'showIndices', target: 'style', type: 'checkbox', label: 'Number unlabeled nodes',
           showIf: () => state.style.labels },
-        { key: 'fontSize', target: 'style', type: 'number', label: 'Font size (px)', min: 4, step: 0.5, fit: true },
+        { key: 'fontSize', target: 'style', type: 'range', label: 'Font size (px)', min: 4, max: 36, step: 0.5, fit: true },
         { key: 'labelPosition', target: 'style', type: 'select', label: 'Label position',
           options: [['auto', 'inside nodes'], ['above', 'above nodes']],
           help: 'Inside nodes: labels sit in node bodies (beside nodes without one), which fade to a clear centre behind them. Above nodes: node bodies stay solid.' },
@@ -759,7 +760,8 @@
         { key: 'tracePaths', target: 'style', type: 'checkbox', label: 'Trace pathways on hover', fit: true,
           help: 'Hover a strand or node to trace every pathway through it; hold Ctrl/⌘ for a single pathway, or Alt/⌥ for a single item. Above the hover limit, only single-substrand hover is enabled.',
           showIf: () => !!state.paths },
-        { key: 'maxHoverSubstrands', target: 'style', type: 'number', label: 'Hover limit (pathways)', min: 0, step: 50, integer: true,
+        { key: 'maxHoverSubstrands', target: 'style', type: 'range', label: 'Hover limit (pathways)', min: 0, step: 10, integer: true,
+          max: () => Math.max(1000, state.paths ? state.paths.length : 0),
           help: 'Disable ordinary hover effects above this many unique pathways (default 200). Alt, Ctrl/⌘ and Shift hover still work. Raising this can slow the browser.',
           showIf: () => !!state.paths },
         { key: 'traceCounts', target: 'style', type: 'checkbox', label: 'Substrand counts', fit: true,
@@ -780,8 +782,10 @@
         { key: 'collision', target: 'style', type: 'select', label: 'Dragged node hits',
           options: [['wall', 'a wall'], ['push', 'neighbours']],
           help: 'What happens when a dragged node would leave a strand no horizontal room: it stops at a wall, or pushes its neighbours along.' },
-        { key: 'canvasWidth', target: 'style', type: 'number', label: 'Width (px)', min: 200, step: 10, nullable: true, placeholder: 'fit', integer: true },
-        { key: 'canvasHeight', target: 'style', type: 'number', label: 'Height (px)', min: 150, step: 10, nullable: true, placeholder: 'fit', integer: true },
+        { key: 'canvasWidth', target: 'style', type: 'range', label: 'Width (px)', min: 200, max: 4000, step: 10, nullable: true, placeholder: 'fit', integer: true,
+          auto: () => (frame ? frame.width : 200), help: 'Canvas width; clear the number to fit the panel.' },
+        { key: 'canvasHeight', target: 'style', type: 'range', label: 'Height (px)', min: 150, max: 3000, step: 10, nullable: true, placeholder: 'fit', integer: true,
+          auto: () => (frame ? frame.height : 150), help: 'Canvas height; clear the number to fit the panel.' },
         { key: 'xlim', target: 'view', type: 'pair', label: 'x limits' },
         { key: 'ylim', target: 'view', type: 'pair', label: 'y limits' }
       ]
@@ -789,6 +793,8 @@
   ];
 
   const controlRefs = [];
+  // A log slider (the value scale) spans this factor either way from its reference value.
+  const LOG_SPAN = 20;
 
   function currentParam(key) {
     if (routeScope === 'all') return state.params[key];
@@ -892,18 +898,65 @@
       input.addEventListener('input', () => { setValue(item, input.value.toUpperCase()); requestRender(); });
       input.addEventListener('change', () => commit(input.value.toUpperCase()));
     } else if (item.type === 'range') {
+      // A slider and the number it sets, which reads as text and edits in place: typed values may
+      // pass the slider's ends unless the setting is bounded. A log slider spans LOG_SPAN times
+      // either way from a reference value; clearing a nullable setting's number makes it automatic.
       input = document.createElement('span');
       input.className = 'range';
-      input.innerHTML = `<input type="range" min="${item.min}" max="${item.max}" step="${item.step}"><output></output>`;
-      const slider = input.querySelector('input');
-      const out = input.querySelector('output');
-      sync = (v) => { slider.value = v; out.textContent = Number(v).toFixed(2); };
+      input.innerHTML = '<input type="range"><input type="number" class="range-value" step="any">';
+      const slider = input.querySelector('input[type="range"]');
+      const box = input.querySelector('.range-value');
+      box.id = id;
+      if (item.placeholder) box.placeholder = item.placeholder;
+      const lo = () => (typeof item.min === 'function' ? item.min() : item.min);
+      const hi = () => (typeof item.max === 'function' ? item.max() : item.max);
+      let ref = null;
+      const fromSlider = () => {
+        if (item.log) return Number((ref * LOG_SPAN ** Number(slider.value)).toPrecision(3));
+        return item.integer ? Math.round(Number(slider.value)) : Number(slider.value);
+      };
+      const show = (v) => { box.value = v === null || v === undefined ? '' : String(Number(Number(v).toPrecision(4))); };
+      sync = (v) => {
+        const at = v === null || v === undefined ? (item.auto ? item.auto() : lo()) : v;
+        if (item.log) {
+          if (!(ref > 0) || Math.abs(Math.log10(at / ref)) > Math.log10(LOG_SPAN)) ref = at;
+          Object.assign(slider, { min: -1, max: 1, step: 0.01 });
+          slider.value = Math.log10(at / ref) / Math.log10(LOG_SPAN);
+        } else {
+          Object.assign(slider, { min: lo(), max: hi(), step: item.step });
+          slider.value = at;
+        }
+        show(v);
+      };
       slider.addEventListener('input', () => {
-        out.textContent = Number(slider.value).toFixed(2);
-        setValue(item, Number(slider.value));
+        const v = fromSlider();
+        show(v);
+        setValue(item, v);
         requestRender();
       });
-      slider.addEventListener('change', () => commit(Number(slider.value)));
+      slider.addEventListener('change', () => commit(fromSlider()));
+      box.addEventListener('change', () => {
+        if (box.value === '' && item.nullable) {
+          commit(null);
+          return;
+        }
+        const v = item.integer ? Math.round(Number(box.value)) : Number(box.value);
+        const tooHigh = item.bounded && v > hi();
+        if (box.value === '' || !Number.isFinite(v) || v < lo() || tooHigh || (item.positive && !(v > 0))) {
+          showError(`${item.label} must be ${item.bounded ? `between ${lo()} and ${hi()}`
+            : item.positive ? 'a positive number' : `a number ≥ ${lo()}`}${item.nullable ? ', or empty for automatic' : ''}.`);
+          sync(getValue(item));
+          return;
+        }
+        commit(v);
+      });
+      box.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') box.blur();
+        if (e.key === 'Escape') {
+          sync(getValue(item));
+          box.blur();
+        }
+      });
     } else if (item.type === 'optionalColor' || item.type === 'nodeBorder') {
       input = document.createElement('span');
       input.className = 'combo';
@@ -943,29 +996,9 @@
       a.addEventListener('change', onChange);
       b.addEventListener('change', onChange);
     } else {
-      input = document.createElement('input');
-      input.type = 'number';
-      if (item.min !== undefined) input.min = item.min;
-      input.step = item.step || 'any';
-      if (item.placeholder) input.placeholder = item.placeholder;
-      sync = (v) => { input.value = v === null || v === undefined ? '' : v; };
-      input.addEventListener('change', () => {
-        if (input.value === '' && item.nullable) {
-          commit(null);
-          return;
-        }
-        const v = item.integer ? Math.round(Number(input.value)) : Number(input.value);
-        if (input.value === '' || !Number.isFinite(v) || (item.min !== undefined && v < item.min) ||
-            (item.positive && !(v > 0))) {
-          showError(`${item.label} must be a ${item.positive ? 'positive number' : 'number'}` +
-            `${item.min !== undefined && !item.positive ? ` ≥ ${item.min}` : ''}.`);
-          sync(getValue(item));
-          return;
-        }
-        commit(v);
-      });
+      throw new Error(`Unknown control type "${item.type}" for ${item.key}.`);
     }
-    input.id = id;
+    if (item.type !== 'range') input.id = id;
     row.appendChild(withGlyph(item, input, sync, (s) => { sync = s; }));
     controlRefs.push({ item, row, sync });
     return row;

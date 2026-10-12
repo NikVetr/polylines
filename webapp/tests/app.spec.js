@@ -1730,9 +1730,50 @@ test('setting cartoons show slider ends, the chosen option and what a checkbox d
   await expect(gather).toHaveClass(/off/);
   await page.locator('#ctl-gatherInNodes').check();
   await expect(gather).not.toHaveClass(/off/);
-  await expect(row('ctl-merge_frac').locator('svg.glyph')).toHaveCount(1);
   // Settings without a cartoon keep their plain control.
   await expect(row('ctl-maxHoverSubstrands').locator('svg.glyph')).toHaveCount(0);
+});
+
+test('numeric settings are sliders whose numbers can be typed, past the slider unless bounded', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+  const slide = (id, value) => page.locator(`.sidebar .row:has(#${id}) input[type="range"]`).evaluate((el, v) => {
+    el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+  const type = async (id, text) => {
+    await page.locator(`#${id}`).click();
+    await page.locator(`#${id}`).fill(text);
+    await page.locator(`#${id}`).press('Enter');
+  };
+  const st = () => page.evaluate(() => JSON.parse(JSON.stringify(window.SankeyApp.state)));
+  const sliderValue = (id) => page.locator(`.sidebar .row:has(#${id}) input[type="range"]`).inputValue();
+  // Every numeric setting has a slider.
+  expect(await page.locator('.sidebar input[type="number"]:not(.range-value):not(.pair input)').count()).toBe(0);
+  await slide('ctl-merge_frac', 0.1);
+  expect((await st()).params.merge_frac).toBe(0.1);
+  await expect(page.locator('#ctl-merge_frac')).toHaveValue('0.1');
+  // Typed values may pass the slider's end, which then stays at its end.
+  await type('ctl-merge_frac', '0.45');
+  expect((await st()).params.merge_frac).toBe(0.45);
+  expect(Number(await sliderValue('ctl-merge_frac'))).toBe(0.3);
+  // Bounded settings reject values outside their range, loudly.
+  const opacity = (await st()).style.opacity;
+  await type('ctl-opacity', '1.5');
+  await expect(page.locator('#banner')).toContainText('Opacity must be between 0.05 and 1');
+  expect((await st()).style.opacity).toBe(opacity);
+  // Clearing a nullable setting makes it automatic again.
+  await type('ctl-merge_length', '0.1');
+  expect((await st()).params.merge_length).toBe(0.1);
+  await type('ctl-merge_length', '');
+  expect((await st()).params.merge_length).toBeNull();
+  await expect(page.locator('#ctl-merge_length')).toHaveAttribute('placeholder', 'auto');
+  // The value scale slides on a log scale, 20 times either way.
+  const scale = (await st()).valueScale;
+  await slide('ctl-valueScale', 1);
+  expect((await st()).valueScale / scale).toBeCloseTo(20, 1);
+  await type('ctl-canvasWidth', '900');
+  await expect(page.locator('#plot')).toHaveAttribute('width', '900');
 });
 
 test('setting names wrap instead of being cut off', async ({ page }) => {

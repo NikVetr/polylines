@@ -141,8 +141,16 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
 }
 .row input[type="checkbox"] { justify-self: start; }
 .row input[type="color"] { width: 40px; height: 24px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
-.range { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: center; gap: 6px; }
-.range.glyphed { grid-template-columns: auto minmax(0, 1fr) auto 30px; gap: 4px; }
+.range { display: grid; grid-template-columns: minmax(0, 1fr) 5em; align-items: center; gap: 6px; }
+.range.glyphed { grid-template-columns: auto minmax(0, 1fr) auto 5em; gap: 4px; }
+/* The number beside a slider reads as text and edits in place when clicked. */
+.row .range input.range-value {
+  padding: 1px 3px; border: 1px solid transparent; background: transparent; color: var(--muted);
+  font-variant-numeric: tabular-nums; text-align: right; appearance: textfield; -moz-appearance: textfield; cursor: text;
+}
+.row .range input.range-value:hover { border-color: var(--line); }
+.row .range input.range-value:focus { border-color: var(--accent); background: #fff; color: var(--text); outline: none; }
+.range-value::-webkit-inner-spin-button, .range-value::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 /* Setting cartoons (glyphs.js) beside their controls; a checkbox's fades while it is off. */
 .glyph-slot { display: inline-flex; flex: none; }
 .glyph { display: block; width: 30px; height: 18px; }
@@ -151,7 +159,6 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
 .with-glyph > select, .with-glyph > input[type="number"] { flex: 1; min-width: 0; }
 .with-glyph.off .glyph { opacity: 0.35; filter: grayscale(1); }
 .range input { width: 100%; }
-.range output { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
 .combo, .pair, .color-edit { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .combo select { flex: 1; }
 .pair input { flex: 1; }
