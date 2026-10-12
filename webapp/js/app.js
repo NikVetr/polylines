@@ -1006,7 +1006,7 @@
 
   // A cartoon of what the setting does (glyphs.js) beside its control: at both ends of a slider,
   // the chosen option of a select (following the value), and the effect of a checkbox (faded while
-  // off) or of a number. Returns the element to place in the row; setSync replaces the sync.
+  // off). Returns the element to place in the row; setSync replaces the sync.
   function withGlyph(item, input, sync, setSync) {
     const G = window.SK.glyphs;
     const wrap = (...parts) => {
@@ -1039,10 +1039,8 @@
       });
       return wrap(slot, input);
     }
-    if ((item.type === 'checkbox' || item.type === 'number') && G.has(item.key)) {
-      const slot = pic(item.key, item.label);
-      if (item.type === 'number') return wrap(slot, input);
-      const span = wrap(input, slot);
+    if (item.type === 'checkbox' && G.has(item.key)) {
+      const span = wrap(input, pic(item.key, item.label));
       setSync((v) => {
         sync(v);
         span.classList.toggle('off', !v);

@@ -1730,8 +1730,12 @@ test('setting cartoons show slider ends, the chosen option and what a checkbox d
   await expect(gather).toHaveClass(/off/);
   await page.locator('#ctl-gatherInNodes').check();
   await expect(gather).not.toHaveClass(/off/);
+  // Every slider shows its low and high end.
+  const bare = await page.locator('.sidebar .range').evaluateAll((els) =>
+    els.filter((el) => el.querySelectorAll('svg.glyph').length !== 2).map((el) => el.querySelector('.range-value').id));
+  expect(bare).toEqual([]);
   // Settings without a cartoon keep their plain control.
-  await expect(row('ctl-maxHoverSubstrands').locator('svg.glyph')).toHaveCount(0);
+  await expect(row('ctl-source_order').locator('svg.glyph')).toHaveCount(0);
 });
 
 test('numeric settings are sliders whose numbers can be typed, past the slider unless bounded', async ({ page }) => {
