@@ -41,7 +41,7 @@
     traceCounts: true,
     tracePercents: false,
     gatherInNodes: false,
-    tileInNodes: true,
+    tileInNodes: false,
     substrands: false
   };
 
@@ -590,7 +590,7 @@
           help: 'Traced pathways close up into one contiguous bundle along the top or bottom of each node they share, fanning back out to their strands at the node edges.',
           showIf: () => !!state.paths && state.style.tracePaths },
         { key: 'tileInNodes', target: 'style', type: 'checkbox', label: 'No overlaps in nodes',
-          help: 'Where traced substrands that keep their order would overlap inside a node, cross that node on one shared curve (they thin a little on steep stretches). Off: every substrand keeps its full width and may overlap its neighbours.',
+          help: 'Where traced substrands that keep their order would overlap inside a node, cross that node on one shared curve, so they stay side by side but thin a little on steep stretches. Off (default): every substrand keeps its full width; overlaps show through the semi-transparent traces.',
           showIf: () => !!state.paths && state.style.tracePaths },
         { key: 'substrands', target: 'style', type: 'checkbox', label: 'Substrand lines',
           help: 'Thin lines dividing each strand into its pathways, or into single items when the data has item ids.',
@@ -1338,6 +1338,9 @@
     const slots = !target.single && state.style.gatherInNodes && units.length > 1 && units.every(([, mi]) => mi < 0)
       ? P.gatherSlots(layout, traces.subs, units.map(([pi]) => pi)) : null;
     const tiled = state.style.tileInNodes ? P.tiledNodes(layout, traces.subs, units, { slots }) : null;
+    // Traces are as see-through as the strands (the Opacity setting), so where substrands overlap
+    // both show. Each trace is one group, so its fill, outline and widening composite once.
+    const alpha = Math.min(Math.max(Number(state.style.opacity) || 1, 0.05), 1);
     let defs = '';
     let body = '';
     const annotations = [];
@@ -1349,17 +1352,19 @@
       const x1 = Math.max(...xs);
       const at = (x) => (x1 > x0 ? Math.min(Math.max((x - x0) / (x1 - x0), 0), 1) : 0);
       const stops = R.traceStops(layout, colors, state.style, t.flows).sort((a, b) => a[0] - b[0]);
-      const fill = stops.map(([x, c]) => stopTag(at(x), C.paint(C.flatten(c, colors.flatBg)).color, 1)).join('');
-      const edge = stops.map(([x, c]) => stopTag(at(x), '#111827', (0.45 * Math.min(1, 2 * c.a)).toFixed(3))).join('');
+      // Colors relative to the group's opacity: full strength where the strands are, clear where
+      // node bodies fade out.
+      const fill = stops.map(([x, c]) => stopTag(at(x), C.paint(C.opaque(c)).color, Math.min(1, c.a / alpha).toFixed(3))).join('');
+      const edge = stops.map(([x, c]) => stopTag(at(x), '#111827', Math.min(1, (0.45 * Math.min(1, 2 * c.a)) / alpha).toFixed(3))).join('');
       const grad = (id, tags) => `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${sx(x0)}" y1="0" x2="${sx(x1)}" y2="0">${tags}</linearGradient>`;
       defs += grad(`trace${n}`, fill) + grad(`trace-edge${n}`, edge);
       if ((target.single || mi >= 0) && t.thickness < MIN_SINGLE_PX) {
-        body += `<path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})" stroke="url(#trace${n})" ` +
-          `stroke-width="${(MIN_SINGLE_PX - t.thickness).toFixed(2)}" stroke-linejoin="round"/>`;
+        body += `<g class="trace-group" opacity="${alpha}"><path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})" stroke="url(#trace${n})" ` +
+          `stroke-width="${(MIN_SINGLE_PX - t.thickness).toFixed(2)}" stroke-linejoin="round"/></g>`;
         return;
       }
-      body += `<path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})"/>` +
-        `<path class="trace-edge" d="${line(t.upper)}${line(t.lower)}" fill="none" stroke="url(#trace-edge${n})" stroke-width="0.6"/>`;
+      body += `<g class="trace-group" opacity="${alpha}"><path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})"/>` +
+        `<path class="trace-edge" d="${line(t.upper)}${line(t.lower)}" fill="none" stroke="url(#trace-edge${n})" stroke-width="0.6"/></g>`;
     });
     return { paths: `<defs>${defs}</defs>${body}`, labels: traceLabelMarkup(annotations) };
   }

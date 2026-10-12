@@ -1282,9 +1282,9 @@ for (const label of ['Remission', 'Progression']) {
   });
 }
 
-test('"No overlaps in nodes" is on by default and can be switched off', async ({ page }) => {
+test('"No overlaps in nodes" is off by default and can be switched on; traces are as see-through as strands', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
-  expect(await page.evaluate(() => window.SankeyApp.state.style.tileInNodes)).toBe(true);
+  expect(await page.evaluate(() => window.SankeyApp.state.style.tileInNodes)).toBe(false);
   const box = page.locator('#ctl-tileInNodes');
   await expect(box).toBeAttached();
   for (const on of [true, false]) {
@@ -1292,6 +1292,8 @@ test('"No overlaps in nodes" is on by default and can be switched off', async ({
     const node = await nodeAt(page, 'Remission');
     await page.mouse.move(node.x, node.y);
     expect(await page.locator('#plot .trace').count()).toBeGreaterThan(1);
+    const opacity = await page.locator('#plot .trace-group').first().getAttribute('opacity');
+    expect(Number(opacity)).toBeCloseTo(await page.evaluate(() => window.SankeyApp.state.style.opacity), 6);
     await page.mouse.move(5, 5);
   }
 });
