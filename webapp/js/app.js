@@ -248,7 +248,7 @@
 
   function computeLayout(data, view) {
     for (let pass = 0; pass <= data.matrices.length * 2; pass++) {
-      try { return L.computeLayout(model(data), viewFor(view), { measure: measure(data) }); }
+      try { return R.liftLabels(L.computeLayout(model(data), viewFor(view), { measure: measure(data) }), data.style); }
       catch (err) {
         // Imported tables spread later columns when a strand needs more run. Never during a drag:
         // the drag must stop at a drawable position instead of growing the canvas frame by frame.

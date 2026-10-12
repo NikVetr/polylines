@@ -1434,6 +1434,33 @@ test('overlapping traces add a shade, strands show behind nodes, and outlines si
   expect(await page.locator('#plot .trace-overlap > g').count()).toBe(await page.locator('#plot .trace').count());
 });
 
+test('labels above nodes keep clear of their own strands', async ({ page }) => {
+  await page.evaluate((text) => {
+    const T = window.SK.transform;
+    window.SankeyApp.applyImport(T.build(T.parseTable(text), { format: 'wide', id: 'participant_id', columns: ['activity', 'training', 'suspension', 'sharing'], weight: null, missing: 'drop' }, { order: 'appearance' }), { labels: 'above' });
+  }, tightTable());
+  const crossed = await page.evaluate(() => {
+    const app = window.SankeyApp, L = app.layout, R = window.SK.render, m = R.makeMeasure(app.state.style);
+    const out = [];
+    L.nodes.forEach((n) => {
+      const size = app.state.style.fontSize * n.cex;
+      const pos = R.labelPlacement(n, app.state.style, size);
+      const half = m(n.label, n.cex, n.font).width / 2;
+      n.inFlows.concat(n.outFlows).forEach((k) => {
+        const f = L.flows[k];
+        for (let i = 0; i <= 20; i++) {
+          const x = pos.X - half + (2 * half * i) / 20;
+          if (x <= Math.min(f.startX, f.endX) || x >= Math.max(f.startX, f.endX)) continue;
+          const lo = window.SK.layout.pointAtX(f.lower, x)[1], up = window.SK.layout.pointAtX(f.upper, x)[1];
+          if (Math.min(lo, up) < pos.Y + 0.4 * size && Math.max(lo, up) > pos.Y - 0.4 * size) out.push(n.label);
+        }
+      });
+    });
+    return [...new Set(out)];
+  });
+  expect(crossed).toEqual([]);
+});
+
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
   await expect(page.locator('.topbar .actions > [data-export="svg"]')).toBeVisible();
   await expect(page.locator('.topbar .actions > [data-export="png"]')).toBeVisible();

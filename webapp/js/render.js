@@ -89,13 +89,57 @@
   // every node; otherwise centred in a node body, left of sources, right of sinks and above
   // flow-through nodes.
   function labelPlacement(n, style, textSize) {
-    const above = { X: n.X, Y: n.Y + Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2 + 0.8 * textSize, anchor: 'middle' };
+    const above = { X: n.X + (n.labelShift || 0), Y: n.Y + Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2 + 0.8 * textSize + (n.labelLift || 0), anchor: 'middle' };
     if (style.labelPosition === 'above') return above;
     if (n.hasLabel && n.widthPx > 0 && !n.labelOutside) return { X: n.X, Y: n.Y, anchor: 'middle' };
     const role = S.nodeRole(n);
     if (role === 'source') return { X: n.X - 7, Y: n.Y, anchor: 'end' };
     if (role === 'sink') return { X: n.X + 7, Y: n.Y, anchor: 'start' };
     return above;
+  }
+
+  // A label above its node can be wider than the node (widths are capped), so its ends overhang the
+  // faces where the node's strands curve in and out. An end node's label shifts (n.labelShift, px)
+  // to its free side, starting at the face its strands use; an interior node's label lifts
+  // (n.labelLift, px) just above any of its strands crossing it, by at most four text heights.
+  function liftLabels(layout, style) {
+    const measure = makeMeasure(style);
+    layout.nodes.forEach((n) => {
+      n.labelLift = 0;
+      n.labelShift = 0;
+      if (style.labelPosition !== 'above' || !style.labels || !n.hasLabel) return;
+      const size = style.fontSize * n.cex;
+      const half = measure(n.label, n.cex, n.font).width / 2 + 2;
+      const overhang = half - n.widthPx / 2;
+      if (!(overhang > 0)) return;
+      const role = S.nodeRole(n);
+      if (role === 'sink' || role === 'source') {
+        const dir = layout.flows[(n.inFlows.length ? n.inFlows : n.outFlows)[0]].dir || 1;
+        n.labelShift = (role === 'sink' ? dir : -dir) * overhang;
+        return;
+      }
+      const base = n.Y + Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2 + 0.3 * size;
+      const xs = Array.from({ length: 17 }, (_, i) => n.X - half + (2 * half * i) / 16);
+      let bottom = base;
+      for (let pass = 0; pass < 3; pass++) {
+        let need = bottom;
+        n.inFlows.concat(n.outFlows).forEach((k) => {
+          const f = layout.flows[k];
+          const x0 = Math.min(f.startX, f.endX);
+          const x1 = Math.max(f.startX, f.endX);
+          xs.forEach((x) => {
+            if (x <= x0 || x >= x1) return;
+            const lo = SK.layout.pointAtX(f.lower, x)[1];
+            const up = SK.layout.pointAtX(f.upper, x)[1];
+            if (Math.min(lo, up) < bottom + size && Math.max(lo, up) > bottom) need = Math.max(need, Math.max(lo, up) + 2);
+          });
+        });
+        if (need <= bottom) break;
+        bottom = need;
+      }
+      n.labelLift = Math.min(bottom - base, 4 * size);
+    });
+    return layout;
   }
 
   // One label color, or a darker shade of each node's color.
@@ -488,6 +532,6 @@
     };
   }
 
-  SK.render = { render, resolveColors, makeMeasure, traceStops, labelPlacement, labelColor, FONT_FAMILY };
+  SK.render = { render, resolveColors, makeMeasure, traceStops, labelPlacement, liftLabels, labelColor, FONT_FAMILY };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);
