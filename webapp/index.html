@@ -31,6 +31,9 @@
         <button id="fit" class="btn" title="Fit the view to the content (F)">Fit view</button>
         <button id="auto-layout" class="btn" title="Generate node locations from the matrices, spaced as on import (replaces moved positions; Ctrl/⌘+Z undoes)">Auto-layout</button>
         <button id="align" class="btn" title="Line up the columns: one x per column, top and bottom nodes on shared lines, even gaps">Align</button>
+        <button id="center-columns" class="btn icon-btn" title="Center each column's nodes on one vertical line (only the picked nodes, where two or more in a column are picked)" aria-label="Center nodes in their columns"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20"/><rect x="7" y="4" width="10" height="4" rx="1"/><rect x="4" y="10" width="16" height="4" rx="1"/><rect x="8.5" y="16" width="7" height="4" rx="1"/></svg></button>
+        <button id="distribute-columns" class="btn icon-btn" title="Spread each column's nodes evenly between its top and bottom node (only the picked nodes, where three or more in a column are picked)" aria-label="Spread nodes evenly in their columns"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16M4 21h16"/><rect x="8" y="6" width="8" height="2.5" rx="1"/><rect x="8" y="10.75" width="8" height="2.5" rx="1"/><rect x="8" y="15.5" width="8" height="2.5" rx="1"/></svg></button>
+        <button id="space-columns" class="btn icon-btn" title="Even out the gaps between columns, as Auto-layout does, keeping node heights" aria-label="Even out column gaps"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="3" height="14" rx="1"/><rect x="10.5" y="5" width="3" height="14" rx="1"/><rect x="19" y="5" width="3" height="14" rx="1"/><path d="M6.5 12h2.5m-1-1.5 1 1.5-1 1.5M15 12h2.5m-1-1.5 1 1.5-1 1.5"/></svg></button>
         <button id="merge-nodes" class="btn danger" hidden>Merge nodes</button>
       </div>
       <div class="tool-group">

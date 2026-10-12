@@ -284,13 +284,15 @@
   // a drawable position instead of moving columns frame by frame.
   function computeLayout(data, view, opts = {}) {
     const grows = !drag && data.sourceTable;
+    // Other data keeps its canvas: spreadMoves only rebalances the gaps within it.
+    const fixed = !!data.style.canvasWidth || !data.sourceTable;
     const move = (moves, key) => {
       const sx = (frame.width - 2 * MARGIN) / (view.xlim[1] - view.xlim[0]);
       moves.forEach((px, stage) => data.loc.filter(n => n.set >= stage + 2).forEach(n => { n.x += px / sx; }));
       const growth = [...moves.values()].reduce((t, px) => t + px, 0);
       if (growth > 1e-9) {
         view.xlim[1] += growth / sx;
-        if (data.style.canvasWidth) return;
+        if (fixed) return;
         frame.width += Math.ceil(growth);
         data.sourceTable[key] = frame.width;
       }
@@ -308,7 +310,7 @@
         continue;
       }
       // Lay out the moved columns once more; the last pass draws as is.
-      const moves = opts.spread && grows && pass < passes ? spreadMoves(lay, !!data.style.canvasWidth) : new Map();
+      const moves = opts.spread && !drag && pass < passes ? spreadMoves(lay, fixed) : new Map();
       if (!moves.size) return lay;
       move(moves, 'spreadWidth');
     }
@@ -1296,6 +1298,58 @@
     state.loc.forEach((r) => { if (Number(r.set) === set) r.y = ys[Number(r.node) - 1]; });
   }
 
+  const nodeHeight = (n) => Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0);
+  // Smallest gap (plot px) left between stacked nodes, room for a label above the lower one.
+  const stackGap = () => (state.style.labels && state.style.labelPosition === 'above'
+    ? state.style.fontSize * 1.5 + FILL_BAR.height + FILL_BAR.gap + 4 : 8);
+  // Laid-out nodes per column, each from top to bottom.
+  function columnsOf(nodes) {
+    const columns = new Map();
+    nodes.forEach((n) => columns.set(n.set, (columns.get(n.set) || []).concat(n)));
+    return [...columns.values()].map((g) => g.sort((a, b) => b.Y - a.Y));
+  }
+  // The nodes (one column's) share one x: their mean.
+  function centerX(g) {
+    const x = round(g.reduce((t, n) => t + Number(state.loc[n.id].x), 0) / g.length);
+    g.forEach((n) => { state.loc[n.id].x = x; });
+  }
+  // The nodes (one column's, top to bottom) evenly spaced between plot heights top and bottom,
+  // which move apart about their middle when the nodes need more room.
+  function stackBetween(g, top, bottom) {
+    const used = g.reduce((t, n) => t + nodeHeight(n), 0);
+    const need = used + stackGap() * (g.length - 1);
+    if (need > top - bottom) {
+      const mid = (top + bottom) / 2;
+      top = mid + need / 2;
+      bottom = mid - need / 2;
+    }
+    const gap = g.length > 1 ? (top - bottom - used) / (g.length - 1) : 0;
+    let y = g.length > 1 ? top : (top + bottom + used) / 2;
+    g.forEach((n) => {
+      state.loc[n.id].y = round(layout.tf.y(y - nodeHeight(n) / 2));
+      y -= nodeHeight(n) + gap;
+    });
+  }
+
+  // Toolbar arrangements act on the picked nodes of each column where two or more are picked,
+  // else on every column.
+  function arrangeGroups() {
+    const picks = columnsOf(pickedNodes()).filter((g) => g.length > 1);
+    return picks.length ? picks : columnsOf(layout.nodes);
+  }
+  function centerColumns() {
+    arrangeGroups().forEach(centerX);
+    update({ commit: true });
+  }
+  // Keep each group's top and bottom nodes; the ones between move to equal gaps, in their order.
+  function distributeColumns() {
+    arrangeGroups().filter((g) => g.length > 2).forEach((g) => {
+      const end = g[g.length - 1];
+      stackBetween(g, g[0].Y + nodeHeight(g[0]) / 2, end.Y - nodeHeight(end) / 2);
+    });
+    update({ commit: true });
+  }
+
   // "Align": each column's nodes share one x; the top edges of the top nodes and the bottom edges
   // of the bottom nodes of all columns sit on two common lines (moved apart if the fullest column
   // needs more room), and the nodes in between are evenly spaced in their current order. Node
@@ -1304,31 +1358,19 @@
   function alignColumns(opts = {}) {
     if (!layout) update();
     if (!layout) return;
-    const minGap = state.style.labels && state.style.labelPosition === 'above'
-      ? state.style.fontSize * 1.5 + FILL_BAR.height + FILL_BAR.gap + 4 : 8;
     const once = () => {
-      const height = (n) => Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0);
-      const columns = new Map();
-      layout.nodes.forEach((n) => columns.set(n.set, (columns.get(n.set) || []).concat(n)));
-      let top = Math.max(...layout.nodes.map((n) => n.Y + height(n) / 2));
-      let bottom = Math.min(...layout.nodes.map((n) => n.Y - height(n) / 2));
-      const need = Math.max(...[...columns.values()].map((g) => g.reduce((t, n) => t + height(n), 0) + minGap * (g.length - 1)));
+      const columns = columnsOf(layout.nodes);
+      let top = Math.max(...layout.nodes.map((n) => n.Y + nodeHeight(n) / 2));
+      let bottom = Math.min(...layout.nodes.map((n) => n.Y - nodeHeight(n) / 2));
+      const need = Math.max(...columns.map((g) => g.reduce((t, n) => t + nodeHeight(n), 0) + stackGap() * (g.length - 1)));
       if (need > top - bottom) {
         const mid = (top + bottom) / 2;
         top = mid + need / 2;
         bottom = mid - need / 2;
       }
       columns.forEach((g) => {
-        g.sort((a, b) => b.Y - a.Y);
-        const x = round(g.reduce((t, n) => t + Number(state.loc[n.id].x), 0) / g.length);
-        const used = g.reduce((t, n) => t + height(n), 0);
-        const gap = g.length > 1 ? (top - bottom - used) / (g.length - 1) : 0;
-        let y = g.length > 1 ? top : (top + bottom + used) / 2;
-        g.forEach((n) => {
-          state.loc[n.id].x = x;
-          state.loc[n.id].y = round(layout.tf.y(y - height(n) / 2));
-          y -= height(n) + gap;
-        });
+        centerX(g);
+        stackBetween(g, top, bottom);
       });
     };
     once();
@@ -2906,12 +2948,16 @@
     $('#undo').addEventListener('click', () => restore(history.index - 1));
     $('#redo').addEventListener('click', () => restore(history.index + 1));
     $('#fit').addEventListener('click', () => update({ fit: true, commit: true }));
-    $('#align').addEventListener('click', () => {
-      try {
-        alignColumns();
-      } catch (err) {
-        showError(err.message);
-      }
+    [['#align', () => alignColumns()], ['#center-columns', centerColumns], ['#distribute-columns', distributeColumns],
+      ['#space-columns', () => update({ fit: true, commit: true, spread: true })]].forEach(([id, run]) => {
+      $(id).addEventListener('click', () => {
+        if (!layout) return;
+        try {
+          run();
+        } catch (err) {
+          showError(err.message);
+        }
+      });
     });
     // Double-click the canvas to see all of it in the panel.
     svg.addEventListener('dblclick', () => changePresentation('panel'));

@@ -1626,6 +1626,65 @@ test('toolbar groups alternate backgrounds; Auto-layout sits between Fit view an
   });
 });
 
+test('toolbar arrangements center columns, spread nodes evenly and even out column gaps', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const column = () => page.evaluate(() => {
+    const app = window.SankeyApp;
+    const h = (n) => Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0);
+    const nodes = app.layout.nodes.filter((n) => n.set === 2).sort((a, b) => b.Y - a.Y);
+    return { nodes: nodes.map((n) => ({ label: app.state.loc[n.id].label, x: app.state.loc[n.id].x, y: app.state.loc[n.id].y })),
+      gaps: nodes.slice(1).map((n, i) => (nodes[i].Y - h(nodes[i]) / 2) - (n.Y + h(n) / 2)) };
+  });
+  const edit = (changes) => page.evaluate((c) => {
+    const app = window.SankeyApp;
+    Object.entries(c).forEach(([label, d]) => { const r = app.state.loc.find((x) => x.label === label); r.x += d.x || 0; r.y += d.y || 0; });
+    app.update({ commit: true });
+  }, changes);
+  const pick = async (name) => {
+    const n = await nodeAt(page, name);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(n.x, n.y);
+    await page.keyboard.up('Shift');
+  };
+  // Picked nodes of a column center on their own mean x; without picks every column centers.
+  await edit({ Surgery: { x: 0.04 }, Chemotherapy: { x: -0.02 } });
+  await pick('Surgery');
+  await pick('Chemotherapy');
+  await page.locator('#center-columns').click();
+  let c = await column();
+  const x = (label) => c.nodes.find((n) => n.label === label).x;
+  expect(x('Surgery')).toBeCloseTo(x('Chemotherapy'), 6);
+  expect(x('Radiation')).not.toBeCloseTo(x('Surgery'), 3);
+  await page.keyboard.press('Escape');
+  await page.locator('#center-columns').click();
+  c = await column();
+  expect(new Set(c.nodes.map((n) => n.x)).size).toBe(1);
+  // Spreading keeps the top and bottom nodes and evens out the gaps between them.
+  await edit({ Radiation: { y: 0.05 } });
+  const before = await column();
+  await page.locator('#distribute-columns').click();
+  c = await column();
+  expect(c.nodes[0].y).toBeCloseTo(before.nodes[0].y, 6);
+  expect(c.nodes[c.nodes.length - 1].y).toBeCloseTo(before.nodes[before.nodes.length - 1].y, 6);
+  expect(Math.max(...c.gaps) - Math.min(...c.gaps)).toBeLessThan(1);
+  expect(Math.max(...before.gaps) - Math.min(...before.gaps)).toBeGreaterThan(5);
+  // Evening out the column gaps gives every gap's steepest strand the same slope (here the wide
+  // right gap lends run to the left one).
+  await page.evaluate(() => {
+    const app = window.SankeyApp;
+    app.state.loc.filter((r) => r.set === 3).forEach((r) => { r.x += 0.3; });
+    app.update({ commit: true });
+  });
+  await page.locator('#space-columns').click();
+  const slopes = await page.evaluate(() => {
+    const out = [];
+    window.SankeyApp.layout.flows.forEach((f) => { out[f.stage] = Math.max(out[f.stage] || 0, Math.abs(f.endY + f.endOffset - f.startY - f.startOffset) / (f.endX - f.startX)); });
+    return out;
+  });
+  expect(Math.max(...slopes) / Math.min(...slopes)).toBeLessThan(1.05);
+  await expect(page.locator('#banner')).toBeHidden();
+});
+
 test('totals can follow node labels', async ({ page }) => {
   await page.evaluate(() => {
     window.SankeyApp.loadExample('pathways');
