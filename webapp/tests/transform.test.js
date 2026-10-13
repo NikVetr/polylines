@@ -165,6 +165,43 @@ test('long table stages can be disabled and reordered before checking complete t
   assert.strictEqual(T.build(duplicateUnused, Object.assign({}, spec, { stages: ['3', '1'] })).summary.total, 3);
 });
 
+test('stage filters keep the items whose category at a stage is kept, with all their rows', () => {
+  const t = table('id,visit,status\nA,1,A\nA,2,B\nB,1,A\nB,2,C\nC,2,B\n');
+  const spec = { format: 'long', id: 'id', stage: 'visit', category: 'status' };
+  assert.deepStrictEqual(T.stageValues(t, spec, '2'), ['B', 'C']);
+  assert.strictEqual(T.stageLabel(spec, '2'), 'visit 2');
+  assert.deepStrictEqual(T.filterTable(t, {}, spec, { 2: ['B'] }).rows.map((r) => r[0]), ['A', 'A', 'C']);
+  // Items without a row at the filtered stage stay.
+  assert.deepStrictEqual(T.filterTable(t, {}, spec, { 1: ['A'] }).rows.map((r) => r[0]), ['A', 'A', 'B', 'B', 'C']);
+  assert.throws(() => T.filterTable(t, {}, spec, { 2: ['A'] }), /absent at that stage/);
+  assert.throws(() => T.filterTable(cohort, {}, cohortSpec, { TR00: ['A'] }), /need a long table/);
+  assert.throws(() => T.filterTable(t, { status: ['C'] }, spec, { 2: ['B'] }), /No rows match/);
+});
+
+test('table controls keep or drop single values and columns, and move columns', () => {
+  const C = SK.tableControls;
+  const source = C.create(T.build(cohort, cohortSpec).source);
+  const noA = C.withValue(source, 'TR00', 'A');
+  assert.deepStrictEqual(noA.filters, { TR00: ['B'] });
+  assert.deepStrictEqual(C.valuesOf(noA, 'TR00'), { values: ['A', 'B'], kept: new Set(['B']) });
+  // A single kept value hides its column, as a single-value row filter does.
+  assert.deepStrictEqual(noA.enabled, ['TR01', 'TR02']);
+  assert.deepStrictEqual(C.withValue(noA, 'TR00', 'A').filters, {});
+  assert.throws(() => C.withValue(noA, 'TR00', 'B'), /at least one value of TR00/);
+  assert.throws(() => C.withColumn(C.withColumn(source, 'TR01', false), 'TR00', false), /at least two/);
+  assert.deepStrictEqual(C.withColumn(source, 'sex', true).enabled, ['TR00', 'TR01', 'TR02', 'sex']);
+  assert.deepStrictEqual(C.withMove(source, 'sex', 0).order, ['sex', 'TR00', 'TR01', 'TR02']);
+  assert.deepStrictEqual(C.withMove(source, 'TR00', 9).order, ['TR01', 'TR02', 'sex', 'TR00']);
+  const long = C.create(T.build(table('id,visit,status\nA,1,A\nA,2,B\nB,1,A\nB,2,C\nC,1,B\nC,2,B\n'),
+    { format: 'long', id: 'id', stage: 'visit', category: 'status' }).source);
+  const noC = C.withValue(long, '2', 'C');
+  assert.deepStrictEqual(noC.stageFilters, { 2: ['B'] });
+  assert.deepStrictEqual(noC.filters, {});
+  assert.strictEqual(C.build(noC).result.summary.total, 2);
+  assert.strictEqual(C.header(noC, 400).lines.flat().map((part) => part.text).join(''), 'status at visit 2 ∈ {B}');
+  assert.strictEqual(C.columnLabel(long, '2'), 'visit 2');
+});
+
 test('subset captions wrap long values, escape SVG markup and bold column names', () => {
   const source = { filters: { 'sex & group': ['Female <1>', 'A'.repeat(140)] } };
   const header = SK.tableControls.header(source, 200);

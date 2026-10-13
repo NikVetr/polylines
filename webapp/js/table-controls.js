@@ -1,16 +1,59 @@
-/* Retained table inputs, diagram column controls, row filters and subset captions. */
+/* Retained table inputs, diagram column and value choices, row filters and subset captions. */
 (function (root) {
   'use strict';
   const SK = root.SK = root.SK || {};
   const T = SK.transform;
+  const fail = (message) => { throw new SK.layout.SankeyError(message); };
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const displayValue = (v) => v === '' ? '(blank)' : v;
 
+  // order: every diagram column (wide: source columns; long: stages), shown or not; enabled: those
+  // in the diagram; filters: kept values per source column; stageFilters (long): kept categories
+  // per stage.
   function create(input, options) {
     const source = JSON.parse(JSON.stringify(input));
     const available = T.diagramColumns(source.table, source.spec);
     const enabled = source.spec.format === 'wide' ? source.spec.columns : (source.spec.stages || available);
-    return Object.assign(source, options, { order: enabled.concat(available.filter((c) => !enabled.includes(c))), enabled: enabled.slice(), filters: {}, autoHidden: [] });
+    return Object.assign(source, options, { order: enabled.concat(available.filter((c) => !enabled.includes(c))), enabled: enabled.slice(),
+      filters: {}, stageFilters: {}, autoHidden: [] });
+  }
+
+  const columnLabel = (source, column) => (source.spec.format === 'long' ? T.stageLabel(source.spec, column) : column);
+
+  // A diagram column's values (wide: the column's; long: the categories at that stage) and those kept.
+  function valuesOf(source, column) {
+    const long = source.spec.format === 'long';
+    const values = long ? T.stageValues(source.table, source.spec, column) : T.columnValues(source.table, column);
+    const kept = (long ? source.stageFilters || {} : source.filters)[column];
+    return { values, kept: new Set(kept || values) };
+  }
+
+  // The source with one value of a diagram column dropped, or kept again.
+  function withValue(source, column, value) {
+    const { values, kept } = valuesOf(source, column);
+    if (!values.includes(value)) fail(`"${value}" is not a value of ${columnLabel(source, column)}.`);
+    const next = values.filter((v) => (v === value ? !kept.has(v) : kept.has(v)));
+    if (!next.length) fail(`Keep at least one value of ${columnLabel(source, column)}.`);
+    const key = source.spec.format === 'long' ? 'stageFilters' : 'filters';
+    const filters = Object.assign({}, source[key] || {});
+    if (next.length === values.length) delete filters[column];
+    else filters[column] = next;
+    return key === 'filters' ? withFilters(source, filters) : Object.assign({}, source, { stageFilters: filters });
+  }
+
+  function withColumn(source, column, include) {
+    if (!source.order.includes(column)) fail(`"${column}" is not a diagram column.`);
+    const enabled = include ? source.order.filter((c) => c === column || source.enabled.includes(c)) : source.enabled.filter((c) => c !== column);
+    if (enabled.length < 2) fail('Keep at least two diagram columns.');
+    return Object.assign({}, source, { enabled, autoHidden: (source.autoHidden || []).filter((c) => c !== column) });
+  }
+
+  // The source with a column moved to an index of the order without it.
+  function withMove(source, column, index) {
+    const order = source.order.filter((c) => c !== column);
+    if (order.length === source.order.length) fail(`"${column}" is not a diagram column.`);
+    order.splice(Math.max(0, Math.min(index, order.length)), 0, column);
+    return Object.assign({}, source, { order });
   }
 
   function withFilters(source, filters) {
@@ -35,7 +78,7 @@
   }
 
   function build(source) {
-    const table = T.filterTable(source.table, source.filters);
+    const table = T.filterTable(source.table, source.filters, source.spec, source.stageFilters);
     const columns = source.order.filter((c) => source.enabled.includes(c));
     const spec = Object.assign({}, source.spec, source.spec.format === 'wide' ? { columns } : { stages: columns });
     const result = T.build(table, spec, source.options);
@@ -43,7 +86,8 @@
   }
 
   function header(source, width) {
-    const conditions = source ? Object.entries(source.filters) : [];
+    const conditions = source ? Object.entries(source.filters).concat(Object.entries(source.stageFilters || {})
+      .map(([stage, kept]) => [`${source.spec.category} at ${columnLabel(source, stage)}`, kept])) : [];
     if (!conditions.length) return { height: 0, lines: [], markup: '' };
     const measure = SK.render.makeMeasure({ fontSize: 12 });
     const lines = [[]];
@@ -191,6 +235,6 @@
     });
   }
 
-  SK.tableControls = { create, withFilters, build, header, render };
+  SK.tableControls = { create, withFilters, withValue, withColumn, withMove, valuesOf, columnLabel, displayValue, esc, build, header, render };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -149,7 +149,19 @@
     return [...new Set(table.rows.map((r) => r[j]))].sort(natural);
   }
 
-  function filterTable(table, filters) {
+  // A long table's categories at one stage.
+  function stageValues(table, spec, stage) {
+    const iStage = colIndex(table, spec.stage, 'stage');
+    const iCat = colIndex(table, spec.category, 'category');
+    return [...new Set(table.rows.filter((r) => r[iStage] === stage).map((r) => r[iCat]))].sort(natural);
+  }
+
+  const stageLabel = (spec, stage) => (isNum(stage) ? `${spec.stage} ${stage}` : stage);
+
+  // Rows whose value in each filtered column is kept. Stage filters (long tables) keep the items
+  // whose category at that stage is kept: an item's other rows go with it, while items without a
+  // row at that stage stay. Both refer to the values in this table.
+  function filterTable(table, filters, spec, stageFilters) {
     const conditions = Object.entries(filters || {}).map(([name, kept]) => {
       const j = colIndex(table, name, 'filter');
       if (!Array.isArray(kept)) fail(`The filter for "${name}" needs a list of values.`);
@@ -157,7 +169,21 @@
       if (kept.some((v) => !available.has(v))) fail(`The filter for "${name}" contains a value absent from the source table.`);
       return { j, kept: new Set(kept) };
     });
-    const rows = table.rows.filter((r) => conditions.every(({ j, kept }) => kept.has(r[j])));
+    const dropped = new Set();
+    const stages = Object.entries(stageFilters || {});
+    if (stages.length && (!spec || spec.format !== 'long')) fail('Filters by stage need a long table.');
+    stages.forEach(([stage, kept]) => {
+      if (!Array.isArray(kept)) fail(`The filter for stage "${stage}" needs a list of values.`);
+      const available = new Set(stageValues(table, spec, stage));
+      if (kept.some((v) => !available.has(v))) fail(`The filter for stage "${stage}" contains a value absent at that stage.`);
+      const iId = colIndex(table, spec.id, 'item id');
+      const iStage = colIndex(table, spec.stage, 'stage');
+      const iCat = colIndex(table, spec.category, 'category');
+      const keep = new Set(kept);
+      table.rows.forEach((r) => { if (r[iStage] === stage && !keep.has(r[iCat])) dropped.add(r[iId]); });
+    });
+    const iId = dropped.size ? colIndex(table, spec.id, 'item id') : -1;
+    const rows = table.rows.filter((r) => conditions.every(({ j, kept }) => kept.has(r[j])) && !(iId >= 0 && dropped.has(r[iId])));
     if (!rows.length) fail('No rows match these filters. Keep at least one matching value.');
     return { columns: table.columns, rows };
   }
@@ -268,7 +294,7 @@
     const out = fromWide(wide, { columns: stages, id: '\u0001id', weight: w >= 0 ? '\u0001weight' : null, missing: spec.missing });
     out.rowsDropped += dropped;
     out.itemCount = items.size;
-    out.setNames = stages.map((s) => (isNum(s) ? `${spec.stage} ${s}` : s));
+    out.setNames = stages.map((s) => stageLabel(spec, s));
     out.stageNames = out.setNames.slice(0, -1).map((name, k) => `${name} → ${out.setNames[k + 1]}`);
     return out;
   }
@@ -515,7 +541,7 @@
     return result;
   }
 
-  SK.transform = { FORMATS, MISSING, parseTable, columnInfo, guess, looksLikeDataTable, build, postProcess,
-    columnValues, filterTable, diagramColumns };
+  SK.transform = { FORMATS, MISSING, isNA, parseTable, columnInfo, guess, looksLikeDataTable, build, postProcess,
+    columnValues, stageValues, stageLabel, filterTable, diagramColumns };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);
