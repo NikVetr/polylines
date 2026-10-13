@@ -219,7 +219,7 @@
   }
 
   function computeFrame(data = state) {
-    columnStrip.size(data.sourceTable);
+    columnStrip.render(data.sourceTable);
     const box = stageEl.getBoundingClientRect();
     let width = data.style.canvasWidth || Math.max(320, Math.floor(box.width));
     let minHeight = 240;
@@ -617,7 +617,6 @@
       if (!(err instanceof L.SankeyError)) console.error(err);
     }
     scalePresentation();
-    columnStrip.render(state.sourceTable);
     if (hover && !hover.single && state.paths && state.paths.length > state.style.maxHoverSubstrands) {
       hover = null;
       showHoverInfo(null);
@@ -1596,6 +1595,7 @@
       R.resolveColors(candidate, colorData(next), next.style);
     } catch (err) {
       frame = previousFrame;
+      columnStrip.render(state.sourceTable);
       throw err;
     }
     state = next;
@@ -1643,20 +1643,23 @@
     return usableName(name) ? name : `Set ${n.set} · node ${n.node}`;
   }
 
-  // Where each node column is on screen (client px), in diagram order, for the column strip.
+  // Where each node column is on screen (client px), in diagram order, for the column strip: each
+  // node's box takes in its label.
   function columnGeometry() {
     if (!layout || layout.mode !== 'layered') return null;
     const plot = svg.getBoundingClientRect();
     const k = plot.width / frame.width;
     const h = frame.height - frame.margin.top - frame.margin.bottom;
+    const labels = new Map([...svg.querySelectorAll('.node-label')].map((el) => [Number(el.dataset.node), el.getBoundingClientRect()]));
     const sets = [];
     layout.nodes.forEach((n) => {
       const cx = plot.left + (frame.margin.left + n.X) * k;
       const cy = plot.top + (frame.margin.top + h - n.Y) * k;
       const hw = Math.max(n.widthPx, 4) * k / 2;
       const hh = Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) * k / 2;
-      (sets[n.set - 1] = sets[n.set - 1] || []).push({ id: n.id, name: dataName(n), color: C.toHex(colors.node[n.id], false),
-        cx, left: cx - hw, right: cx + hw, top: cy - hh, bottom: cy + hh });
+      const label = labels.get(n.id) || { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
+      (sets[n.set - 1] = sets[n.set - 1] || []).push({ id: n.id, name: dataName(n), color: C.toHex(colors.node[n.id], false), cx,
+        left: Math.min(cx - hw, label.left), right: Math.max(cx + hw, label.right), top: Math.min(cy - hh, label.top), bottom: Math.max(cy + hh, label.bottom) });
     });
     return sets.map((nodes) => ({ nodes, cx: nodes.reduce((t, n) => t + n.cx, 0) / nodes.length }));
   }

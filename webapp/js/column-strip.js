@@ -1,7 +1,8 @@
-/* The column strip above the plot: an imported table's diagram columns as badges over their node
-   columns, each shown column's values listed beneath it, and the columns left out in a row above.
+/* The arrange strip above the plot: an imported table's diagram columns as badges over their node
+   columns, each shown column's values listed beneath it, and the columns not shown in a row above.
    Clicking a badge moves its column between the rows; dragging one sideways reorders the columns
-   (and up or down, moves it between the rows); clicking a value drops its rows or keeps them again. */
+   (and up or down, moves it between the rows); clicking a value drops its rows or keeps them again,
+   and dragging it up or down moves its node within the column. */
 (function (root) {
   'use strict';
   const SK = root.SK = root.SK || {};
@@ -13,18 +14,25 @@
 
   // hooks: change(source) applies a new source; refuse(message) explains a refused change;
   // geometry() gives the shown columns in diagram order, { cx, nodes: [{ id, name, color, cx, left,
-  // right, top, bottom }] } in client px (null without a drawing); focus(ids)
-  // marks those nodes in the plot (null clears). beam: the element drawn from a badge to its nodes.
+  // right, top, bottom }] } in client px, a node's box including its label (null without a drawing);
+  // focus(ids) marks those nodes in the plot (null clears). beam: the element drawn from a badge to
+  // its nodes.
   function create(host, beam, hooks) {
-    host.innerHTML = '<div class="strip-body"><div class="strip-out"><span class="strip-hint">Left out of the diagram</span></div>' +
-      '<div class="strip-in"></div><div class="strip-marker" hidden></div></div>' +
-      '<button type="button" class="strip-tab" aria-expanded="true"><span class="strip-tab-text">Columns</span><span class="strip-caret" aria-hidden="true">▴</span></button>';
+    host.innerHTML = '<div class="strip-body"><div class="strip-out"><span class="strip-out-label">Not shown:</span>' +
+      '<span class="strip-hint">none (click or drag a column here to hide it)</span></div>' +
+      '<div class="strip-in"><div class="strip-zones"></div></div><div class="strip-marker" hidden></div></div>' +
+      '<div class="strip-value-marker" hidden></div>' +
+      '<button type="button" class="strip-tab" aria-expanded="true"><span class="strip-tab-text">Arrange</span><span class="strip-caret" aria-hidden="true">▴</span></button>';
     const outRow = host.querySelector('.strip-out');
     const inRow = host.querySelector('.strip-in');
+    const zoneLines = host.querySelector('.strip-zones');
     const marker = host.querySelector('.strip-marker');
+    const valueMarker = host.querySelector('.strip-value-marker');
     const tab = host.querySelector('.strip-tab');
     let source = null;
     let sizedTable = null;
+    let counts = new Map();
+    let zones = [];
     let refocus = null;
     let lit = null;
     let drag = null;
@@ -34,7 +42,12 @@
 
     const badges = () => [...host.querySelectorAll('.strip-badge')];
     const badgeOf = (column) => badges().find((b) => b.dataset.stripColumn === column);
-    const shown = () => source.order.filter((c) => source.enabled.includes(c));
+    const valuesList = (column) => [...inRow.querySelectorAll('.strip-values')].find((el) => el.dataset.stripValues === column);
+    const shown = (s = source) => s.order.filter((c) => s.enabled.includes(c));
+    const local = (rect) => {
+      const box = host.getBoundingClientRect();
+      return { left: rect.left - box.left, right: rect.right - box.left, top: rect.top - box.top, bottom: rect.bottom - box.top };
+    };
 
     function apply(make) {
       let next;
@@ -44,15 +57,13 @@
         return;
       }
       if (next.order.join('\u0001') === source.order.join('\u0001') && next.enabled.join('\u0001') === source.enabled.join('\u0001') &&
-        next.filters === source.filters && next.stageFilters === source.stageFilters) return;
+        next.filters === source.filters && next.stageFilters === source.stageFilters && next.valueOrders === source.valueOrders) return;
       hooks.change(next);
     }
 
     // A value's node: by name, or for missing values the node that collects them.
     const nodeOf = (nodes, value) => nodes.find((n) => n.name === value) ||
       (SK.transform.isNA(value) ? nodes.find((n) => n.name === SK.transform.MISSING) : undefined);
-
-    const valuesList = (column) => [...inRow.querySelectorAll('.strip-values')].find((el) => el.dataset.stripValues === column);
 
     function setCollapsed(on) {
       collapsed = on;
@@ -63,20 +74,24 @@
     function showCollapsed() {
       host.classList.toggle('collapsed', collapsed);
       tab.setAttribute('aria-expanded', String(!collapsed));
-      tab.title = collapsed ? 'Show the diagram columns' : 'Hide the diagram columns';
+      tab.title = collapsed ? 'Show the diagram columns and their values' : 'Hide the diagram columns and their values';
       tab.querySelector('.strip-caret').textContent = collapsed ? '▾' : '▴';
     }
 
-    // Shown or hidden with the source, as tall as its longest value list (up to MAX_VALUE_ROWS):
-    // the plot panel's height depends on it, so this runs before the plot is fitted.
+    // Shown or hidden with the source, as tall as the longest value list of a shown column (up to
+    // MAX_VALUE_ROWS): the plot panel's height depends on it, so this runs before the plot is fitted.
     function size(next) {
       host.hidden = !next;
       if (!next) return;
       if (sizedTable !== next.table) {
         sizedTable = next.table;
-        const longest = Math.max(1, ...next.order.map((c) => TC.valuesOf(next, c).values.length));
-        host.style.setProperty('--value-rows', Math.min(MAX_VALUE_ROWS, longest));
+        counts = new Map();
       }
+      const count = (c) => {
+        if (!counts.has(c)) counts.set(c, TC.valuesOf(next, c).values.length);
+        return counts.get(c);
+      };
+      host.style.setProperty('--value-rows', Math.min(MAX_VALUE_ROWS, Math.max(1, ...shown(next).map(count))));
       showCollapsed();
     }
 
@@ -96,14 +111,16 @@
         const label = TC.columnLabel(source, c);
         const on = included.has(c);
         const count = kept.size < values.length ? `<span class="strip-kept">${kept.size}/${values.length}</span>` : '';
-        const title = on ? (locked ? `${label}: the diagram needs at least two columns; drag to reorder` : `${label}: click to leave out of the diagram, drag to reorder`)
-          : `${label}: click to bring back into the diagram, or drag it to its place`;
-        (on ? inRow : outRow).insertAdjacentHTML('beforeend', `<button type="button" class="strip-badge${on && locked ? ' locked' : ''}" data-strip-column="${esc(c)}" ` +
-          `aria-pressed="${on}" title="${esc(title)}"><span class="strip-label">${esc(label)}</span>${count}</button>`);
+        const title = on ? (locked ? `${label}: the diagram needs at least two columns; drag to reorder` : `${label}: click to hide, drag to reorder`)
+          : `${label}: click to show it again, or drag it to its place`;
+        const html = `<button type="button" class="strip-badge${on && locked ? ' locked' : ''}" data-strip-column="${esc(c)}" ` +
+          `aria-pressed="${on}" title="${esc(title)}"><span class="strip-label">${esc(label)}</span>${count}</button>`;
+        if (on) inRow.insertAdjacentHTML('beforeend', html);
+        else outRow.querySelector('.strip-hint').insertAdjacentHTML('beforebegin', html);
         if (!on) return;
         inRow.insertAdjacentHTML('beforeend', `<div class="strip-values" data-strip-values="${esc(c)}">` + values.map((v, i) =>
           `<button type="button" class="strip-value${kept.has(v) ? '' : ' off'}" data-strip-value="${esc(v)}" data-order="${i}" aria-pressed="${kept.has(v)}" ` +
-          `title="${esc(displayValue(v))}: click to ${kept.has(v) ? 'drop' : 'keep'} its rows">${esc(displayValue(v))}</button>`).join('') + '</div>');
+          `title="${esc(displayValue(v))}: click to ${kept.has(v) ? 'drop' : 'keep'} its rows, drag to move its node">${esc(displayValue(v))}</button>`).join('') + '</div>');
       });
       outRow.classList.toggle('empty', !outRow.querySelector('.strip-badge'));
       place();
@@ -114,8 +131,9 @@
       }
     }
 
-    // Shown columns sit over their node columns, each with the room to its nearer neighbour; the
-    // others sit between the shown columns around them in the order, pushed apart to stay readable.
+    // Shown badges centre on their node columns, with room up to halfway to their neighbours. Each
+    // column's values hang indented under its badge, as wide as they need: a list may use room its
+    // neighbours leave, up to the next badge. Dashed lines between the columns mark their zones.
     function place() {
       if (!source || host.hidden || collapsed) return;
       const box = host.getBoundingClientRect();
@@ -123,58 +141,40 @@
       const cols = shown();
       const geo = hooks.geometry();
       const matched = geo && geo.length === cols.length;
-      const xs = cols.map((c, k) => (matched ? geo[k].cx - box.left : (k + 0.5) * width / cols.length));
-      const sorted = xs.slice().sort((a, b) => a - b);
-      cols.forEach((c, k) => {
-        // Each column's room reaches halfway to its neighbours (or to the strip's ends).
-        const x = xs[k];
-        const i = sorted.indexOf(x);
-        const lo = i > 0 ? (sorted[i - 1] + x) / 2 + 3 : 2;
-        const hi = i < sorted.length - 1 ? (x + sorted[i + 1]) / 2 - 3 : width - 2;
-        const badge = badgeOf(c);
-        badge.style.maxWidth = `${Math.max(44, Math.min(240, 2 * Math.min(x - lo, hi - x)))}px`;
-        const left = x - badge.offsetWidth / 2;
-        badge.style.left = `${left}px`;
-        badge.dataset.x = x;
-        // The values hang indented under the badge, as wide as the widest needs, within the room.
-        const list = valuesList(c);
-        list.style.width = 'max-content';
-        const w = Math.max(44, Math.min(Math.max(list.offsetWidth, badge.offsetWidth - INDENT), hi - lo));
-        list.style.width = `${w}px`;
-        list.style.left = `${Math.max(lo, Math.min(left + INDENT, hi - w))}px`;
-        placeValues(list, matched ? geo[k] : null);
+      const items = cols.map((c, k) => ({ column: c, x: matched ? geo[k].cx - box.left : (k + 0.5) * width / cols.length,
+        geo: matched ? geo[k] : null, badge: badgeOf(c), list: valuesList(c) })).sort((a, b) => a.x - b.x);
+      items.forEach((it, i) => {
+        const lo = i > 0 ? (items[i - 1].x + it.x) / 2 + 3 : 2;
+        const hi = i < items.length - 1 ? (it.x + items[i + 1].x) / 2 - 3 : width - 2;
+        it.badge.style.maxWidth = `${Math.max(44, Math.min(240, 2 * Math.min(it.x - lo, hi - it.x)))}px`;
+        it.bw = it.badge.offsetWidth;
+        it.bl = it.x - it.bw / 2;
+        it.badge.style.left = `${it.bl}px`;
+        placeValues(it.list, it.geo);
+        // The widest value in full (unrounded: a rounded-down width cuts it short), with the list's
+        // indent and any scroll bar.
+        it.list.style.width = 'max-content';
+        it.want = Math.ceil(it.list.getBoundingClientRect().width) + 1 + (it.list.scrollHeight > it.list.clientHeight + 1 ? 10 : 0);
       });
-      // Left-out columns between the shown ones around them in the order (or the row's ends).
-      const runs = [];
-      let run = { prev: null, items: [] };
-      source.order.forEach((c) => {
-        const k = cols.indexOf(c);
-        if (k < 0) { run.items.push(c); return; }
-        run.next = xs[k];
-        runs.push(run);
-        run = { prev: xs[k], items: [] };
+      items.forEach((it, i) => {
+        const prev = items[i - 1];
+        const floor = prev ? Math.max(prev.bl + prev.bw, prev.right) + 8 : 2;
+        const ceil = i < items.length - 1 ? items[i + 1].bl - 8 : width - 2;
+        const w = Math.max(44, Math.min(Math.max(it.want, it.bw - INDENT), ceil - floor));
+        it.left = Math.max(floor, Math.min(it.bl + INDENT, ceil - w));
+        it.right = it.left + w;
+        it.list.style.width = `${w}px`;
+        it.list.style.left = `${it.left}px`;
       });
-      run.next = null;
-      runs.push(run);
-      const out = [];
-      runs.filter((r) => r.items.length).forEach((r) => {
-        const prev = r.prev === null ? Math.min(4, r.next - 60) : r.prev;
-        const next = r.next === null ? Math.max(width - 4, r.prev + 60) : r.next;
-        r.items.forEach((c, j) => out.push({ badge: badgeOf(c), x: prev + (j + 1) * (next - prev) / (r.items.length + 1) }));
+      const bounds = [Math.max(1, Math.min(items[0].bl, items[0].left) - 5)];
+      items.slice(1).forEach((it, i) => {
+        const a = items[i];
+        bounds.push((Math.max(a.bl + a.bw, a.right) + Math.min(it.bl, it.left)) / 2);
       });
-      out.forEach((o) => { o.badge.style.maxWidth = '160px'; o.w = o.badge.offsetWidth; });
-      for (let i = 1; i < out.length; i++) {
-        const gap = out[i - 1].x + out[i - 1].w / 2 + 4 - (out[i].x - out[i].w / 2);
-        if (gap > 0) out[i].x += gap;
-      }
-      for (let i = out.length - 1; i >= 0; i--) {
-        const limit = i === out.length - 1 ? width - 2 : out[i + 1].x - out[i + 1].w / 2 - 4;
-        if (out[i].x + out[i].w / 2 > limit) out[i].x = limit - out[i].w / 2;
-      }
-      out.forEach((o) => {
-        o.badge.style.left = `${o.x - o.w / 2}px`;
-        o.badge.dataset.x = o.x;
-      });
+      const last = items[items.length - 1];
+      bounds.push(Math.min(width - 1, Math.max(last.bl + last.bw, last.right) + 5));
+      zones = items.map((it, i) => ({ column: it.column, x: it.x, from: bounds[i], to: bounds[i + 1] }));
+      zoneLines.innerHTML = bounds.map((b) => `<div class="strip-zone-line" style="left:${b}px"></div>`).join('');
       if (lit) light(lit);
     }
 
@@ -185,7 +185,7 @@
       const chips = [...list.children].sort((a, b) => a.dataset.order - b.dataset.order);
       const node = new Map(chips.map((chip) => [chip, nodeOf(nodes, chip.dataset.stripValue)]));
       const ordered = chips.map((chip, i) => ({ chip, i, y: node.get(chip) ? node.get(chip).top : Infinity }))
-        .sort((a, b) => a.y - b.y || a.i - b.i).map((o) => o.chip);
+        .sort((a, b) => (a.y === b.y ? a.i - b.i : a.y - b.y)).map((o) => o.chip);
       if (ordered.some((chip, i) => chip !== list.children[i])) ordered.forEach((chip) => list.appendChild(chip));
       chips.forEach((chip) => {
         const on = chip.getAttribute('aria-pressed') === 'true';
@@ -195,27 +195,36 @@
       });
     }
 
-    // The nodes of a hovered badge (its column) or value (its node) glow under a beam from it.
+    // The nodes of a hovered badge (its column) or value (its node) glow under a beam from it, which
+    // widens to take in every node whole, labels included, from the top one down.
     function light(target) {
       lit = target;
-      const cols = shown();
-      const k = cols.indexOf(target.column);
-      const geo = hooks.geometry();
-      const column = k >= 0 && geo && geo.length === cols.length ? geo[k] : null;
-      const nodes = !column ? [] : target.value === undefined ? column.nodes : [nodeOf(column.nodes, target.value)].filter(Boolean);
+      const nodesOf = () => {
+        const cols = shown();
+        const k = cols.indexOf(target.column);
+        const geo = hooks.geometry();
+        const column = k >= 0 && geo && geo.length === cols.length ? geo[k] : null;
+        return !column ? [] : target.value === undefined ? column.nodes : [nodeOf(column.nodes, target.value)].filter(Boolean);
+      };
+      let nodes = nodesOf();
       hooks.focus(nodes.length ? nodes.map((n) => n.id) : null);
       if (!nodes.length) { beam.hidden = true; return; }
+      nodes = nodesOf(); // bold labels are wider
       const from = target.element.getBoundingClientRect();
       const frame = beam.parentElement.getBoundingClientRect();
-      const left = Math.min(...nodes.map((n) => n.left)) - 3;
-      const right = Math.max(...nodes.map((n) => n.right)) + 3;
+      const pad = 6;
+      const left = Math.min(...nodes.map((n) => n.left)) - pad;
+      const right = Math.max(...nodes.map((n) => n.right)) + pad;
       const top = host.getBoundingClientRect().bottom;
-      const bottom = Math.max(...nodes.map((n) => n.bottom)) + 4;
+      const reach = Math.max(top, Math.min(...nodes.map((n) => n.top)) - pad);
+      const bottom = Math.max(...nodes.map((n) => n.bottom)) + pad;
       if (!(bottom > top)) { beam.hidden = true; return; }
       const x0 = Math.min(from.left, left);
       const x1 = Math.max(from.right, right);
+      const r = reach - top;
       Object.assign(beam.style, { left: `${x0 - frame.left}px`, top: `${top - frame.top}px`, width: `${x1 - x0}px`, height: `${bottom - top}px`,
-        clipPath: `polygon(${from.left - x0}px 0, ${from.right - x0}px 0, ${right - x0}px 100%, ${left - x0}px 100%)` });
+        clipPath: `polygon(${from.left - x0}px 0, ${from.right - x0}px 0, ${right - x0}px ${r}px, ${right - x0}px 100%, ` +
+          `${left - x0}px 100%, ${left - x0}px ${r}px)` });
       beam.hidden = false;
     }
 
@@ -236,39 +245,66 @@
     });
     host.addEventListener('pointerleave', () => { if (!drag) unlight(); });
 
-    // Where a dragged badge would go: its index in the order without it (by the positions of the
-    // other badges) and its row.
-    function dropAt(event, column) {
-      const box = host.getBoundingClientRect();
-      const x = event.clientX - box.left;
-      const others = source.order.filter((c) => c !== column);
-      const index = others.filter((c) => Number(badgeOf(c).dataset.x) < x).length;
+    // A dragged badge goes to the row under the pointer; among the shown columns (in their zones)
+    // to the one slot between the two whose centres are either side of the pointer.
+    function slotAt(event, column) {
+      const x = event.clientX - host.getBoundingClientRect().left;
       const zone = event.clientY < inRow.getBoundingClientRect().top ? 'out' : 'in';
-      return { x, index, zone, others };
+      const others = zones.filter((z) => z.column !== column);
+      return { zone, slot: others.filter((z) => z.x < x).length, others };
+    }
+
+    function showSlot(at, column) {
+      outRow.classList.toggle('drop-target', at.zone === 'out');
+      marker.hidden = at.zone === 'out';
+      if (at.zone === 'out') return;
+      const home = zones.findIndex((z) => z.column === column);
+      // Back at its own place, the column's zone lights up; elsewhere, the line between two zones.
+      const stays = home >= 0 && home === at.slot;
+      const x = at.slot === 0 ? at.others[0].from : at.slot === at.others.length ? at.others[at.others.length - 1].to : at.others[at.slot - 1].to;
+      marker.classList.toggle('home', stays);
+      marker.style.left = `${stays ? zones[home].from : x - 1.5}px`;
+      marker.style.width = `${stays ? zones[home].to - zones[home].from : 3}px`;
+    }
+
+    function startGhost(element) {
+      const ghost = element.cloneNode(true);
+      ghost.classList.add('strip-ghost');
+      ghost.removeAttribute('data-strip-column');
+      ghost.removeAttribute('data-strip-value');
+      ghost.style.width = `${element.getBoundingClientRect().width}px`;
+      host.appendChild(ghost);
+      element.classList.add('dragging');
+      host.classList.add('dragging');
+      return ghost;
     }
 
     function moveDrag(event) {
       if (!drag.moved) {
         if (Math.hypot(event.clientX - drag.x0, event.clientY - drag.y0) < DRAG_START) return;
         drag.moved = true;
-        drag.ghost = drag.badge.cloneNode(true);
-        drag.ghost.classList.add('strip-ghost');
-        drag.ghost.removeAttribute('data-strip-column');
-        host.appendChild(drag.ghost);
-        drag.badge.classList.add('dragging');
-        host.classList.add('dragging');
+        drag.ghost = startGhost(drag.element);
       }
       const box = host.getBoundingClientRect();
+      if (drag.kind === 'value') {
+        // Values move only up and down their own list.
+        const list = drag.element.parentElement.getBoundingClientRect();
+        const y = Math.max(list.top - drag.dy - 6, Math.min(list.bottom - drag.dy + 6, event.clientY - drag.dy));
+        drag.ghost.style.left = `${drag.element.getBoundingClientRect().left - box.left}px`;
+        drag.ghost.style.top = `${y - box.top}px`;
+        const chips = [...drag.element.parentElement.children].filter((c) => c !== drag.element);
+        drag.slot = chips.filter((c) => { const r = c.getBoundingClientRect(); return r.top + r.height / 2 < event.clientY; }).length;
+        const edge = !chips.length ? list.top : drag.slot === 0 ? chips[0].getBoundingClientRect().top - 1
+          : chips[drag.slot - 1].getBoundingClientRect().bottom + 1;
+        const chip = local(drag.element.getBoundingClientRect());
+        Object.assign(valueMarker.style, { left: `${chip.left}px`, width: `${chip.right - chip.left}px`, top: `${edge - box.top - 1}px` });
+        valueMarker.hidden = false;
+        light({ column: drag.column, value: drag.element.dataset.stripValue, element: drag.ghost });
+        return;
+      }
       drag.ghost.style.left = `${event.clientX - box.left - drag.dx}px`;
       drag.ghost.style.top = `${event.clientY - box.top - drag.dy}px`;
-      const at = dropAt(event, drag.column);
-      outRow.classList.toggle('drop-target', at.zone === 'out');
-      const xs = at.others.map((c) => Number(badgeOf(c).dataset.x)).sort((a, b) => a - b);
-      const prev = at.index > 0 ? xs[at.index - 1] : xs[0] - 40;
-      const next = at.index < xs.length ? xs[at.index] : xs[xs.length - 1] + 40;
-      marker.style.left = `${(prev + next) / 2}px`;
-      marker.classList.toggle('out', at.zone === 'out');
-      marker.hidden = false;
+      showSlot(slotAt(event, drag.column), drag.column);
       if (source.enabled.includes(drag.column)) light({ column: drag.column, element: drag.ghost });
     }
 
@@ -283,25 +319,42 @@
       suppressClick = true;
       setTimeout(() => { suppressClick = false; });
       d.ghost.remove();
-      d.badge.classList.remove('dragging');
+      d.element.classList.remove('dragging');
       host.classList.remove('dragging');
       outRow.classList.remove('drop-target');
       marker.hidden = true;
+      valueMarker.hidden = true;
       unlight();
       if (event.type === 'pointercancel') return;
-      const at = dropAt(event, d.column);
-      const include = at.zone === 'in';
+      if (d.kind === 'value') {
+        const values = [...d.element.parentElement.children].filter((c) => c !== d.element).map((c) => c.dataset.stripValue);
+        values.splice(d.slot, 0, d.element.dataset.stripValue);
+        const current = [...d.element.parentElement.children].map((c) => c.dataset.stripValue);
+        if (values.join('\u0001') !== current.join('\u0001')) apply(() => TC.withValueOrder(source, d.column, values));
+        return;
+      }
+      const at = slotAt(event, d.column);
+      const on = source.enabled.includes(d.column);
+      if (at.zone === 'out') {
+        if (on) apply(() => TC.withColumn(source, d.column, false));
+        return;
+      }
+      // Just before the shown column it now precedes (after any hidden ones there), or after the last.
+      const rest = source.order.filter((c) => c !== d.column);
+      const index = at.slot < at.others.length ? rest.indexOf(at.others[at.slot].column) : rest.indexOf(at.others[at.others.length - 1].column) + 1;
       apply(() => {
-        const moved = TC.withMove(source, d.column, at.index);
-        return include === source.enabled.includes(d.column) ? moved : TC.withColumn(moved, d.column, include);
+        const moved = TC.withMove(source, d.column, index);
+        return on ? moved : TC.withColumn(moved, d.column, true);
       });
     }
 
     host.addEventListener('pointerdown', (event) => {
-      const badge = event.target.closest('.strip-badge');
-      if (!badge || event.button !== 0) return;
-      const box = badge.getBoundingClientRect();
-      drag = { column: badge.dataset.stripColumn, badge, x0: event.clientX, y0: event.clientY, dx: event.clientX - box.left, dy: event.clientY - box.top, moved: false };
+      const element = event.target.closest('.strip-badge, .strip-value');
+      if (!element || event.button !== 0) return;
+      const box = element.getBoundingClientRect();
+      const value = element.classList.contains('strip-value');
+      drag = { kind: value ? 'value' : 'column', column: value ? element.parentElement.dataset.stripValues : element.dataset.stripColumn,
+        element, x0: event.clientX, y0: event.clientY, dx: event.clientX - box.left, dy: event.clientY - box.top, moved: false };
       window.addEventListener('pointermove', moveDrag);
       window.addEventListener('pointerup', endDrag);
       window.addEventListener('pointercancel', endDrag);
@@ -328,7 +381,7 @@
       refocus = null;
     });
 
-    return { size, render, place };
+    return { render, place };
   }
 
   SK.columnStrip = { create };

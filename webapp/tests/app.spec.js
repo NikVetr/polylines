@@ -49,8 +49,8 @@ const keepOnly = async (page, column, value) => {
   await details.locator(`[data-only-value="${value}"]`).click();
 };
 
-// The column strip above the plot: a column's badge, and points to drag badges to, in the row of
-// shown columns ('in') or of those left out ('out').
+// The arrange strip above the plot: a column's badge, and points to drag badges to, in the row of
+// shown columns ('in') or of those not shown ('out').
 const badge = (page, column) => page.locator(`#column-strip .strip-badge[data-strip-column="${column}"]`);
 const stripRowY = async (page, row) => {
   const box = await page.locator(`#column-strip .strip-${row}`).boundingBox();
@@ -61,11 +61,14 @@ const betweenBadges = async (page, a, b, row) => {
   const [p, q] = [await badge(page, a).boundingBox(), await badge(page, b).boundingBox()];
   return { x: (p.x + p.width / 2 + q.x + q.width / 2) / 2, y: await stripRowY(page, row) };
 };
-const dragBadge = async (page, column, to) => {
+const holdBadge = async (page, column, to) => {
   const from = await badge(page, column).boundingBox();
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   await page.mouse.move(to.x, to.y, { steps: 6 });
+};
+const dragBadge = async (page, column, to) => {
+  await holdBadge(page, column, to);
   await page.mouse.up();
 };
 
@@ -2340,18 +2343,32 @@ test('single-value filters hide their diagram column, restore it and allow a man
   expect((await state(page)).sourceTable.filters).toEqual({ sex: ['Female'] });
 });
 
-test('strip badges reorder columns by dragging and with Alt+arrows, including columns left out', async ({ page }) => {
+test('strip badges reorder columns by dragging, with one place per gap, and with Alt+arrows', async ({ page }) => {
   await importCohortTable(page);
   await expect(page.locator('#table-controls [data-table-column]')).toHaveCount(0);
   // Badges sit over their columns, so show the whole drawing.
   await page.locator('#fit-panel').click();
+  // Dashed lines mark each shown column's zone.
+  await expect(page.locator('#column-strip .strip-zone-line')).toHaveCount(4);
+  // Sweeping a dragged badge across the strip passes one place per gap between the other columns
+  // (its own place among them lights its zone); dropped there, nothing changes.
+  const home = await badge(page, 'TR00').boundingBox();
+  await holdBadge(page, 'TR00', { x: home.x + home.width / 2 + 8, y: await stripRowY(page, 'in') });
+  const strip = await page.locator('#column-strip').boundingBox();
+  const places = new Set();
+  for (let x = strip.x + 4; x < strip.x + strip.width - 4; x += 12) {
+    await page.mouse.move(x, await stripRowY(page, 'in'));
+    places.add(await page.locator('#column-strip .strip-marker').evaluate((el) => `${el.classList.contains('home')} ${el.style.left}`));
+  }
+  await page.mouse.move(home.x + home.width / 2 + 8, await stripRowY(page, 'in'));
+  await expect(page.locator('#column-strip .strip-marker.home')).toBeVisible();
+  await page.mouse.up();
+  expect(places.size).toBe(3);
+  expect((await state(page)).setNames).toEqual(['TR00', 'TR01', 'TR02']);
   await dragBadge(page, 'TR02', await leftOfBadge(page, 'TR00'));
   expect((await state(page)).setNames).toEqual(['TR02', 'TR00', 'TR01']);
-  // A left-out column dropped in its row moves in the order and stays out.
-  await dragBadge(page, 'sex', await betweenBadges(page, 'TR02', 'TR00', 'out'));
-  expect((await state(page)).setNames).toEqual(['TR02', 'TR00', 'TR01']);
-  expect((await state(page)).sourceTable.order).toEqual(['TR02', 'sex', 'TR00', 'TR01']);
-  await badge(page, 'sex').click();
+  // A column not shown, dragged down, comes into the diagram where dropped.
+  await dragBadge(page, 'sex', await betweenBadges(page, 'TR02', 'TR00', 'in'));
   expect((await state(page)).setNames).toEqual(['TR02', 'sex', 'TR00', 'TR01']);
   await badge(page, 'sex').focus();
   await page.keyboard.press('Alt+ArrowLeft');
@@ -2359,9 +2376,13 @@ test('strip badges reorder columns by dragging and with Alt+arrows, including co
   await expect(badge(page, 'sex')).toBeFocused();
   await page.locator('#undo').click();
   expect((await state(page)).setNames).toEqual(['TR02', 'sex', 'TR00', 'TR01']);
-  // Dragged up, a shown column is left out; dragged down from there, it comes back where dropped.
+  // Dragged up, a shown column is hidden, listed left-justified after "Not shown:"; dragged down
+  // from there, it comes back where dropped.
   await dragBadge(page, 'TR01', { x: (await badge(page, 'TR01').boundingBox()).x + 10, y: await stripRowY(page, 'out') });
   expect((await state(page)).setNames).toEqual(['TR02', 'sex', 'TR00']);
+  const label = await page.locator('#column-strip .strip-out-label').boundingBox();
+  await expect(page.locator('#column-strip .strip-out-label')).toHaveText('Not shown:');
+  expect((await badge(page, 'TR01').boundingBox()).x - (label.x + label.width)).toBeLessThan(10);
   await dragBadge(page, 'TR01', await leftOfBadge(page, 'TR02'));
   expect((await state(page)).setNames).toEqual(['TR01', 'TR02', 'sex', 'TR00']);
 });
@@ -2407,15 +2428,25 @@ test('hovering a strip badge lights its column of nodes under a beam, and a valu
   await expect(page.locator('#plot .node-label.column-focus')).toHaveCount(4);
   expect(await page.locator('#plot .node-label.column-focus').first().evaluate((el) => getComputedStyle(el).fontWeight)).toBe('700');
   await expect(page.locator('#column-beam')).toBeVisible();
-  const beam = await page.locator('#column-beam').boundingBox();
-  const [surgery, palliative] = [await nodeAt(page, 'Surgery'), await nodeAt(page, 'Palliative')];
-  expect(beam.x).toBeLessThan(surgery.x);
-  expect(beam.x + beam.width).toBeGreaterThan(surgery.x);
-  expect(beam.y + beam.height).toBeGreaterThan(palliative.y);
+  // Every lit node and label lies wholly inside the beam's outline.
+  const inBeam = () => page.evaluate(() => {
+    const beam = document.querySelector('#column-beam');
+    const box = beam.getBoundingClientRect();
+    const points = beam.style.clipPath.match(/polygon\((.*)\)/)[1].split(',').map((point) => point.trim().split(/\s+/)
+      .map((v, i) => (v.endsWith('%') ? parseFloat(v) / 100 * (i ? box.height : box.width) : parseFloat(v)) + (i ? box.top : box.left)));
+    const inside = (x, y) => points.reduce((c, [xi, yi], i) => {
+      const [xj, yj] = points[(i + points.length - 1) % points.length];
+      return (yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi ? !c : c;
+    }, false);
+    return [...document.querySelectorAll('#plot .column-focus')].map((el) => el.getBoundingClientRect())
+      .every((r) => [[r.left, r.top], [r.right, r.top], [r.left, r.bottom], [r.right, r.bottom]].every(([x, y]) => inside(x, y)));
+  });
+  expect(await inBeam()).toBe(true);
   await page.locator('[data-strip-values="treatment"] [data-strip-value="Surgery"]').hover();
   await expect(page.locator('#plot .trunk.column-focus')).toHaveCount(1);
   expect(await page.locator('#plot .trunk.column-focus').getAttribute('data-node'))
     .toBe(String(await page.evaluate(() => window.SankeyApp.state.loc.findIndex((r) => r.label === 'Surgery'))));
+  expect(await inBeam()).toBe(true);
   await page.mouse.move(5, 500);
   await expect(page.locator('#plot .column-focus')).toHaveCount(0);
   await expect(page.locator('#column-beam')).toBeHidden();
@@ -2440,6 +2471,71 @@ test('clicking a strip value drops its rows and greys it out, and clicking it ag
   expect((await state(page)).sourceTable.filters).toEqual({});
   await expect(chip).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#plot .layer-subset')).toHaveCount(0);
+  // Keeping a single value leaves its column in the diagram.
+  await page.locator('[data-strip-values="response"] [data-strip-value="Stable"]').click();
+  await page.locator('[data-strip-values="response"] [data-strip-value="Progression"]').click();
+  expect((await state(page)).sourceTable.filters).toEqual({ response: ['Remission'] });
+  expect((await state(page)).setNames).toEqual(['diagnosis', 'treatment', 'response']);
+  await expect(badge(page, 'response')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('dragging a strip value up or down moves its node within the column', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const chip = (v) => page.locator(`[data-strip-values="treatment"] [data-strip-value="${v}"]`);
+  const listed = () => page.locator('[data-strip-values="treatment"] .strip-value').evaluateAll((els) => els.map((el) => el.dataset.stripValue));
+  expect(await listed()).toEqual(['Surgery', 'Radiation', 'Chemotherapy', 'Palliative']);
+  const [from, to] = [await chip('Palliative').boundingBox(), await chip('Surgery').boundingBox()];
+  await page.mouse.move(from.x + 20, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 20, to.y + 3, { steps: 8 });
+  await expect(page.locator('#column-strip .strip-value-marker')).toBeVisible();
+  await page.mouse.up();
+  const s = await state(page);
+  expect(s.sourceTable.valueOrders).toEqual({ treatment: ['Palliative', 'Surgery', 'Radiation', 'Chemotherapy'] });
+  expect(s.sourceTable.filters).toEqual({});
+  expect(s.dimnames[0].cols).toEqual(['Palliative', 'Surgery', 'Radiation', 'Chemotherapy']);
+  const fromTop = await page.evaluate(() => {
+    const app = window.SankeyApp;
+    return app.layout.nodes.filter((n) => n.set === 2).sort((a, b) => b.Y - a.Y).map((n) => app.state.loc[n.id].label);
+  });
+  expect(fromTop).toEqual(['Palliative', 'Surgery', 'Radiation', 'Chemotherapy']);
+  expect(await listed()).toEqual(fromTop);
+  await page.locator('#undo').click();
+  expect(await listed()).toEqual(['Surgery', 'Radiation', 'Chemotherapy', 'Palliative']);
+});
+
+test('strip values show in full where the columns leave room', async ({ page }) => {
+  await page.evaluate(() => {
+    const T = window.SK.transform;
+    const values = [['Sedentary', 'Light activity', 'Moderate-to-vigorous'], ['Endurance training', 'Resistance training', 'Combined program'], ['Weekly', 'Daily']];
+    const rows = Array.from({ length: 30 }, (_, i) => [`p${i}`, ...values.map((v, k) => v[(i * (k + 1) + k) % v.length])]);
+    window.SankeyApp.applyImport(T.build({ columns: ['id', 'baseline', 'program', 'frequency'], rows },
+      { format: 'wide', id: 'id', columns: ['baseline', 'program', 'frequency'] }), { labels: 'above' });
+  });
+  // Each value's text (a range spans it in full, ellipsis or not) fits inside its chip.
+  const cut = await page.locator('#column-strip .strip-value').evaluateAll((chips) => chips.filter((chip) => {
+    const range = document.createRange();
+    range.selectNodeContents(chip);
+    const cs = getComputedStyle(chip);
+    const inner = chip.getBoundingClientRect().width - ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth'].reduce((t, k) => t + parseFloat(cs[k]), 0);
+    return range.getBoundingClientRect().width > inner + 0.01;
+  }).map((chip) => chip.textContent));
+  expect(cut).toEqual([]);
+});
+
+test('the strip is as tall as the longest value list of a shown column', async ({ page }) => {
+  await page.evaluate(() => {
+    const T = window.SK.transform;
+    const rows = Array.from({ length: 10 }, (_, i) => [`p${i}`, 'abcde'[i % 5], 'xy'[i % 2], 'uv'[(i >> 1) % 2], 'mn'[(i >> 2) % 2]]);
+    window.SankeyApp.applyImport(T.build({ columns: ['id', 'five', 'b', 'c', 'd'], rows }, { format: 'wide', id: 'id', columns: ['five', 'b', 'c', 'd'] }),
+      { labels: 'above' });
+  });
+  const rows = async () => ((await page.locator('#column-strip .strip-in').boundingBox()).height - 32) / 20;
+  expect(await rows()).toBe(5);
+  const panel = (await page.locator('#stage').boundingBox()).height;
+  await badge(page, 'five').click();
+  expect(await rows()).toBe(2);
+  expect((await page.locator('#stage').boundingBox()).height).toBe(panel + 60);
 });
 
 test('a long table\'s values are kept or dropped per stage', async ({ page }) => {
@@ -2466,6 +2562,10 @@ test('the strip\'s tab hides and shows it, the choice survives a reload, and oth
   const height = async () => (await page.locator('#stage').boundingBox()).height;
   const open = await height();
   const tab = page.locator('#column-strip .strip-tab');
+  // The tab hangs at the strip's right end, beside the inspector.
+  await expect(tab).toHaveText(/Arrange/);
+  const [t, strip] = [await tab.boundingBox(), await page.locator('#column-strip').boundingBox()];
+  expect(strip.x + strip.width - (t.x + t.width)).toBeLessThan(20);
   await tab.click();
   await expect(page.locator('#column-strip .strip-body')).toBeHidden();
   await expect(tab).toHaveAttribute('aria-expanded', 'false');
