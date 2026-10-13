@@ -210,9 +210,12 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
 .file-list button:disabled { opacity: 0.3; cursor: default; }
 .button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }
 
-.stage { position: relative; overflow: auto; background: #eef0f3; }
-/* The plot panel under the arrange strip (column-strip.js): badges over the node columns in dashed
-   zones, their values below, and the columns not shown in a grey row above. */
+/* The grey padding sets the canvas off from the strip above and the settings beside it (app.js
+   panelRoom measures inside it). */
+.stage { position: relative; overflow: auto; padding: 8px 0 0 8px; background: #eef0f3; }
+/* The plot panel under the arrange strip (column-strip.js): badges in their columns' colors over
+   the node columns, in tinted zones with dashed edges, their values below, and the columns not
+   shown in a grey row above. */
 .stage-column { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .stage-column > .stage { flex: 1; min-height: 0; }
 .column-strip { --value-rows: 3; position: relative; z-index: 6; flex: none; background: var(--panel); border-bottom: 1px solid var(--line); user-select: none; }
@@ -220,16 +223,17 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
 .column-strip.collapsed .strip-body { display: none; }
 .column-strip.collapsed { border-bottom: 0; }
 .strip-body { position: relative; overflow: hidden; }
-.strip-out { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; overflow: hidden; background: #f3f4f6; border-bottom: 1px dashed #d4d9e0; }
+.strip-out { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; overflow: hidden; background: #f3f4f6; border-bottom: 1px dashed #d4d9e0; }
 .strip-out.drop-target { background: #e3e7ed; }
 .strip-out-label { flex: none; font-size: 11px; font-weight: 600; color: var(--muted); }
 .strip-hint { display: none; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .strip-out.empty .strip-hint { display: inline; }
-.strip-in { position: relative; height: calc(32px + var(--value-rows) * 20px); }
+.strip-in { position: relative; height: calc(37px + var(--value-rows) * 20px); }
+.strip-zone { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--col, transparent) 11%, transparent); }
 .strip-zone-line { position: absolute; top: 3px; bottom: 3px; border-left: 1px dashed #cdd3dc; }
 .strip-badge {
   position: absolute;
-  top: 4px;
+  top: 6px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -245,6 +249,7 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
   cursor: grab;
   touch-action: none;
 }
+.strip-badge.colored { background: var(--col); border-color: color-mix(in srgb, var(--col) 70%, #000000); color: #ffffff; }
 .strip-out .strip-badge { position: static; flex: none; background: #e5e7eb; border-color: #d1d5db; color: var(--muted); font-weight: 500; }
 .strip-badge:hover, .strip-badge:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(47, 109, 181, 0.2); outline: none; }
 .strip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -253,31 +258,34 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
 .strip-ghost { position: absolute; z-index: 10; pointer-events: none; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2); }
 .column-strip.dragging, .column-strip.dragging * { cursor: grabbing !important; }
 /* Where a dragged badge goes: the line between two zones, or its own zone when it would stay. */
-.strip-marker { position: absolute; top: 33px; bottom: 3px; border-radius: 2px; background: var(--accent); }
+.strip-marker { position: absolute; top: 36px; bottom: 3px; border-radius: 2px; background: var(--accent); }
 .strip-marker.home { background: rgba(47, 109, 181, 0.12); box-shadow: inset 0 0 0 1px rgba(47, 109, 181, 0.5); }
 .strip-marker[hidden], .strip-value-marker[hidden] { display: none; }
 .strip-value-marker { position: absolute; z-index: 9; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
-/* Values hang under their badge, indented, colored like their node; dropped ones grey out. */
-.strip-values { position: absolute; top: 30px; display: flex; flex-direction: column; gap: 2px; max-height: calc(var(--value-rows) * 20px); padding-left: 10px; overflow-y: auto; scrollbar-width: thin; }
-.strip-value {
-  flex: none;
+/* Values hang under their badge, indented, colored like their node and followed by its count;
+   dropped ones grey out. */
+.strip-values { position: absolute; top: 33px; display: flex; flex-direction: column; gap: 2px; max-height: calc(var(--value-rows) * 20px); padding-left: 10px; overflow-y: auto; scrollbar-width: thin; }
+.strip-value { display: flex; flex: none; align-items: center; gap: 5px; height: 18px; padding: 0; border: 0; background: none; font-size: 11px; text-align: left; cursor: grab; }
+.strip-chip {
+  flex: 1;
+  min-width: 0;
   height: 18px;
   padding: 0 6px;
   border: 1px solid #d1d5db;
   border-left: 4px solid var(--node, #9aa3af);
   border-radius: 4px;
   background: color-mix(in srgb, var(--node, #ffffff) 16%, #ffffff);
-  font-size: 11px;
   line-height: 16px;
-  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: grab;
 }
-.strip-value:hover, .strip-value:focus-visible { border-color: var(--accent); border-left-color: var(--node, var(--accent)); outline: none; }
-.strip-value.absent { border-left-style: dashed; color: var(--muted); }
-.strip-value.off { border-left-color: #d1d5db; background: #f3f4f6; color: #9ca3af; text-decoration: line-through; }
+.strip-count { flex: none; min-width: 2em; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; text-align: right; }
+.strip-count:empty { display: none; }
+.strip-value:hover .strip-chip, .strip-value:focus-visible .strip-chip { border-color: var(--accent); border-left-color: var(--node, var(--accent)); }
+.strip-value:focus-visible { outline: none; }
+.strip-value.absent .strip-chip { border-left-style: dashed; color: var(--muted); }
+.strip-value.off .strip-chip { border-left-color: #d1d5db; background: #f3f4f6; color: #9ca3af; text-decoration: line-through; }
 .strip-tab {
   position: absolute;
   top: 100%;
@@ -296,10 +304,10 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
   cursor: pointer;
 }
 .strip-tab:hover { color: var(--accent); }
-/* A hovered badge's beam reaches down to its nodes, which glow, with bold labels. */
+/* A hovered badge's beam reaches down to its nodes, which glow (app.js focusColumnNodes), with bold labels. */
 .column-beam { position: absolute; z-index: 4; pointer-events: none; background: linear-gradient(to bottom, rgba(47, 109, 181, 0.22), rgba(47, 109, 181, 0.05)); }
 .column-beam[hidden] { display: none; }
-#plot .trunk.column-focus, #plot.dimmed .trunk.column-focus { filter: drop-shadow(0 0 2px rgba(47, 109, 181, 0.95)) drop-shadow(0 0 6px rgba(47, 109, 181, 0.6)); }
+#plot .column-glow-shape { fill: var(--accent); filter: drop-shadow(0 0 2px rgba(47, 109, 181, 0.95)) drop-shadow(0 0 6px rgba(47, 109, 181, 0.6)); }
 #plot .node-label.column-focus { font-weight: 700; }
 #plot { display: block; background: #fff; user-select: none; touch-action: none; }
 .banners { position: sticky; top: 0; left: 0; z-index: 5; height: 0; }

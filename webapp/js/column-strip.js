@@ -10,11 +10,13 @@
   const MAX_VALUE_ROWS = 6;
   const DRAG_START = 4;
   const INDENT = 10;
+  const ZONE_GAP = 6;
   const STORE = 'polylines-strip';
 
   // hooks: change(source) applies a new source; refuse(message) explains a refused change;
-  // geometry() gives the shown columns in diagram order, { cx, nodes: [{ id, name, color, cx, left,
-  // right, top, bottom }] } in client px, a node's box including its label (null without a drawing);
+  // geometry() gives the shown columns in diagram order, { cx, color, nodes: [{ id, name, color,
+  // count, cx, left, right, top, bottom }] } in client px, a node's box including its label (null
+  // without a drawing);
   // focus(ids) marks those nodes in the plot (null clears). beam: the element drawn from a badge to
   // its nodes.
   function create(host, beam, hooks) {
@@ -120,7 +122,8 @@
         if (!on) return;
         inRow.insertAdjacentHTML('beforeend', `<div class="strip-values" data-strip-values="${esc(c)}">` + values.map((v, i) =>
           `<button type="button" class="strip-value${kept.has(v) ? '' : ' off'}" data-strip-value="${esc(v)}" data-order="${i}" aria-pressed="${kept.has(v)}" ` +
-          `title="${esc(displayValue(v))}: click to ${kept.has(v) ? 'drop' : 'keep'} its rows, drag to move its node">${esc(displayValue(v))}</button>`).join('') + '</div>');
+          `title="${esc(displayValue(v))}: click to ${kept.has(v) ? 'drop' : 'keep'} its rows, drag to move its node">` +
+          `<span class="strip-chip">${esc(displayValue(v))}</span><span class="strip-count"></span></button>`).join('') + '</div>');
       });
       outRow.classList.toggle('empty', !outRow.querySelector('.strip-badge'));
       place();
@@ -131,9 +134,11 @@
       }
     }
 
-    // Shown badges centre on their node columns, with room up to halfway to their neighbours. Each
-    // column's values hang indented under its badge, as wide as they need: a list may use room its
-    // neighbours leave, up to the next badge. Dashed lines between the columns mark their zones.
+    // Shown badges centre on their node columns, with room up to halfway to their neighbours, in
+    // their columns' colors. Each column's values hang indented under its badge, as wide as they
+    // need: a list may use room its neighbours leave, up to the next badge. Each column's zone is
+    // tinted with its color, with white and a dashed line between zones. A column off the strip's
+    // ends takes its values and zone with it.
     function place() {
       if (!source || host.hidden || collapsed) return;
       const box = host.getBoundingClientRect();
@@ -150,6 +155,8 @@
         it.bw = it.badge.offsetWidth;
         it.bl = it.x - it.bw / 2;
         it.badge.style.left = `${it.bl}px`;
+        it.badge.classList.toggle('colored', !!it.geo);
+        if (it.geo) it.badge.style.setProperty('--col', it.geo.color);
         placeValues(it.list, it.geo);
         // The widest value in full (unrounded: a rounded-down width cuts it short), with the list's
         // indent and any scroll bar.
@@ -158,23 +165,26 @@
       });
       items.forEach((it, i) => {
         const prev = items[i - 1];
-        const floor = prev ? Math.max(prev.bl + prev.bw, prev.right) + 8 : 2;
-        const ceil = i < items.length - 1 ? items[i + 1].bl - 8 : width - 2;
-        const w = Math.max(44, Math.min(Math.max(it.want, it.bw - INDENT), ceil - floor));
+        const need = Math.max(it.want, it.bw - INDENT);
+        const floor = prev ? Math.max(prev.bl + prev.bw, prev.right) + 8 : Math.min(2, it.bl + INDENT);
+        const ceil = i < items.length - 1 ? items[i + 1].bl - 8 : Math.max(width - 2, it.bl + INDENT + need);
+        const w = Math.max(44, Math.min(need, ceil - floor));
         it.left = Math.max(floor, Math.min(it.bl + INDENT, ceil - w));
         it.right = it.left + w;
         it.list.style.width = `${w}px`;
         it.list.style.left = `${it.left}px`;
       });
-      const bounds = [Math.max(1, Math.min(items[0].bl, items[0].left) - 5)];
+      const bounds = [Math.min(items[0].bl, items[0].left) - 5];
       items.slice(1).forEach((it, i) => {
         const a = items[i];
         bounds.push((Math.max(a.bl + a.bw, a.right) + Math.min(it.bl, it.left)) / 2);
       });
       const last = items[items.length - 1];
-      bounds.push(Math.min(width - 1, Math.max(last.bl + last.bw, last.right) + 5));
+      bounds.push(Math.max(last.bl + last.bw, last.right) + 5);
       zones = items.map((it, i) => ({ column: it.column, x: it.x, from: bounds[i], to: bounds[i + 1] }));
-      zoneLines.innerHTML = bounds.map((b) => `<div class="strip-zone-line" style="left:${b}px"></div>`).join('');
+      zoneLines.innerHTML = items.map((it, i) => `<div class="strip-zone" style="left:${bounds[i] + ZONE_GAP / 2}px;width:${bounds[i + 1] - bounds[i] - ZONE_GAP}px` +
+        `${it.geo ? `;--col:${it.geo.color}` : ''}"></div>`).join('') +
+        bounds.map((b) => `<div class="strip-zone-line" style="left:${b}px"></div>`).join('');
       if (lit) light(lit);
     }
 
@@ -189,9 +199,11 @@
       if (ordered.some((chip, i) => chip !== list.children[i])) ordered.forEach((chip) => list.appendChild(chip));
       chips.forEach((chip) => {
         const on = chip.getAttribute('aria-pressed') === 'true';
-        chip.classList.toggle('absent', on && !node.get(chip));
-        if (on && node.get(chip)) chip.style.setProperty('--node', node.get(chip).color);
+        const n = on ? node.get(chip) : null;
+        chip.classList.toggle('absent', on && !n);
+        if (n) chip.style.setProperty('--node', n.color);
         else chip.style.removeProperty('--node');
+        chip.querySelector('.strip-count').textContent = n ? n.count : '';
       });
     }
 

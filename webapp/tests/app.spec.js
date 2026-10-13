@@ -2401,12 +2401,16 @@ test('the column strip puts a badge over each node column, with its values below
       const b = document.querySelector(`.strip-badge[data-strip-column="${c}"]`).getBoundingClientRect();
       const chips = [...document.querySelector(`[data-strip-values="${c}"]`).children];
       return { off: Math.abs(b.left + b.width / 2 - cx), chips: chips.map((el) => el.dataset.stripValue),
-        colored: chips.filter((el) => el.style.getPropertyValue('--node')).length, nodes: nodes.map((n) => app.state.loc[n.id].label) };
+        colored: chips.filter((el) => el.style.getPropertyValue('--node')).length, nodes: nodes.map((n) => app.state.loc[n.id].label),
+        counts: chips.map((el) => el.querySelector('.strip-count').textContent),
+        totals: nodes.map((n) => Math.max(n.inValue, n.outValue).toLocaleString()) };
     });
   });
   const check = async () => {
     const cols = await columns();
     expect(cols.map((c) => c.chips)).toEqual(cols.map((c) => c.nodes));
+    // Each value is followed by its node's count.
+    expect(cols.map((c) => c.counts)).toEqual(cols.map((c) => c.totals));
     cols.forEach((c) => {
       expect(c.off).toBeLessThan(1);
       expect(c.colored).toBe(c.chips.length);
@@ -2419,6 +2423,61 @@ test('the column strip puts a badge over each node column, with its values below
   await check();
   await page.locator('#stage').evaluate((el) => { el.scrollLeft = 120; });
   await expect.poll(async () => Math.max(...(await columns()).map((c) => c.off))).toBeLessThan(1);
+});
+
+test('strip badges and zones take their columns\' colors, and grey gaps set the canvas off', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const colors = await page.evaluate(() => [...document.querySelectorAll('#column-strip .strip-in .strip-badge')].map((b) => ({
+    badge: b.style.getPropertyValue('--col'), background: getComputedStyle(b).backgroundColor, colored: b.classList.contains('colored') })));
+  const zones = await page.locator('#column-strip .strip-zone').evaluateAll((els) => els.map((el) => el.style.getPropertyValue('--col')));
+  expect(colors.every((c) => c.colored && /^#[0-9A-F]{6}$/.test(c.badge))).toBe(true);
+  expect(new Set(colors.map((c) => c.badge)).size).toBe(3);
+  expect(zones).toEqual(colors.map((c) => c.badge));
+  // The badge is filled with its column's color.
+  const rgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
+  expect(colors.map((c) => c.background)).toEqual(colors.map((c) => rgb(c.badge)));
+  // White text, on a color dark enough for it (contrast above 3).
+  const contrast = await page.evaluate((hexes) => hexes.map((hex) => 1.05 / (window.SK.color.luminance(window.SK.color.parse(hex)) + 0.05)), colors.map((c) => c.badge));
+  expect(contrast.every((c) => c > 3)).toBe(true);
+  expect(await page.locator('#column-strip .strip-in .strip-badge').evaluateAll((els) => [...new Set(els.map((el) => getComputedStyle(el).color))])).toEqual(['rgb(255, 255, 255)']);
+  // White space between neighbouring zones.
+  const spans = await page.locator('#column-strip .strip-zone').evaluateAll((els) => els.map((el) => el.getBoundingClientRect()).map((r) => [r.left, r.right]));
+  spans.slice(1).forEach(([left], i) => expect(left - spans[i][1]).toBeGreaterThanOrEqual(5));
+  const [strip, stage, plot] = [await page.locator('#column-strip').boundingBox(), await page.locator('#stage').boundingBox(), await page.locator('#plot').boundingBox()];
+  expect(plot.y - (strip.y + strip.height)).toBeGreaterThanOrEqual(6);
+  expect(plot.x - stage.x).toBeGreaterThanOrEqual(6);
+  // The canvas still fills the rest of the panel without scrolling.
+  expect(await page.locator('#stage').evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)).toBe(true);
+});
+
+test('a column scrolled off the strip takes its values and zone with it', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  for (let i = 0; i < 3; i++) await page.locator('#zoom-in').click();
+  await page.locator('#stage').evaluate((el) => { el.scrollLeft = 420; });
+  const strip = await page.locator('#column-strip').boundingBox();
+  await expect.poll(async () => (await badge(page, 'diagnosis').boundingBox()).x + (await badge(page, 'diagnosis').boundingBox()).width).toBeLessThan(strip.x);
+  const list = await page.locator('[data-strip-values="diagnosis"]').boundingBox();
+  expect(list.x + list.width).toBeLessThan(strip.x);
+  await expect(badge(page, 'treatment')).toBeInViewport();
+});
+
+test('lit nodes glow as one shape each, with no seam between an end node\'s parts', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  await badge(page, 'diagnosis').hover();
+  // End nodes are drawn in two parts; one masked copy of all of them carries the glow.
+  const glow = await page.evaluate(() => {
+    const trunks = [...document.querySelectorAll('#plot .trunk.column-focus')];
+    const shape = document.querySelector('#plot .column-glow .column-glow-shape');
+    return { trunks: trunks.length, nodes: new Set(trunks.map((el) => el.dataset.node)).size,
+      filters: [...new Set(trunks.map((el) => getComputedStyle(el).filter))],
+      shape: shape && trunks.every((el) => shape.getAttribute('d').includes(el.getAttribute('d'))),
+      shadow: shape && getComputedStyle(shape).filter.includes('drop-shadow'),
+      masked: !!document.querySelector('#plot .column-glow[mask]') };
+  });
+  expect(glow.trunks).toBeGreaterThan(glow.nodes);
+  expect(glow).toMatchObject({ nodes: 4, filters: ['none'], shape: true, shadow: true, masked: true });
+  await page.mouse.move(5, 500);
+  await expect(page.locator('#plot .column-glow')).toHaveCount(0);
 });
 
 test('hovering a strip badge lights its column of nodes under a beam, and a value its node', async ({ page }) => {
@@ -2513,7 +2572,7 @@ test('strip values show in full where the columns leave room', async ({ page }) 
       { format: 'wide', id: 'id', columns: ['baseline', 'program', 'frequency'] }), { labels: 'above' });
   });
   // Each value's text (a range spans it in full, ellipsis or not) fits inside its chip.
-  const cut = await page.locator('#column-strip .strip-value').evaluateAll((chips) => chips.filter((chip) => {
+  const cut = await page.locator('#column-strip .strip-chip').evaluateAll((chips) => chips.filter((chip) => {
     const range = document.createRange();
     range.selectNodeContents(chip);
     const cs = getComputedStyle(chip);
@@ -2530,7 +2589,7 @@ test('the strip is as tall as the longest value list of a shown column', async (
     window.SankeyApp.applyImport(T.build({ columns: ['id', 'five', 'b', 'c', 'd'], rows }, { format: 'wide', id: 'id', columns: ['five', 'b', 'c', 'd'] }),
       { labels: 'above' });
   });
-  const rows = async () => ((await page.locator('#column-strip .strip-in').boundingBox()).height - 32) / 20;
+  const rows = async () => ((await page.locator('#column-strip .strip-in').boundingBox()).height - 37) / 20;
   expect(await rows()).toBe(5);
   const panel = (await page.locator('#stage').boundingBox()).height;
   await badge(page, 'five').click();
@@ -2640,8 +2699,10 @@ test('panel and height fits and zoom scale the entire drawing uniformly and pers
     const box = plot.getBoundingClientRect();
     const label = plot.querySelector('.node-label').getBoundingClientRect();
     const panel = document.querySelector('#stage');
+    const cs = getComputedStyle(panel);
     return { width: box.width, height: box.height, labelWidth: label.width, labelHeight: label.height,
-      panelWidth: panel.clientWidth, panelHeight: panel.clientHeight, scrollWidth: panel.scrollWidth, scrollHeight: panel.scrollHeight };
+      panelWidth: panel.clientWidth, panelHeight: panel.clientHeight, scrollWidth: panel.scrollWidth, scrollHeight: panel.scrollHeight,
+      padding: parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) };
   });
   await page.locator('#fit-panel').click();
   const fit = await metrics();
@@ -2658,7 +2719,8 @@ test('panel and height fits and zoom scale the entire drawing uniformly and pers
   await page.locator('#fit-height').click();
   const height = await metrics();
   expect(height.height).toBeLessThanOrEqual(height.panelHeight);
-  expect(height.panelHeight - height.height).toBeLessThanOrEqual(18);
+  // The canvas fills the panel inside its grey padding, but for a scroll bar.
+  expect(height.panelHeight - height.padding - height.height).toBeLessThanOrEqual(18);
   expect(height.scrollWidth).toBeGreaterThan(height.panelWidth);
   const s = await state(page);
   expect(s.view).toEqual(snapshot.view);

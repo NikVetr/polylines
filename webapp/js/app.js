@@ -218,9 +218,18 @@
     };
   }
 
+  // The plot panel's room for the canvas: inside its padding, the grey gap that sets the canvas off
+  // from the strip above and the settings beside it.
+  function panelRoom() {
+    const box = stageEl.getBoundingClientRect();
+    const cs = getComputedStyle(stageEl);
+    return { width: box.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+      height: box.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) };
+  }
+
   function computeFrame(data = state) {
     columnStrip.render(data.sourceTable);
-    const box = stageEl.getBoundingClientRect();
+    const box = panelRoom();
     let width = data.style.canvasWidth || Math.max(320, Math.floor(box.width));
     let minHeight = 240;
     if (data.sourceTable && data.matrices.length) {
@@ -329,7 +338,7 @@
 
   function scalePresentation() {
     const { mode, zoom } = state.presentation;
-    const box = stageEl.getBoundingClientRect();
+    const box = panelRoom();
     let base = 1;
     if (mode === 'panel') base = Math.min((box.width - 1) / frame.width, (box.height - 1) / frame.height);
     if (mode === 'height') {
@@ -1651,6 +1660,7 @@
     const k = plot.width / frame.width;
     const h = frame.height - frame.margin.top - frame.margin.bottom;
     const labels = new Map([...svg.querySelectorAll('.node-label')].map((el) => [Number(el.dataset.node), el.getBoundingClientRect()]));
+    const white = C.parse('#FFFFFF');
     const sets = [];
     layout.nodes.forEach((n) => {
       const cx = plot.left + (frame.margin.left + n.X) * k;
@@ -1658,16 +1668,38 @@
       const hw = Math.max(n.widthPx, 4) * k / 2;
       const hh = Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) * k / 2;
       const label = labels.get(n.id) || { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
-      (sets[n.set - 1] = sets[n.set - 1] || []).push({ id: n.id, name: dataName(n), color: C.toHex(colors.node[n.id], false), cx,
+      const total = Math.max(n.inValue, n.outValue);
+      (sets[n.set - 1] = sets[n.set - 1] || []).push({ id: n.id, name: dataName(n), fill: C.flatten(colors.node[n.id], white),
+        color: C.toHex(colors.node[n.id], false), total, count: fmtNodeCount(total), cx,
         left: Math.min(cx - hw, label.left), right: Math.max(cx + hw, label.right), top: Math.min(cy - hh, label.top), bottom: Math.max(cy + hh, label.bottom) });
     });
-    return sets.map((nodes) => ({ nodes, cx: nodes.reduce((t, n) => t + n.cx, 0) / nodes.length }));
+    // A column's color: its nodes' colors (as drawn on white) weighted by their totals, darkened as
+    // far as white text on it needs (luminance 0.28: contrast above 3).
+    const black = C.parse('#000000');
+    return sets.map((nodes) => {
+      let fill = C.weighted(nodes.map((n) => n.fill), nodes.map((n) => n.total));
+      while (C.luminance(fill) > 0.28) fill = C.mix(fill, black, 0.08);
+      return { nodes, cx: nodes.reduce((t, n) => t + n.cx, 0) / nodes.length, color: C.toHex(fill, false) };
+    });
   }
 
+  // Lit nodes glow through a merged copy of their bodies, masked to the halo outside them: a node
+  // drawn in parts (an end node's body and merge band) glows as one, with no seams between its
+  // parts, and nothing shows through its translucent fills.
   function focusColumnNodes(ids) {
     svg.querySelectorAll('.column-focus').forEach((el) => el.classList.remove('column-focus'));
-    (ids || []).forEach((id) => svg.querySelectorAll(`.trunk[data-node="${id}"], .node-label[data-node="${id}"]`)
-      .forEach((el) => el.classList.add('column-focus')));
+    svg.querySelectorAll('.column-glow').forEach((el) => el.remove());
+    if (!ids) return;
+    const trunks = ids.flatMap((id) => [...svg.querySelectorAll(`.trunk[data-node="${id}"]`)]);
+    ids.forEach((id) => svg.querySelectorAll(`.node-label[data-node="${id}"]`).forEach((el) => el.classList.add('column-focus')));
+    trunks.forEach((el) => el.classList.add('column-focus'));
+    const layer = svg.querySelector('.layer-trunks');
+    if (!layer || !trunks.length) return;
+    const shapes = trunks.map((el) => el.getAttribute('d')).join(' ');
+    const box = `x="0" y="0" width="${frame.width}" height="${frame.height}"`;
+    layer.insertAdjacentHTML('beforebegin', `<defs class="column-glow"><mask id="column-glow-mask" maskUnits="userSpaceOnUse" ${box}>` +
+      `<rect ${box} fill="white"/><path d="${shapes}" fill="black"/></mask></defs>` +
+      `<g class="column-glow" pointer-events="none" mask="url(#column-glow-mask)"><path class="column-glow-shape" d="${shapes}"/></g>`);
   }
 
   function targetOf(event) {
