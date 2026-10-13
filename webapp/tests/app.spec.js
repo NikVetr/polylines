@@ -57,9 +57,11 @@ const stripRowY = async (page, row) => {
   return row === 'out' ? box.y + box.height / 2 : box.y + 14;
 };
 const leftOfBadge = async (page, column, row = 'in') => ({ x: (await badge(page, column).boundingBox()).x - 6, y: await stripRowY(page, row) });
+// The middle of the white gap between two shown columns' zones.
 const betweenBadges = async (page, a, b, row) => {
-  const [p, q] = [await badge(page, a).boundingBox(), await badge(page, b).boundingBox()];
-  return { x: (p.x + p.width / 2 + q.x + q.width / 2) / 2, y: await stripRowY(page, row) };
+  const zone = (c) => page.locator(`#column-strip .strip-zone[data-strip-zone="${c}"]`).boundingBox();
+  const [p, q] = [await zone(a), await zone(b)];
+  return { x: (p.x + p.width + q.x) / 2, y: await stripRowY(page, row) };
 };
 const holdBadge = async (page, column, to) => {
   const from = await badge(page, column).boundingBox();
@@ -2348,8 +2350,8 @@ test('strip badges reorder columns by dragging, with one place per gap, and with
   await expect(page.locator('#table-controls [data-table-column]')).toHaveCount(0);
   // Badges sit over their columns, so show the whole drawing.
   await page.locator('#fit-panel').click();
-  // Dashed lines mark each shown column's zone.
-  await expect(page.locator('#column-strip .strip-zone-line')).toHaveCount(4);
+  // Each shown column has a zone.
+  await expect(page.locator('#column-strip .strip-zone')).toHaveCount(3);
   // Sweeping a dragged badge across the strip passes one place per gap between the other columns
   // (its own place among them lights its zone); dropped there, nothing changes.
   const home = await badge(page, 'TR00').boundingBox();
@@ -2387,7 +2389,7 @@ test('strip badges reorder columns by dragging, with one place per gap, and with
   expect((await state(page)).setNames).toEqual(['TR01', 'TR02', 'sex', 'TR00']);
 });
 
-test('the column strip puts a badge over each node column, with its values below in node order and color', async ({ page }) => {
+test('the arrange strip gives each node column a zone, with its badge and values left-justified in it', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const columns = () => page.evaluate(() => {
     const app = window.SankeyApp;
@@ -2395,12 +2397,22 @@ test('the column strip puts a badge over each node column, with its values below
     const box = plot.getBoundingClientRect();
     const k = box.width / Number(plot.getAttribute('width'));
     const source = app.state.sourceTable;
-    return source.order.filter((c) => source.enabled.includes(c)).map((c, s) => {
+    const shown = source.order.filter((c) => source.enabled.includes(c));
+    const centres = shown.map((c, s) => {
+      const nodes = app.layout.nodes.filter((n) => n.set === s + 1);
+      return box.left + (18 + nodes.reduce((t, n) => t + n.X, 0) / nodes.length) * k;
+    });
+    return shown.map((c, s) => {
       const nodes = app.layout.nodes.filter((n) => n.set === s + 1).sort((a, b) => b.Y - a.Y);
-      const cx = box.left + (18 + nodes.reduce((t, n) => t + n.X, 0) / nodes.length) * k;
+      const zone = document.querySelector(`.strip-zone[data-strip-zone="${c}"]`).getBoundingClientRect();
       const b = document.querySelector(`.strip-badge[data-strip-column="${c}"]`).getBoundingClientRect();
+      const list = document.querySelector(`[data-strip-values="${c}"]`).getBoundingClientRect();
       const chips = [...document.querySelector(`[data-strip-values="${c}"]`).children];
-      return { off: Math.abs(b.left + b.width / 2 - cx), chips: chips.map((el) => el.dataset.stripValue),
+      // Zones meet (3 px of white each side) halfway between neighbouring columns' centres.
+      const ends = [s > 0 ? Math.abs(zone.left - 3 - (centres[s - 1] + centres[s]) / 2) : 0,
+        s < shown.length - 1 ? Math.abs(zone.right + 3 - (centres[s] + centres[s + 1]) / 2) : 0];
+      return { off: Math.max(...ends), inside: zone.left < centres[s] && centres[s] < zone.right,
+        badgeIn: b.left - zone.left, listIn: list.left - b.left, chips: chips.map((el) => el.dataset.stripValue),
         colored: chips.filter((el) => el.style.getPropertyValue('--node')).length, nodes: nodes.map((n) => app.state.loc[n.id].label),
         counts: chips.map((el) => el.querySelector('.strip-count').textContent),
         totals: nodes.map((n) => Math.max(n.inValue, n.outValue).toLocaleString()) };
@@ -2413,15 +2425,18 @@ test('the column strip puts a badge over each node column, with its values below
     expect(cols.map((c) => c.counts)).toEqual(cols.map((c) => c.totals));
     cols.forEach((c) => {
       expect(c.off).toBeLessThan(1);
+      expect(c.inside).toBe(true);
+      expect(c.badgeIn).toBeCloseTo(6, 0);
+      expect(c.listIn).toBeCloseTo(10, 0);
       expect(c.colored).toBe(c.chips.length);
     });
   };
   await check();
   expect((await columns()).map((c) => c.nodes[0])).toEqual(['Stage I', 'Surgery', 'Remission']);
-  // The badges follow their columns when the plot zooms or pans.
+  // The zones follow their columns when the plot zooms or pans.
   await page.locator('#zoom-in').click();
   await check();
-  await page.locator('#stage').evaluate((el) => { el.scrollLeft = 120; });
+  await page.locator('#stage').evaluate((el) => { el.scrollLeft = 60; });
   await expect.poll(async () => Math.max(...(await columns()).map((c) => c.off))).toBeLessThan(1);
 });
 
@@ -2440,9 +2455,16 @@ test('strip badges and zones take their columns\' colors, and grey gaps set the 
   const contrast = await page.evaluate((hexes) => hexes.map((hex) => 1.05 / (window.SK.color.luminance(window.SK.color.parse(hex)) + 0.05)), colors.map((c) => c.badge));
   expect(contrast.every((c) => c > 3)).toBe(true);
   expect(await page.locator('#column-strip .strip-in .strip-badge').evaluateAll((els) => [...new Set(els.map((el) => getComputedStyle(el).color))])).toEqual(['rgb(255, 255, 255)']);
-  // White space between neighbouring zones.
+  // White space between neighbouring zones, each dashed at both edges, and along the strip's foot.
   const spans = await page.locator('#column-strip .strip-zone').evaluateAll((els) => els.map((el) => el.getBoundingClientRect()).map((r) => [r.left, r.right]));
   spans.slice(1).forEach(([left], i) => expect(left - spans[i][1]).toBeGreaterThanOrEqual(5));
+  expect(await page.locator('#column-strip .strip-zone').evaluateAll((els) => [...new Set(els.map((el) => {
+    const cs = getComputedStyle(el);
+    return `${cs.borderLeftStyle} ${cs.borderRightStyle}`;
+  }))])).toEqual(['dashed dashed']);
+  const foot = await page.locator('#column-strip .strip-in').evaluate((row) => row.getBoundingClientRect().bottom -
+    Math.max(...[...row.querySelectorAll('.strip-zone')].map((el) => el.getBoundingClientRect().bottom)));
+  expect(foot).toBeGreaterThanOrEqual(5);
   const [strip, stage, plot] = [await page.locator('#column-strip').boundingBox(), await page.locator('#stage').boundingBox(), await page.locator('#plot').boundingBox()];
   expect(plot.y - (strip.y + strip.height)).toBeGreaterThanOrEqual(6);
   expect(plot.x - stage.x).toBeGreaterThanOrEqual(6);
@@ -2459,6 +2481,14 @@ test('a column scrolled off the strip takes its values and zone with it', async 
   const list = await page.locator('[data-strip-values="diagnosis"]').boundingBox();
   expect(list.x + list.width).toBeLessThan(strip.x);
   await expect(badge(page, 'treatment')).toBeInViewport();
+  // A zone partly off the left end keeps its badge and values in its visible part.
+  const zone = await page.locator('#column-strip .strip-zone[data-strip-zone="treatment"]').boundingBox();
+  await page.locator('#stage').evaluate((el, by) => { el.scrollLeft += by; }, zone.x - strip.x + 60);
+  await expect.poll(async () => (await page.locator('#column-strip .strip-zone[data-strip-zone="treatment"]').boundingBox()).x).toBeLessThan(strip.x - 40);
+  const [b, l] = [await badge(page, 'treatment').boundingBox(), await page.locator('[data-strip-values="treatment"]').boundingBox()];
+  expect(b.x).toBeGreaterThanOrEqual(strip.x);
+  expect(b.x).toBeLessThan(strip.x + 12);
+  expect(l.x - b.x).toBeCloseTo(10, 0);
 });
 
 test('lit nodes glow as one shape each, with no seam between an end node\'s parts', async ({ page }) => {
@@ -2589,7 +2619,7 @@ test('the strip is as tall as the longest value list of a shown column', async (
     window.SankeyApp.applyImport(T.build({ columns: ['id', 'five', 'b', 'c', 'd'], rows }, { format: 'wide', id: 'id', columns: ['five', 'b', 'c', 'd'] }),
       { labels: 'above' });
   });
-  const rows = async () => ((await page.locator('#column-strip .strip-in').boundingBox()).height - 37) / 20;
+  const rows = async () => ((await page.locator('#column-strip .strip-in').boundingBox()).height - 46) / 20;
   expect(await rows()).toBe(5);
   const panel = (await page.locator('#stage').boundingBox()).height;
   await badge(page, 'five').click();

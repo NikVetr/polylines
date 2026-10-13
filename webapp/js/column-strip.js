@@ -11,6 +11,7 @@
   const DRAG_START = 4;
   const INDENT = 10;
   const ZONE_GAP = 6;
+  const ZONE_PAD = 6;
   const STORE = 'polylines-strip';
 
   // hooks: change(source) applies a new source; refuse(message) explains a refused change;
@@ -134,11 +135,12 @@
       }
     }
 
-    // Shown badges centre on their node columns, with room up to halfway to their neighbours, in
-    // their columns' colors. Each column's values hang indented under its badge, as wide as they
-    // need: a list may use room its neighbours leave, up to the next badge. Each column's zone is
-    // tinted with its color, with white and a dashed line between zones. A column off the strip's
-    // ends takes its values and zone with it.
+    // Each shown column has a zone over its node column, reaching halfway to its neighbours'
+    // centres (the end zones as far outward as inward, within the strip while their column is on
+    // it), tinted with its color, dashed at both edges and set apart by white. The badge, in the
+    // column's color, sits at the zone's left with the values indented under it, as wide as they
+    // need within the zone; scrolled partly off the strip's left end, a zone keeps them in its
+    // visible part until its far edge pushes them off.
     function place() {
       if (!source || host.hidden || collapsed) return;
       const box = host.getBoundingClientRect();
@@ -148,43 +150,45 @@
       const matched = geo && geo.length === cols.length;
       const items = cols.map((c, k) => ({ column: c, x: matched ? geo[k].cx - box.left : (k + 0.5) * width / cols.length,
         geo: matched ? geo[k] : null, badge: badgeOf(c), list: valuesList(c) })).sort((a, b) => a.x - b.x);
+      const n = items.length;
+      const first = items[0];
+      const last = items[n - 1];
+      const bounds = [first.x - (n > 1 ? (items[1].x - first.x) / 2 : 80)];
+      items.slice(1).forEach((it, i) => bounds.push((items[i].x + it.x) / 2));
+      bounds.push(last.x + (n > 1 ? (last.x - items[n - 2].x) / 2 : 80));
+      if (first.x >= 0) bounds[0] = Math.max(2, bounds[0]);
+      if (last.x <= width) bounds[n] = Math.min(width - 2, bounds[n]);
+      zones = items.map((it, i) => ({ column: it.column, x: it.x, from: bounds[i], to: bounds[i + 1],
+        left: bounds[i] + ZONE_GAP / 2, right: bounds[i + 1] - ZONE_GAP / 2 }));
       items.forEach((it, i) => {
-        const lo = i > 0 ? (items[i - 1].x + it.x) / 2 + 3 : 2;
-        const hi = i < items.length - 1 ? (it.x + items[i + 1].x) / 2 - 3 : width - 2;
-        it.badge.style.maxWidth = `${Math.max(44, Math.min(240, 2 * Math.min(it.x - lo, hi - it.x)))}px`;
-        it.bw = it.badge.offsetWidth;
-        it.bl = it.x - it.bw / 2;
-        it.badge.style.left = `${it.bl}px`;
+        const { left, right } = zones[i];
+        const inner = right - left - 2 * ZONE_PAD;
+        it.badge.style.maxWidth = `${Math.max(44, inner)}px`;
         it.badge.classList.toggle('colored', !!it.geo);
         if (it.geo) it.badge.style.setProperty('--col', it.geo.color);
         placeValues(it.list, it.geo);
         // The widest value in full (unrounded: a rounded-down width cuts it short), with the list's
         // indent and any scroll bar.
         it.list.style.width = 'max-content';
-        it.want = Math.ceil(it.list.getBoundingClientRect().width) + 1 + (it.list.scrollHeight > it.list.clientHeight + 1 ? 10 : 0);
+        const want = Math.ceil(it.list.getBoundingClientRect().width) + 1 + (it.list.scrollHeight > it.list.clientHeight + 1 ? 10 : 0);
+        const listWidth = Math.max(44, Math.min(want, inner - INDENT));
+        const content = Math.max(it.badge.offsetWidth, INDENT + listWidth);
+        const x0 = Math.max(left + ZONE_PAD, Math.min(Math.max(left, 2) + ZONE_PAD, right - ZONE_PAD - content));
+        it.badge.style.left = `${x0}px`;
+        it.list.style.left = `${x0 + INDENT}px`;
+        it.list.style.width = `${listWidth}px`;
       });
+      // Kept across redraws (scrolling redraws often), and remade when the shown columns change.
+      if ([...zoneLines.children].map((el) => el.dataset.stripZone).join('\u0001') !== items.map((it) => it.column).join('\u0001')) {
+        zoneLines.innerHTML = items.map((it) => `<div class="strip-zone" data-strip-zone="${TC.esc(it.column)}"></div>`).join('');
+      }
       items.forEach((it, i) => {
-        const prev = items[i - 1];
-        const need = Math.max(it.want, it.bw - INDENT);
-        const floor = prev ? Math.max(prev.bl + prev.bw, prev.right) + 8 : Math.min(2, it.bl + INDENT);
-        const ceil = i < items.length - 1 ? items[i + 1].bl - 8 : Math.max(width - 2, it.bl + INDENT + need);
-        const w = Math.max(44, Math.min(need, ceil - floor));
-        it.left = Math.max(floor, Math.min(it.bl + INDENT, ceil - w));
-        it.right = it.left + w;
-        it.list.style.width = `${w}px`;
-        it.list.style.left = `${it.left}px`;
+        const el = zoneLines.children[i];
+        el.style.left = `${zones[i].left}px`;
+        el.style.width = `${zones[i].right - zones[i].left}px`;
+        if (it.geo) el.style.setProperty('--col', it.geo.color);
+        else el.style.removeProperty('--col');
       });
-      const bounds = [Math.min(items[0].bl, items[0].left) - 5];
-      items.slice(1).forEach((it, i) => {
-        const a = items[i];
-        bounds.push((Math.max(a.bl + a.bw, a.right) + Math.min(it.bl, it.left)) / 2);
-      });
-      const last = items[items.length - 1];
-      bounds.push(Math.max(last.bl + last.bw, last.right) + 5);
-      zones = items.map((it, i) => ({ column: it.column, x: it.x, from: bounds[i], to: bounds[i + 1] }));
-      zoneLines.innerHTML = items.map((it, i) => `<div class="strip-zone" style="left:${bounds[i] + ZONE_GAP / 2}px;width:${bounds[i + 1] - bounds[i] - ZONE_GAP}px` +
-        `${it.geo ? `;--col:${it.geo.color}` : ''}"></div>`).join('') +
-        bounds.map((b) => `<div class="strip-zone-line" style="left:${b}px"></div>`).join('');
       if (lit) light(lit);
     }
 
@@ -275,8 +279,8 @@
       const stays = home >= 0 && home === at.slot;
       const x = at.slot === 0 ? at.others[0].from : at.slot === at.others.length ? at.others[at.others.length - 1].to : at.others[at.slot - 1].to;
       marker.classList.toggle('home', stays);
-      marker.style.left = `${stays ? zones[home].from : x - 1.5}px`;
-      marker.style.width = `${stays ? zones[home].to - zones[home].from : 3}px`;
+      marker.style.left = `${stays ? zones[home].left : x - 1.5}px`;
+      marker.style.width = `${stays ? zones[home].right - zones[home].left : 3}px`;
     }
 
     function startGhost(element) {

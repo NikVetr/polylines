@@ -213,9 +213,10 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
 /* The grey padding sets the canvas off from the strip above and the settings beside it (app.js
    panelRoom measures inside it). */
 .stage { position: relative; overflow: auto; padding: 8px 0 0 8px; background: #eef0f3; }
-/* The plot panel under the arrange strip (column-strip.js): badges in their columns' colors over
-   the node columns, in tinted zones with dashed edges, their values below, and the columns not
-   shown in a grey row above. */
+/* The plot panel under the arrange strip (column-strip.js): a tinted zone with dashed edges over
+   each node column, holding its badge in the column's color and its values, and the columns not
+   shown in a grey row above. White sets the zones apart and runs along the strip's foot, where
+   the Arrange tab hangs. */
 .stage-column { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .stage-column > .stage { flex: 1; min-height: 0; }
 .column-strip { --value-rows: 3; position: relative; z-index: 6; flex: none; background: var(--panel); border-bottom: 1px solid var(--line); user-select: none; }
@@ -228,12 +229,18 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
 .strip-out-label { flex: none; font-size: 11px; font-weight: 600; color: var(--muted); }
 .strip-hint { display: none; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .strip-out.empty .strip-hint { display: inline; }
-.strip-in { position: relative; height: calc(37px + var(--value-rows) * 20px); }
-.strip-zone { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--col, transparent) 11%, transparent); }
-.strip-zone-line { position: absolute; top: 3px; bottom: 3px; border-left: 1px dashed #cdd3dc; }
+.strip-in { position: relative; height: calc(46px + var(--value-rows) * 20px); }
+.strip-zone {
+  position: absolute;
+  top: 3px;
+  bottom: 6px;
+  border-left: 1px dashed #c4cbd5;
+  border-right: 1px dashed #c4cbd5;
+  background: color-mix(in srgb, var(--col, transparent) 11%, transparent);
+}
 .strip-badge {
   position: absolute;
-  top: 6px;
+  top: 9px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -258,13 +265,13 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
 .strip-ghost { position: absolute; z-index: 10; pointer-events: none; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2); }
 .column-strip.dragging, .column-strip.dragging * { cursor: grabbing !important; }
 /* Where a dragged badge goes: the line between two zones, or its own zone when it would stay. */
-.strip-marker { position: absolute; top: 36px; bottom: 3px; border-radius: 2px; background: var(--accent); }
+.strip-marker { position: absolute; top: 36px; bottom: 6px; border-radius: 2px; background: var(--accent); }
 .strip-marker.home { background: rgba(47, 109, 181, 0.12); box-shadow: inset 0 0 0 1px rgba(47, 109, 181, 0.5); }
 .strip-marker[hidden], .strip-value-marker[hidden] { display: none; }
 .strip-value-marker { position: absolute; z-index: 9; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
 /* Values hang under their badge, indented, colored like their node and followed by its count;
    dropped ones grey out. */
-.strip-values { position: absolute; top: 33px; display: flex; flex-direction: column; gap: 2px; max-height: calc(var(--value-rows) * 20px); padding-left: 10px; overflow-y: auto; scrollbar-width: thin; }
+.strip-values { position: absolute; top: 36px; display: flex; flex-direction: column; gap: 2px; max-height: calc(var(--value-rows) * 20px); padding-left: 10px; overflow-y: auto; scrollbar-width: thin; }
 .strip-value { display: flex; flex: none; align-items: center; gap: 5px; height: 18px; padding: 0; border: 0; background: none; font-size: 11px; text-align: left; cursor: grab; }
 .strip-chip {
   flex: 1;
