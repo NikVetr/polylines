@@ -217,6 +217,8 @@
     'collision:wall': rect(6, 4, 3.5, 10, NODE, 0.8) + arrow('M12 9H18', 'M15.5 6.5 18 9 15.5 11.5') + line('M21.5 2V16', INK, 2),
     'collision:push': rect(3, 4, 3.5, 10, NODE, 0.8) + arrow('M8.5 9H12', 'M10.5 7.2 12.3 9 10.5 10.8') + rect(14, 4, 3.5, 10, NODE, 0.8) +
       arrow('M19.5 9H23', 'M21.5 7.2 23.3 9 21.5 10.8') + dashed(24.5, 4, 3.5, 10),
+    cropExports: `<rect x="1" y="1" width="28" height="16" rx="0.6" fill="#fff" stroke="${MID}" stroke-width="1.1"/>` +
+      node(8.5, 6, 6) + node(19, 6, 6) + strand('M11 9H19', BLUE, 3) + dashed(6, 4, 18, 10),
     'canvasWidth:min': canvas(9, 3, 12, 12),
     'canvasWidth:max': canvas(1, 3, 28, 12),
     'canvasHeight:min': canvas(4, 6, 22, 6),

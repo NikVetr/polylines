@@ -34,6 +34,7 @@
     labelColor: '#1F2937',
     labelCounts: true,
     canvasWidth: null,
+    cropExports: true,
     canvasHeight: null,
     collision: 'wall',
     tracePaths: true,
@@ -89,6 +90,8 @@
       stageParams: [],
       style: Object.assign({}, DEFAULT_STYLE),
       valueScale: 1,
+      // The value scale the data came with; the thickness slider shows valueScale relative to it.
+      valueScaleRef: 1,
       trustedNames: false,
       paths: null,
       pathUnit: null,
@@ -653,8 +656,9 @@
     {
       title: 'Layout',
       items: [
-        { key: 'valueScale', target: 'state', type: 'range', label: 'Value scale', min: 0, positive: true, log: true,
-          help: 'Strand thickness = value × scale, in x units. Tooltips and the inspector show raw values.' },
+        { key: 'valueScale', target: 'state', type: 'range', label: 'Strand thickness', min: 0.1, max: 10, positive: true, log: true,
+          unit: () => state.valueScaleRef,
+          help: 'Strand thickness relative to the scale the data came with (1). The value scale itself (thickness in x units per unit of value) is this times the original; tooltips and the inspector show raw values.' },
         { key: 'n', target: 'params', type: 'range', label: 'Samples per strand', min: 2, max: 400, step: 1, integer: true },
         { key: 'curvature', target: 'params', type: 'range', label: 'Curvature', min: 0, max: 1, step: 0.01, bounded: true },
         { key: 'merge_frac', target: 'params', type: 'range', label: 'Merge fraction', min: 0, max: 0.3, step: 0.005,
@@ -782,6 +786,8 @@
         { key: 'collision', target: 'style', type: 'select', label: 'Dragged node hits',
           options: [['wall', 'a wall'], ['push', 'neighbours']],
           help: 'What happens when a dragged node would leave a strand no horizontal room: it stops at a wall, or pushes its neighbours along.' },
+        { key: 'cropExports', target: 'style', type: 'checkbox', label: 'Crop exports to the drawing',
+          help: 'SVG and PNG exports keep 12 px around what is visible. Off: they show the whole canvas.' },
         { key: 'canvasWidth', target: 'style', type: 'range', label: 'Width (px)', min: 200, max: 4000, step: 10, nullable: true, placeholder: 'fit', integer: true,
           auto: () => (frame ? frame.width : 200), help: 'Canvas width; clear the number to fit the panel.' },
         { key: 'canvasHeight', target: 'style', type: 'range', label: 'Height (px)', min: 150, max: 3000, step: 10, nullable: true, placeholder: 'fit', integer: true,
@@ -793,8 +799,6 @@
   ];
 
   const controlRefs = [];
-  // A log slider (the value scale) spans this factor either way from its reference value.
-  const LOG_SPAN = 20;
 
   function currentParam(key) {
     if (routeScope === 'all') return state.params[key];
@@ -899,8 +903,9 @@
       input.addEventListener('change', () => commit(input.value.toUpperCase()));
     } else if (item.type === 'range') {
       // A slider and the number it sets, which reads as text and edits in place: typed values may
-      // pass the slider's ends unless the setting is bounded. A log slider spans LOG_SPAN times
-      // either way from a reference value; clearing a nullable setting's number makes it automatic.
+      // pass the slider's ends unless the setting is bounded. Both show the value divided by
+      // item.unit (e.g. thickness relative to the original scale); a log slider runs from min to
+      // max on a log scale. Clearing a nullable setting's number makes it automatic.
       input = document.createElement('span');
       input.className = 'range';
       input.innerHTML = '<input type="range"><input type="number" class="range-value" step="any">';
@@ -910,45 +915,42 @@
       if (item.placeholder) box.placeholder = item.placeholder;
       const lo = () => (typeof item.min === 'function' ? item.min() : item.min);
       const hi = () => (typeof item.max === 'function' ? item.max() : item.max);
-      let ref = null;
+      const unit = () => (item.unit ? item.unit() : 1);
+      // Display value at the slider's position, and the stored value for a display value.
       const fromSlider = () => {
-        if (item.log) return Number((ref * LOG_SPAN ** Number(slider.value)).toPrecision(3));
-        return item.integer ? Math.round(Number(slider.value)) : Number(slider.value);
+        const shown = item.log ? Number((10 ** Number(slider.value)).toPrecision(3)) : Number(slider.value);
+        return item.integer ? Math.round(shown) : shown;
       };
-      const show = (v) => { box.value = v === null || v === undefined ? '' : String(Number(Number(v).toPrecision(4))); };
+      const stored = (shown) => (item.unit ? Number((shown * unit()).toPrecision(6)) : shown);
+      const show = (v) => { box.value = v === null || v === undefined ? '' : String(Number((v / unit()).toPrecision(4))); };
       sync = (v) => {
-        const at = v === null || v === undefined ? (item.auto ? item.auto() : lo()) : v;
-        if (item.log) {
-          if (!(ref > 0) || Math.abs(Math.log10(at / ref)) > Math.log10(LOG_SPAN)) ref = at;
-          Object.assign(slider, { min: -1, max: 1, step: 0.01 });
-          slider.value = Math.log10(at / ref) / Math.log10(LOG_SPAN);
-        } else {
-          Object.assign(slider, { min: lo(), max: hi(), step: item.step });
-          slider.value = at;
-        }
+        const at = (v === null || v === undefined ? (item.auto ? item.auto() : lo() * unit()) : v) / unit();
+        if (item.log) Object.assign(slider, { min: Math.log10(lo()), max: Math.log10(hi()), step: 0.01, value: Math.log10(at) });
+        else Object.assign(slider, { min: lo(), max: hi(), step: item.step, value: at });
         show(v);
       };
       slider.addEventListener('input', () => {
-        const v = fromSlider();
+        const v = stored(fromSlider());
         show(v);
         setValue(item, v);
         requestRender();
       });
-      slider.addEventListener('change', () => commit(fromSlider()));
+      slider.addEventListener('change', () => commit(stored(fromSlider())));
       box.addEventListener('change', () => {
         if (box.value === '' && item.nullable) {
           commit(null);
           return;
         }
-        const v = item.integer ? Math.round(Number(box.value)) : Number(box.value);
-        const tooHigh = item.bounded && v > hi();
-        if (box.value === '' || !Number.isFinite(v) || v < lo() || tooHigh || (item.positive && !(v > 0))) {
+        const t = item.integer ? Math.round(Number(box.value)) : Number(box.value);
+        const tooLow = item.log ? false : t < lo();
+        const tooHigh = item.bounded && t > hi();
+        if (box.value === '' || !Number.isFinite(t) || tooLow || tooHigh || (item.positive && !(t > 0))) {
           showError(`${item.label} must be ${item.bounded ? `between ${lo()} and ${hi()}`
             : item.positive ? 'a positive number' : `a number ≥ ${lo()}`}${item.nullable ? ', or empty for automatic' : ''}.`);
           sync(getValue(item));
           return;
         }
-        commit(v);
+        commit(stored(t));
       });
       box.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') box.blur();
@@ -1243,6 +1245,7 @@
       next.stageParams = [];
       // New flow matrices are R thickness values, unrelated to an earlier table's scale.
       next.valueScale = 1;
+      next.valueScaleRef = 1;
       next.trustedNames = false;
       next.paths = null;
       next.sourceTable = null;
@@ -1577,6 +1580,7 @@
     const previousFrame = frame;
     try {
       next.valueScale = autoValueScale(next);
+      next.valueScaleRef = next.valueScale;
       autoLocate({ labels: opts.labels }, next);
       next.locName = opts.name ? `built from ${opts.name}` : 'built from table';
       if (opts.example) next.example = opts.example;
@@ -2662,22 +2666,36 @@
 
   // ---------- exports ----------
 
-  // SVG and PNG exports crop to what is drawn, EXPORT_PAD canvas px around it, unless the canvas
-  // size was set: then they keep that size exactly.
+  // SVG and PNG exports crop to what is visible, EXPORT_PAD canvas px around it: every shape that
+  // is displayed and not fully transparent, except the background and the hit areas. With
+  // "Crop exports" off they keep the whole canvas.
   const EXPORT_PAD = 12;
   function exportBox() {
-    if (state.style.canvasWidth || state.style.canvasHeight) return { x: 0, y: 0, width: frame.width, height: frame.height };
-    // Everything drawn except the background and the invisible hit areas.
-    const skip = [...svg.querySelectorAll(':scope > .background, :scope > .layer-hits')];
-    skip.forEach((el) => { el.style.display = 'none'; });
-    let box;
-    try {
-      box = svg.getBBox();
-    } finally {
-      skip.forEach((el) => el.style.removeProperty('display'));
-    }
-    const x = Math.floor(box.x - EXPORT_PAD), y = Math.floor(box.y - EXPORT_PAD);
-    return { x, y, width: Math.ceil(box.x + box.width + EXPORT_PAD) - x, height: Math.ceil(box.y + box.height + EXPORT_PAD) - y };
+    const whole = { x: 0, y: 0, width: frame.width, height: frame.height };
+    if (!state.style.cropExports) return whole;
+    const shown = new Map();
+    const visible = (el) => {
+      if (el === svg) return true;
+      if (!shown.has(el)) {
+        const cs = getComputedStyle(el);
+        shown.set(el, cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0 && visible(el.parentElement));
+      }
+      return shown.get(el);
+    };
+    const toCanvas = svg.getScreenCTM().inverse();
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    svg.querySelectorAll('path, rect, text, line, circle, ellipse, polygon, polyline').forEach((el) => {
+      if (el.closest('defs, mask, clipPath, .layer-hits') || el.classList.contains('background') || !visible(el)) return;
+      const r = el.getBoundingClientRect();
+      if (!(r.width > 0 || r.height > 0)) return;
+      [[r.left, r.top], [r.right, r.bottom]].forEach(([x, y]) => {
+        const q = new DOMPoint(x, y).matrixTransform(toCanvas);
+        x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y);
+      });
+    });
+    if (!(x1 > x0 && y1 > y0)) return whole;
+    const x = Math.floor(x0 - EXPORT_PAD), y = Math.floor(y0 - EXPORT_PAD);
+    return { x, y, width: Math.ceil(x1 + EXPORT_PAD) - x, height: Math.ceil(y1 + EXPORT_PAD) - y };
   }
 
   function exportSvgText(box = exportBox()) {
@@ -2986,6 +3004,8 @@
       next.view = null;
     }
     if (!obj.traceCountsVersion && next.paths && next.style.tracePaths && next.style.traceCounts) next.view = null;
+    // Older sessions and projects show their scale as thickness 1.
+    if (!(obj.valueScaleRef > 0)) next.valueScaleRef = next.valueScale;
     state = next;
     selection = null;
     routeScope = 'all';

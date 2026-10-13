@@ -1665,7 +1665,7 @@ test('imported tables fit labels in their nodes and spread tight columns, also o
   expect(fixed.overhang).toBeLessThanOrEqual(0);
 });
 
-test('exports crop to the drawing with a small margin, unless the canvas size is fixed', async ({ page }) => {
+test('exports crop to the visible drawing with a small margin, or keep the whole canvas', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
   const exported = () => page.evaluate(() => {
     const doc = new DOMParser().parseFromString(window.SankeyApp.exportSvgText(), 'image/svg+xml').documentElement;
@@ -1688,9 +1688,12 @@ test('exports crop to the drawing with a small margin, unless the canvas size is
   });
   expect(w).toBeLessThan(cropped.canvas[0]);
   if (cropped.background) expect(Number(cropped.background)).toBe(w);
+  // A fixed canvas size is cropped too; with cropping off the export keeps the whole canvas.
   await page.evaluate(() => { window.SankeyApp.state.style.canvasWidth = 900; window.SankeyApp.update(); });
-  const fixed = await exported();
-  expect(fixed.viewBox).toEqual([0, 0, ...fixed.canvas]);
+  expect((await exported()).viewBox[2]).toBeLessThan(900);
+  await page.locator('#ctl-cropExports').uncheck();
+  const whole = await exported();
+  expect(whole.viewBox).toEqual([0, 0, ...whole.canvas]);
 });
 
 test('SVG and PNG export in one click and keep the focused view', async ({ page }) => {
@@ -1842,10 +1845,14 @@ test('numeric settings are sliders whose numbers can be typed, past the slider u
   await type('ctl-merge_length', '');
   expect((await st()).params.merge_length).toBeNull();
   await expect(page.locator('#ctl-merge_length')).toHaveAttribute('placeholder', 'auto');
-  // The value scale slides on a log scale, 20 times either way.
+  // Strand thickness is relative to the imported scale (1) and slides on a log scale, 0.1 to 10.
+  await expect(page.locator('#ctl-valueScale')).toHaveValue('1');
   const scale = (await st()).valueScale;
   await slide('ctl-valueScale', 1);
-  expect((await st()).valueScale / scale).toBeCloseTo(20, 1);
+  expect((await st()).valueScale / scale).toBeCloseTo(10, 3);
+  await expect(page.locator('#ctl-valueScale')).toHaveValue('10');
+  await type('ctl-valueScale', '0.5');
+  expect((await st()).valueScale / scale).toBeCloseTo(0.5, 3);
   await type('ctl-canvasWidth', '900');
   await expect(page.locator('#plot')).toHaveAttribute('width', '900');
 });
