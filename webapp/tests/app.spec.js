@@ -1144,6 +1144,99 @@ test('where strands cross, only the strand on top keeps its outline', async ({ p
   on.slice(0, 3).forEach((v, i) => expect(Math.abs(v - off[i])).toBeLessThan(6));
 });
 
+// In the page: rasterize the uncropped export `scale` times and return a reader of RGB sums at plot
+// points (y up).
+const rasterHelper = `async (scale) => {
+  const app = window.SankeyApp;
+  const text = app.exportSvgText();
+  const image = new Image();
+  const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
+  await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url; });
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width * scale; canvas.height = image.height * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  URL.revokeObjectURL(url);
+  return (x, y) => { const d = ctx.getImageData(Math.floor((18 + x) * scale), Math.floor((image.height - 18 - y) * scale), 1, 1).data; return d[0] + d[1] + d[2]; };
+}`;
+
+test('a covered strand outline ends exactly at the edge of the strand on top', async ({ page }) => {
+  const result = await page.evaluate(async (helper) => {
+    const raster = eval(helper);
+    const app = window.SankeyApp;
+    // A thin strand crossing a wide one.
+    Object.assign(app.state, { mode: 'layered', matrices: [[[0, 0, 0.09], [0.015, 0, 0], [0.09, 0, 0]]], paths: null, sourceTable: null,
+      valueScale: 1, dimnames: null,
+      loc: [{ set: 1, node: 1, x: 0, y: 0.85 }, { set: 1, node: 2, x: 0, y: 0.4 }, { set: 1, node: 3, x: 0, y: 0.15 },
+        { set: 2, node: 1, x: 1, y: 0.85 }, { set: 2, node: 2, x: 1, y: 0.5 }, { set: 2, node: 3, x: 1, y: 0.15 }],
+      view: { xlim: [-0.2, 1.2], ylim: [-0.1, 1.1] } });
+    Object.assign(app.state.params, { adjust_loc: false });
+    Object.assign(app.state.style, { opacity: 0.8, colorBy: 'source', gradient: false, nodeBorder: 'none', labels: false,
+      canvasWidth: 700, canvasHeight: 600, cropExports: false, thinOutline: true });
+    app.update();
+    const L = app.layout;
+    const thin = L.flows.find((f) => f.value < 0.02), wide = L.flows.find((f) => f.from === 0);
+    const [under, over] = thin.index < wide.index ? [thin, wide] : [wide, thin];
+    const at = (points, x) => window.SK.layout.pointAtX(points, x)[1];
+    const distance = (p, line) => Math.min(...line.slice(1).map((b, i) => {
+      const a = line[i], dx = b[0] - a[0], dy = b[1] - a[1];
+      const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+    }));
+    // Points along the lower strand's outline (0.3 px outside its edges), 0.8-1 px inside the upper strand.
+    const points = [];
+    for (let x = under.startX + 2; x < under.endX - 2; x += 0.05) {
+      [[under.upper, 0.3], [under.lower, -0.3]].forEach(([edge, off]) => {
+        const p = [x, at(edge, x) + off], a = at(over.upper, x), b = at(over.lower, x);
+        if ((p[1] - a) * (p[1] - b) >= 0) return;
+        const d = Math.min(distance(p, over.upper), distance(p, over.lower));
+        if (d > 0.8 && d < 1) points.push(p);
+      });
+    }
+    const on = await raster(8);
+    const withLines = points.map((p) => on(...p));
+    app.state.style.thinOutline = false;
+    app.update();
+    const off = await raster(8);
+    return { count: points.length, worst: Math.max(...points.map((p, i) => off(...p) - withLines[i])) };
+  }, rasterHelper);
+  expect(result.count).toBeGreaterThan(2);
+  expect(result.worst).toBeLessThan(30);
+});
+
+for (const mergeLength of [0, null]) {
+  test(`a strand outline takes over from its node's outline without a step (merge length ${mergeLength === 0 ? '0' : 'auto'})`, async ({ page }) => {
+    await page.evaluate(() => window.SankeyApp.loadExample('cohort'));
+    const rows = await page.evaluate(async ([helper, m]) => {
+      const raster = eval(helper);
+      const app = window.SankeyApp;
+      app.state.params.merge_length = m;
+      Object.assign(app.state.style, { canvasWidth: 1000, canvasHeight: 850, cropExports: false });
+      app.update();
+      const read = await raster(8);
+      const L = app.layout;
+      const at = (points, x) => window.SK.layout.pointAtX(points, x)[1];
+      // Above each interior node's top outgoing strand, where the node's outline (face or merge band)
+      // hands over to the strand's: the outline's lowest dark row, relative to the edge, on either side.
+      return L.nodes.filter((n) => n.inFlows.length && n.outFlows.length).map((n) => {
+        const f = L.flows.filter((g) => g.from === n.id).sort((a, b) => b.startOffset - a.startOffset)[0];
+        const x = f.startX + f.dir * L.mergeLength;
+        const lowest = (px, base) => {
+          for (let dy = -1.5; dy <= 1.5; dy += 1 / 8) if (read(px, base + dy) < 200) return dy;
+          return null;
+        };
+        const before = x - f.dir * 0.7, after = x + f.dir * 0.7;
+        return [lowest(before, L.mergeLength > 0 ? at(f.upper, before) : f.upper[0][1]), lowest(after, at(f.upper, after))];
+      });
+    }, [rasterHelper, mergeLength]);
+    expect(rows.length).toBeGreaterThan(2);
+    rows.forEach(([node, strand]) => {
+      expect(node).not.toBeNull();
+      expect(Math.abs(node - strand)).toBeLessThanOrEqual(1 / 8 + 1e-9);
+    });
+  });
+}
+
 test('where traced substrands cross, only the trace on top keeps its edge', async ({ page }) => {
   await page.evaluate(() => {
     const T = window.SK.transform, app = window.SankeyApp;

@@ -1712,9 +1712,8 @@
       defs += `<path id="trace-shape${n}" d="${line(t.polygon)}Z"/>`;
       return { pi, mi, t, widen, box: [Math.min(...xs) - widen, Math.max(...xs) + widen, Math.min(...ys) - widen, Math.max(...ys) + widen] };
     });
-    // A trace's edge hides under the traces drawn after (above) it, except within TRACE_EDGE px of
-    // their own edges, so where substrands cross only the top one is outlined (as with strands).
-    const TRACE_EDGE = 1;
+    // A trace's edge hides exactly under the traces drawn after (above) it, so where substrands
+    // cross only the top one is outlined (as with strands): a covered edge ends at the edge on top.
     const meet = (a, b) => a[0] < b[1] && b[0] < a[1] && a[2] < b[3] && b[2] < a[3];
     const edgeMask = (k) => {
       const above = drawn.filter((d, j) => j > k && meet(drawn[k].box, d.box));
@@ -1723,8 +1722,7 @@
       const [x0, x1, y0, y1] = drawn[k].box.map((v, i) => Math.round((v + (i % 2 ? 2 : -2)) * 100) / 100);
       const region = `x="${x0}" y="${y0}" width="${Math.round((x1 - x0) * 100) / 100}" height="${Math.round((y1 - y0) * 100) / 100}"`;
       defs += `<mask id="trace-edge-mask${k}" maskUnits="userSpaceOnUse" ${region}><rect ${region} fill="white"/>` +
-        above.map((j) => use(j, j.widen ? `fill="black" stroke="black" stroke-width="${j.widen.toFixed(2)}" stroke-linejoin="round"` : 'fill="black"')).join('') +
-        above.filter((j) => !j.widen).map((j) => use(j, `fill="none" stroke="white" stroke-width="${2 * TRACE_EDGE}"`)).join('') + '</mask>';
+        above.map((j) => use(j, j.widen ? `fill="black" stroke="black" stroke-width="${j.widen.toFixed(2)}" stroke-linejoin="round"` : 'fill="black"')).join('') + '</mask>';
       return ` mask="url(#trace-edge-mask${k})"`;
     };
     drawn.forEach(({ pi, mi, t, widen }, n) => {

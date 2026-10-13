@@ -279,15 +279,18 @@
       }, 0);
       return pathD(area < 0 ? polygon.slice().reverse() : polygon, map, true);
     }).join('');
+    // A node's outlines show only outside the node and its own strands: past the end of a merge
+    // band, the square end of a (doubled) outline would otherwise poke into the strand.
     const edgeMask = (n, polygons) => {
       const id = `node-edge-mask${n.id}`;
+      const own = n.inFlows.concat(n.outFlows).map((k) => ribbonParts[k].polygon);
       const points = polygons.flat().map(([x, y]) => [map.x(x), map.y(y)]);
       const pad = Math.max(THIN_LINE_WIDTH, style.borderWidth) + 1;
       const x = Math.min(...points.map(p => p[0])) - pad, y = Math.min(...points.map(p => p[1])) - pad;
       const width = Math.max(...points.map(p => p[0])) - x + pad, height = Math.max(...points.map(p => p[1])) - y + pad;
       // Bound each mask to its node, avoiding a canvas-sized bitmap for every outline.
       defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" x="${fmt(x)}" y="${fmt(y)}" width="${fmt(width)}" height="${fmt(height)}">` +
-        `<rect width="${frame.width}" height="${frame.height}" fill="white"/><path d="${compoundD(polygons)}" fill="black"/></mask>`);
+        `<rect width="${frame.width}" height="${frame.height}" fill="white"/><path d="${compoundD(polygons.concat(own))}" fill="black"/></mask>`);
       return `mask="url(#${id})"`;
     };
     const outline = (edges, layer, mask = '', inwardHidden = false) => {
@@ -309,6 +312,13 @@
       const u = f.upper, l = f.lower, ue = u[u.length - 1], le = l[l.length - 1];
       return [[u[0][0] + d0, u[0][1]], ...u, [ue[0] + d1, ue[1]], [le[0] + d1, le[1]], ...l.slice().reverse(), [l[0][0] + d0, l[0][1]]];
     };
+    // A strand's thin outline runs just outside its edge (offset by half the line width), as node
+    // outlines do (their inward half is masked away), so the two meet without a step at node faces.
+    const outward = (edge, side, dir) => edge.map((p, i) => {
+      const a = edge[Math.max(i - 1, 0)], b = edge[Math.min(i + 1, edge.length - 1)];
+      const s = (side * dir * THIN_LINE_WIDTH) / 2 / (Math.hypot(b[0] - a[0], b[1] - a[1]) || 1);
+      return [p[0] - (b[1] - a[1]) * s, p[1] + (b[0] - a[0]) * s];
+    });
     const outlineEdges = [];
     layout.flows.forEach((f) => {
       const cuts = S.strandCuts(layout, f);
@@ -323,7 +333,7 @@
       }
       ribbons.push(`<path class="ribbon" data-flow="${f.index}" d="${pathD(polygon, map, true)}" ${fill}/>`);
       const edges = S.edgeSegments(f, style.flatten ? null : cuts);
-      outlineEdges[f.index] = edges;
+      outlineEdges[f.index] = S.edgeSegments({ upper: outward(f.upper, 1, f.dir), lower: outward(f.lower, -1, f.dir) }, style.flatten ? null : cuts);
       ribbonParts[f.index] = { polygon, fill };
       const hitLine = cuts ? S.sliceByX(f.centerline, cuts[0], cuts[1]) : f.centerline;
       hits.push(`<path class="hit" data-flow="${f.index}" d="${pathD(hitLine, map, false)}" ` +
@@ -341,11 +351,10 @@
       }
     });
 
-    // Strand outlines go above every strand fill, but each hides under the strands drawn after
-    // (above) it, except within OUTLINE_EDGE px of their edges: where strands cross only the top one
-    // is outlined, while outlines along edges strands share (side by side at a node) still reach
-    // their junctions.
-    const OUTLINE_EDGE = 1;
+    // Strand outlines go above every strand fill, but each hides exactly under the strands drawn
+    // after (above) it, so where strands cross only the top one is outlined. A covered outline ends
+    // at the upper strand's edge, which carries that strand's own outline (also along edges strands
+    // share, side by side at a node), so outlines meet without gaps or stray ticks.
     if (style.thinOutline) {
       const box = (polygon) => {
         const xs = polygon.map((q) => map.x(q[0])), ys = polygon.map((q) => map.y(q[1]));
@@ -362,7 +371,7 @@
           const [x0, x1, y0, y1] = boxes[k].map((v, i) => v + (i % 2 ? 2 : -2));
           const region = `x="${fmt(x0)}" y="${fmt(y0)}" width="${fmt(x1 - x0)}" height="${fmt(y1 - y0)}"`;
           defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" ${region}><rect ${region} fill="white"/>` +
-            `<path d="${d}" fill="black"/><path d="${d}" fill="none" stroke="white" stroke-width="${2 * OUTLINE_EDGE}"/></mask>`);
+            `<path d="${d}" fill="black"/></mask>`);
           mask = `mask="url(#${id})"`;
         }
         outline(outlineEdges[f.index], strandOutlines, mask);
