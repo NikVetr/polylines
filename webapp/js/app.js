@@ -3163,6 +3163,11 @@
         showError(err.message);
       }
     });
+    // After a merge the Merge button that opened the dialog is hidden, so focus cannot return to
+    // it and could stay in the closed dialog's name field, where Ctrl/⌘+Z counts as typing.
+    $('#merge-dialog').addEventListener('close', () => {
+      if ($('#merge-dialog').contains(document.activeElement)) document.activeElement.blur();
+    });
     const menu = $('#export-menu');
     $('#export-btn').addEventListener('click', (e) => {
       e.stopPropagation();

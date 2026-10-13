@@ -931,6 +931,9 @@ test('many endpoint counts fan farther out, clear node labels and stay inside ex
   expect(result.clipped).toBe(false);
   expect(result.svg).toContain('mask="url(#trace-count-label-mask)"');
   expect(result.svg).toContain('class="trace-count"');
+  // Let the app's own autosave (400 ms after the last redraw) run first, or it could overwrite the
+  // older session written below before the reload.
+  await page.waitForTimeout(700);
   const oldView = await page.evaluate(() => {
     const saved = JSON.parse(JSON.stringify(window.SankeyApp.state));
     delete saved.traceCountsVersion;
