@@ -184,8 +184,8 @@ test('table controls keep or drop single values and columns, and move columns', 
   const noA = C.withValue(source, 'TR00', 'A');
   assert.deepStrictEqual(noA.filters, { TR00: ['B'] });
   assert.deepStrictEqual(C.valuesOf(noA, 'TR00'), { values: ['A', 'B'], kept: new Set(['B']) });
-  // A single kept value hides its column, as a single-value row filter does.
-  assert.deepStrictEqual(noA.enabled, ['TR01', 'TR02']);
+  // Unlike a single-value row filter, a single kept value leaves its column in the diagram.
+  assert.deepStrictEqual(noA.enabled, ['TR00', 'TR01', 'TR02']);
   assert.deepStrictEqual(C.withValue(noA, 'TR00', 'A').filters, {});
   assert.throws(() => C.withValue(noA, 'TR00', 'B'), /at least one value of TR00/);
   assert.throws(() => C.withColumn(C.withColumn(source, 'TR01', false), 'TR00', false), /at least two/);
@@ -200,6 +200,22 @@ test('table controls keep or drop single values and columns, and move columns', 
   assert.strictEqual(C.build(noC).result.summary.total, 2);
   assert.strictEqual(C.header(noC, 400).lines.flat().map((part) => part.text).join(''), 'status at visit 2 ∈ {B}');
   assert.strictEqual(C.columnLabel(long, '2'), 'visit 2');
+});
+
+test('a diagram column\'s value order sets its nodes from the top, missing values at their first place', () => {
+  const C = SK.tableControls;
+  const source = C.create(T.build(cohort, cohortSpec).source);
+  const turned = C.withValueOrder(source, 'TR01', ['Y', 'X']);
+  assert.deepStrictEqual(C.valuesOf(turned, 'TR01').values, ['Y', 'X']);
+  assert.deepStrictEqual(C.build(turned).result.dimnames[0].cols, ['Y', 'X']);
+  assert.deepStrictEqual(C.build(source).result.dimnames[0].cols, ['X', 'Y']);
+  assert.throws(() => C.withValueOrder(source, 'TR01', ['Y']), /each of its values once/);
+  assert.throws(() => C.withValueOrder(source, 'TR01', ['Y', 'Z']), /each of its values once/);
+  // Listed names come first in their order; the rest keep theirs after them.
+  const t = table('a,b\nA,X\nB,Y\nC,NA\nD,X\n');
+  const built = T.build(t, { format: 'wide', columns: ['a', 'b'], missing: 'keep' }, { setOrders: [['C', 'A'], [T.MISSING]] });
+  assert.deepStrictEqual(built.sets, [['C', 'A', 'B', 'D'], [T.MISSING, 'X', 'Y']]);
+  assert.throws(() => T.build(t, { format: 'wide', columns: ['a', 'b'] }, { setOrders: ['C'] }), /needs a list of names/);
 });
 
 test('subset captions wrap long values, escape SVG markup and bold column names', () => {

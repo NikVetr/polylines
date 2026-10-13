@@ -9,26 +9,29 @@
 
   // order: every diagram column (wide: source columns; long: stages), shown or not; enabled: those
   // in the diagram; filters: kept values per source column; stageFilters (long): kept categories
-  // per stage.
+  // per stage; valueOrders: a diagram column's values in the order of its nodes from the top.
   function create(input, options) {
     const source = JSON.parse(JSON.stringify(input));
     const available = T.diagramColumns(source.table, source.spec);
     const enabled = source.spec.format === 'wide' ? source.spec.columns : (source.spec.stages || available);
     return Object.assign(source, options, { order: enabled.concat(available.filter((c) => !enabled.includes(c))), enabled: enabled.slice(),
-      filters: {}, stageFilters: {}, autoHidden: [] });
+      filters: {}, stageFilters: {}, valueOrders: {}, autoHidden: [] });
   }
 
   const columnLabel = (source, column) => (source.spec.format === 'long' ? T.stageLabel(source.spec, column) : column);
 
-  // A diagram column's values (wide: the column's; long: the categories at that stage) and those kept.
+  // A diagram column's values (wide: the column's; long: the categories at that stage), in their
+  // chosen order, and those kept.
   function valuesOf(source, column) {
     const long = source.spec.format === 'long';
-    const values = long ? T.stageValues(source.table, source.spec, column) : T.columnValues(source.table, column);
+    const values = (source.valueOrders || {})[column] ||
+      (long ? T.stageValues(source.table, source.spec, column) : T.columnValues(source.table, column));
     const kept = (long ? source.stageFilters || {} : source.filters)[column];
     return { values, kept: new Set(kept || values) };
   }
 
-  // The source with one value of a diagram column dropped, or kept again.
+  // The source with one value of a diagram column dropped, or kept again. Unlike a single-value row
+  // filter, keeping one value leaves its column in the diagram.
   function withValue(source, column, value) {
     const { values, kept } = valuesOf(source, column);
     if (!values.includes(value)) fail(`"${value}" is not a value of ${columnLabel(source, column)}.`);
@@ -38,7 +41,16 @@
     const filters = Object.assign({}, source[key] || {});
     if (next.length === values.length) delete filters[column];
     else filters[column] = next;
-    return key === 'filters' ? withFilters(source, filters) : Object.assign({}, source, { stageFilters: filters });
+    return Object.assign({}, source, { [key]: filters });
+  }
+
+  // The source with a diagram column's values, and so its nodes from the top, in this order.
+  function withValueOrder(source, column, values) {
+    const current = valuesOf(source, column).values;
+    if (values.length !== current.length || current.some((v) => !values.includes(v))) {
+      fail(`A new order of ${columnLabel(source, column)} must list each of its values once.`);
+    }
+    return Object.assign({}, source, { valueOrders: Object.assign({}, source.valueOrders, { [column]: values.slice() }) });
   }
 
   function withColumn(source, column, include) {
@@ -81,7 +93,10 @@
     const table = T.filterTable(source.table, source.filters, source.spec, source.stageFilters);
     const columns = source.order.filter((c) => source.enabled.includes(c));
     const spec = Object.assign({}, source.spec, source.spec.format === 'wide' ? { columns } : { stages: columns });
-    const result = T.build(table, spec, source.options);
+    // Missing values all go to one node, which takes the place of the first of them.
+    const orders = source.valueOrders || {};
+    const setOrders = columns.map((c) => (orders[c] ? orders[c].map((v) => (T.isNA(v) ? T.MISSING : v)) : null));
+    const result = T.build(table, spec, Object.assign({}, source.options, { setOrders }));
     return { result, source: Object.assign({}, source, { summary: Object.assign({ rowsFiltered: table.rows.length, unit: result.unit }, result.summary) }) };
   }
 
@@ -181,6 +196,6 @@
     });
   }
 
-  SK.tableControls = { create, withFilters, withValue, withColumn, withMove, valuesOf, columnLabel, displayValue, esc, build, header, render };
+  SK.tableControls = { create, withFilters, withValue, withValueOrder, withColumn, withMove, valuesOf, columnLabel, displayValue, esc, build, header, render };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -425,7 +425,8 @@
 
   const isSpecial = (name) => name === MISSING || /^Other( \(grouped\))?$/.test(name);
 
-  // Group small nodes into "Other" (layered only) and order nodes within each set.
+  // Group small nodes into "Other" (layered only) and order nodes within each set. setOrders (per
+  // set, null or node names from the top) puts the listed nodes first, in that order.
   function postProcess(result, options) {
     const opts = options || {};
     if (result.mode === 'graph') {
@@ -480,6 +481,12 @@
         order.sort((a, b) => (isSpecial(names[a]) - isSpecial(names[b])) || (newTot[b] - newTot[a]) || (a - b));
       } else {
         order.sort((a, b) => (isSpecial(names[a]) - isSpecial(names[b])) || (a - b));
+      }
+      const explicit = opts.setOrders && opts.setOrders[k];
+      if (explicit) {
+        if (!Array.isArray(explicit)) fail(`The node order for set ${k + 1} needs a list of names.`);
+        const rank = (j) => (explicit.includes(names[j]) ? explicit.indexOf(names[j]) : Infinity);
+        order.sort((a, b) => (rank(a) === rank(b) ? 0 : rank(a) - rank(b)));
       }
       const position = new Map(order.map((j, p) => [j, p]));
       mapping.push(map.map((j) => position.get(j)));
