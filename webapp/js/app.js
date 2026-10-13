@@ -1312,11 +1312,9 @@
     }
     state = next;
     if (stages.length || loc) {
-      selection = null;
+      clearEmphasis();
       hover = null;
       lastPointer = null;
-      pool = new Map();
-      picked = new Set();
     }
     if (notices.length) notify(notices.join(' '));
   }
@@ -1592,10 +1590,8 @@
       throw err;
     }
     state = next;
-    selection = null;
+    clearEmphasis();
     hover = null;
-    pool = new Map();
-    picked = new Set();
     lastPointer = null;
     routeScope = 'all';
     update({ commit: true });
@@ -1847,6 +1843,11 @@
         nodes.add(id);
         layout.nodes[id].inFlows.concat(layout.nodes[id].outFlows).forEach((k) => flows.add(k));
       });
+      (target.flows || []).forEach((k) => {
+        flows.add(k);
+        nodes.add(layout.flows[k].from);
+        nodes.add(layout.flows[k].to);
+      });
     } else if (target.kind === 'flow') {
       const f = layout.flows[target.index];
       flows.add(f.index);
@@ -1896,6 +1897,10 @@
         n.inFlows.forEach((k) => { if (!ids.includes(layout.flows[k].from)) add(layout.flows[k].from, layout.flows[k].value); });
         n.outFlows.forEach((k) => { if (!ids.includes(layout.flows[k].to)) add(layout.flows[k].to, layout.flows[k].value); });
       });
+      (target.flows || []).forEach((k) => {
+        const f = layout.flows[k];
+        [f.from, f.to].forEach((id) => { if (!ids.includes(id)) add(id, f.value); });
+      });
     }
     return w;
   }
@@ -1916,10 +1921,15 @@
     return { nodes, flows };
   }
 
-  // ---------- pool (Shift-click) ----------
+  // ---------- emphasis (click and Shift-click) ----------
 
-  // Substrands gathered with Shift-click across strands and nodes: per path index, null for the whole
-  // pathway or a Set of its items (member indices). It belongs to the pathway data it was built on.
+  // What clicks emphasize: a plain click emphasizes just the strand or node clicked (its selection
+  // opens its editor), or clears the emphasis if it was emphasized; a Shift-click adds or removes just
+  // that one. With pathway data the emphasis is a pool of substrands; nodes and strands are also
+  // picked (nodes to drag or merge together). Clicking empty space or Esc clears it all.
+
+  // Substrands emphasized across strands and nodes: per path index, null for the whole pathway or a
+  // Set of its items (member indices). It belongs to the pathway data it was built on.
   let pool = new Map();
   let poolPaths = null;
 
@@ -1933,16 +1943,16 @@
     return { kind: 'pool', index: -1, paths: [...pool.keys()], member: -1, single: false, units };
   }
 
-  // Add a traced target's substrands to the pool, or remove them if all are in it already.
-  function togglePool(target) {
+  const inPool = (pi, mi) => poolPaths === state.paths && pool.has(pi) && (pool.get(pi) === null || (mi >= 0 && pool.get(pi).has(mi)));
+
+  // Add a traced target's substrands to the pool, or remove them.
+  function togglePool(target, add) {
     if (poolPaths !== state.paths) {
       pool = new Map();
       poolPaths = state.paths;
     }
-    const has = (pi, mi) => pool.has(pi) && (pool.get(pi) === null || (mi >= 0 && pool.get(pi).has(mi)));
-    const units = unitsOf(target);
-    const remove = units.every(([pi, mi]) => has(pi, mi));
-    units.forEach(([pi, mi]) => {
+    const remove = !add;
+    unitsOf(target).forEach(([pi, mi]) => {
       if (mi < 0) {
         if (remove) pool.delete(pi);
         else pool.set(pi, null);
@@ -1958,35 +1968,77 @@
     });
   }
 
-  // Nodes picked with a plain Shift-click (on any data), to drag or merge them together. Keyed by node key and
-  // tied to the flow matrices they were picked on.
+  // Picked nodes (to drag or merge together) and strands, by key, tied to the flow matrices they
+  // were picked on.
   let picked = new Set();
+  let pickedFlows = new Set();
   let pickedFor = null;
 
-  function togglePicked(key) {
+  function setPicked(kind, key, on) {
     if (pickedFor !== state.matrices) {
       picked = new Set();
+      pickedFlows = new Set();
       pickedFor = state.matrices;
     }
-    if (picked.has(key)) picked.delete(key);
-    else picked.add(key);
+    const set = kind === 'flow' ? pickedFlows : picked;
+    if (on) set.add(key);
+    else set.delete(key);
   }
 
   const pickedNodes = () => (layout && pickedFor === state.matrices ? layout.nodes.filter((n) => picked.has(n.key)) : []);
+  const pickedStrands = () => (layout && pickedFor === state.matrices ? layout.flows.filter((f) => pickedFlows.has(f.key)) : []);
 
-  // What Shift-clicks gathered: the pool of substrands, else (without pathway data) the picked nodes.
+  // The emphasis of several clicks: the pool of substrands, else (without pathway data) the picked
+  // nodes and strands. A single plain-clicked selection is shown as itself (pinnedTarget) instead.
   function groupTarget() {
+    if (selection) return null;
     const target = poolTarget();
     if (target) return target;
     const nodes = pickedNodes().map((n) => n.id);
-    return nodes.length ? { kind: 'nodes', index: -1, paths: null, member: -1, single: false, nodes } : null;
+    const flows = pickedStrands().map((f) => f.index);
+    return nodes.length || flows.length ? { kind: 'nodes', index: -1, paths: null, member: -1, single: false, nodes, flows } : null;
+  }
+
+  function clearEmphasis() {
+    selection = null;
+    pool = new Map();
+    picked = new Set();
+    pickedFlows = new Set();
   }
 
   function clearPool() {
-    pool = new Map();
-    picked = new Set();
+    clearEmphasis();
     applyHighlight();
     refreshInspector();
+  }
+
+  // Whether a clicked strand or node is emphasized: all its traced substrands are in the pool, or
+  // (without them) it is picked.
+  const isEmphasized = (t, key, traced) => (traced && traced.paths
+    ? unitsOf(traced).every(([pi, mi]) => inPool(pi, mi))
+    : pickedFor === state.matrices && (t.kind === 'flow' ? pickedFlows : picked).has(key));
+
+  function setEmphasis(t, key, traced, on) {
+    if (traced && traced.paths) togglePool(traced, on);
+    setPicked(t.kind, key, on);
+  }
+
+  // The emphasis with the hovered strand or node added as a preview, so emphasized substrands stay
+  // in focus while the pointer explores others.
+  function withHover(base) {
+    if (!hover || !base) return hover || base;
+    if (traces && base.paths && hover.paths) {
+      const seen = new Set();
+      const units = unitsOf(base).concat(unitsOf(hover)).filter(([pi, mi]) => !seen.has(`${pi}:${mi}`) && seen.add(`${pi}:${mi}`));
+      // A whole pathway already covers its items.
+      const whole = new Set(units.filter(([, mi]) => mi < 0).map(([pi]) => pi));
+      const list = units.filter(([pi, mi]) => mi < 0 || !whole.has(pi));
+      return { kind: 'pool', index: -1, paths: [...new Set(list.map(([pi]) => pi))], member: -1, single: false, units: list };
+    }
+    const ids = (t) => (t.kind === 'nodes' ? t.nodes : t.kind === 'node' ? [t.index] : []);
+    const strands = (t) => (t.kind === 'nodes' ? t.flows || [] : t.kind === 'flow' ? [t.index] : []);
+    return { kind: 'nodes', index: -1, paths: null, member: -1, single: false,
+      nodes: [...new Set(ids(base).concat(ids(hover)))], flows: [...new Set(strands(base).concat(strands(hover)))] };
   }
 
   // Merging needs two or more picked nodes in one column of a layered diagram.
@@ -2030,7 +2082,7 @@
     state = window.SK.edit.mergeNodes(state, set, nodes.map((n) => n.node - 1), label);
     // Hide the Merge button first: it can wrap the toolbar, and the plot panel's height feeds
     // the layout below.
-    picked = new Set();
+    clearEmphasis();
     refreshMerge();
     if (autoLoc) {
       // Columns go back to auto-layout's spacing, to be spread for the merged data as on import.
@@ -2040,8 +2092,6 @@
       state.loc.forEach((r) => { r.x = fresh.loc.find((f) => f.set === Number(r.set)).x; });
       restackColumn(set);
     }
-    pool = new Map();
-    selection = null;
     hover = null;
     update({ fit: true, commit: true, spread: autoLoc });
     notify(`Merged into "${label}" (Ctrl/⌘+Z undoes).`);
@@ -2109,7 +2159,7 @@
   }
 
   function applyHighlight() {
-    const active = (drag && drag.target) || hover || groupTarget() || pinnedTarget();
+    const active = (drag && drag.target) || withHover(groupTarget() || pinnedTarget());
     const sets = highlightSets(active);
     const covered = coverage(active);
     svg.classList.toggle('dimmed', !!active);
@@ -2150,14 +2200,17 @@
     const pickedLine = nodes.length
       ? `<p>Picked nodes: <b>${nodes.map((n) => esc(nodeDisplayName(n))).join(', ')}</b>.</p>`
       : '';
+    const head = (title) => `<div class="inspector-head"><h2>${title}</h2><button class="mini-btn" id="pool-clear" title="Clear the emphasis (or click empty space)">Clear</button></div>`;
     if (target.kind === 'pool') {
-      return '<h2>Pool</h2><p class="muted small">Shift-click strands or nodes to add their substrands, or remove them when ' +
-        'they are all in already (with Ctrl/⌘ or Alt/⌥ too: one pathway or one item). Drag a picked node to move all picked nodes.</p>' +
-        pickedLine + focusHtml(target) + '<button class="mini-btn wide" id="pool-clear">Clear pool (Esc)</button>';
+      return head('Emphasized substrands') + '<p class="muted small">Shift-click strands or nodes to add or remove theirs (with Ctrl/⌘ or Alt/⌥ too: ' +
+        'one pathway or one item); click one alone to emphasize just it, or empty space to clear. Drag a picked node to move all picked nodes.</p>' +
+        pickedLine + focusHtml(target);
     }
     if (target.kind === 'nodes') {
-      return '<h2>Picked nodes</h2><p class="muted small">Shift-click nodes to pick or unpick them; drag one to move them all.</p>' + pickedLine +
-        '<button class="mini-btn wide" id="pool-clear">Clear (Esc)</button>';
+      const strands = pickedStrands();
+      return head('Emphasized') + '<p class="muted small">Shift-click nodes or strands to add or remove them; drag a picked node to move them all; ' +
+        'click empty space to clear.</p>' + pickedLine +
+        (strands.length ? `<p>Strands: <b>${strands.map((f) => `${esc(nodeDisplayName(layout.nodes[f.from]))} → ${esc(nodeDisplayName(layout.nodes[f.to]))}`).join(', ')}</b>.</p>` : '');
     }
     if (target.kind === 'flow') {
       const f = layout.flows[target.index];
@@ -2439,36 +2492,25 @@
     if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
     if (!finished.moved) {
       const t = finished.target;
+      const key = (t.kind === 'flow' ? layout.flows : layout.nodes)[t.index].key;
       const shown = hover && hover.kind === t.kind && hover.index === t.index ? hover : null;
-      // A plain Shift-click pools everything through the target below the limit; dense plots only
-      // pool the single slice.
-      const pooled = finished.shift && !finished.ctrl && !finished.alt && traces && traces.paths.length <= state.style.maxHoverSubstrands
+      // A click emphasizes what a plain hover traces through the target (below the limit), or with
+      // Ctrl/⌘ or Alt/⌥, or in dense plots, the slice shown under the pointer.
+      const traced = traces && !finished.ctrl && !finished.alt && traces.paths.length <= state.style.maxHoverSubstrands
         ? Object.assign({}, t, tracedPaths(t, {})) : shown;
-      // Shift-click: a plain one on a node picks it (to drag or merge picked nodes together); with
-      // pathway data, the substrands shown join or leave the pool.
-      const pickNode = finished.shift && t.kind === 'node' && !finished.ctrl && !finished.alt;
-      const poolIt = finished.shift && pooled && pooled.paths && traces;
-      if (pickNode || poolIt) {
-        if (pickNode) togglePicked(layout.nodes[t.index].key);
-        if (poolIt) togglePool(pooled);
-        const units = poolTarget() ? poolTarget().units : [];
-        const nodes = pickedNodes();
-        notify([
-          units.length ? `Pool: ${fmtValue(units.reduce((sum, u) => sum + unitWeight(u), 0))} ${unitOf(2)} in ${new Set(units.map((u) => u[0])).size} pathways.` : '',
-          nodes.length ? `Picked: ${nodes.map(nodeDisplayName).join(', ')}.` : '',
-          'Esc clears.'
-        ].filter(Boolean).join(' '));
-        applyHighlight();
-        refreshInspector();
-        return;
+      const emphasized = isEmphasized(t, key, traced);
+      if (finished.shift) {
+        // Shift-click: add or remove just this one, keeping the rest of the emphasis.
+        selection = null;
+        setEmphasis(t, key, traced, !emphasized);
+      } else {
+        // Plain click: emphasize just this one (with its editor), or clear the emphasis if it was emphasized.
+        clearEmphasis();
+        if (!emphasized) {
+          setEmphasis(t, key, traced, true);
+          selection = { kind: t.kind, key, paths: traced && traced.paths, member: traced ? traced.member : -1, single: !!(traced && traced.single) };
+        }
       }
-      selection = {
-        kind: t.kind,
-        key: (t.kind === 'flow' ? layout.flows : layout.nodes)[t.index].key,
-        paths: shown && shown.paths,
-        member: shown ? shown.member : -1,
-        single: !!(shown && shown.single)
-      };
       applyHighlight();
       refreshInspector();
       return;
@@ -2481,11 +2523,8 @@
     pan = null;
     svg.classList.remove('panning');
     if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
-    if (clicked && selection) {
-      selection = null;
-      applyHighlight();
-      refreshInspector();
-    }
+    // A click on empty space clears the emphasis.
+    if (clicked && (selection || pool.size || picked.size || pickedFlows.size)) clearPool();
   }
 
   function bindPlotEvents() {
@@ -2549,7 +2588,7 @@
   };
 
   // A selected strand or node keeps its hover details (and traced pathways) pinned above its editor.
-  const pinnedHtml = () => `<p class="pin-note muted small">Pinned · click empty space or press Esc to release</p>${hoverHtml(pinnedTarget())}`;
+  const pinnedHtml = () => `<p class="pin-note muted small">Pinned · click it again or empty space to release; Shift-click others to add them</p>${hoverHtml(pinnedTarget())}`;
 
   const bindPool = (host) => {
     const button = host.querySelector('#pool-clear');
@@ -2572,8 +2611,8 @@
         (state.paths && state.paths.length > state.style.maxHoverSubstrands ? `<p class="muted small">Ordinary hover is paused for ${state.paths.length.toLocaleString()} pathways (limit ${state.style.maxHoverSubstrands}). Hold Ctrl/⌘ (or Shift) for one pathway, or Alt/⌥ for one item. Change “Hover limit (pathways)” in Canvas & dragging to raise the limit.</p>` : '') +
         '<ul class="tips"><li>Drag a node to move it (Shift: vertical only, Alt: horizontal only).</li>' +
         '<li>Drag a strand up or down to reorder it in the stack at its nearer end.</li>' +
-        (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Ctrl/⌘ for the single pathway under the pointer, or Alt/⌥ for the single item. Click to pin the traces and breakdown.</li>' : '') +
-        '<li>Shift-click nodes to pick several; drag one of them to move them all together.</li>' +
+        (traces ? '<li>Hover a strand or node to trace every pathway through it, with a breakdown here; hold Ctrl/⌘ for the single pathway under the pointer, or Alt/⌥ for the single item.</li>' : '') +
+        '<li>Click a strand or node to emphasize it; Shift-click others to add or remove them; click empty space to clear. Drag one of several picked nodes to move them all.</li>' +
         '<li>Ctrl/⌘+Z undo, Ctrl/⌘+Shift+Z redo, F fit view, Esc deselect.</li></ul>';
       return;
     }
@@ -2598,7 +2637,7 @@
           return;
         }
         state.matrices[f.stage][f.i][f.j] = v;
-        if (v === 0) selection = null;
+        if (v === 0) clearEmphasis();
         update({ commit: true });
       });
       bindColorEditor(host, 'flow', (v) => setKeyed(state.flowOverrides, f.key, v));
@@ -3064,9 +3103,7 @@
     history.index = index;
     state = JSON.parse(history.stack[index]);
     // Pins and pools refer to indices in the previous dataset, not the restored one.
-    selection = null;
-    pool = new Map();
-    picked = new Set();
+    clearEmphasis();
     hover = null;
     lastPointer = null;
     showHoverInfo(null);
@@ -3220,10 +3257,8 @@
         restore(history.index + 1);
       } else if (!typing && !mod && e.key.toLowerCase() === 'f') {
         update({ fit: true, commit: true });
-      } else if (e.key === 'Escape' && (selection || pool.size || picked.size)) {
-        selection = null;
-        pool = new Map();
-        picked = new Set();
+      } else if (e.key === 'Escape' && (selection || pool.size || picked.size || pickedFlows.size)) {
+        clearEmphasis();
         applyHighlight();
         refreshInspector();
       } else if (!typing && e.key === '?') {

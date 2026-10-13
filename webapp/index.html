@@ -162,20 +162,22 @@
       <h3>Interaction</h3>
       <ul>
         <li>Hover strands or nodes for values and shares, shown in the inspector panel; click to edit them there.</li>
+        <li>A click emphasizes the strand or node clicked (clicking it again releases it); Shift-click adds or removes
+          one more while keeping the rest; clicking empty space clears the emphasis.</li>
         <li>Drag nodes to move them (Shift: vertical only, Alt: horizontal only).</li>
         <li>Drag a strand up or down to reorder it within the stack at its nearer end.</li>
         <li>For data imported from a wide or long table, hovering a strand or node traces every pathway through it
           and breaks them down by node and strand in the inspector; hold Ctrl/⌘ to trace one pathway, or
           Alt/⌥ for one item when the table has item ids. Ordinary hover pauses above 200 pathways by default;
-          adjust <b>Hover limit (pathways)</b> in Canvas &amp; dragging. Click to pin what is shown; Shift-click
-          to add or remove substrands from a pool that is traced and tabulated together.</li>
+          adjust <b>Hover limit (pathways)</b> in Canvas &amp; dragging. Emphasized strands and nodes keep their
+          substrands traced and tabulated together while you hover others.</li>
         <li>The toolbar's fit-panel and fit-height buttons scale the whole drawing, including text. Fit-height
           allows horizontal scrolling; the magnifier buttons zoom in and out.</li>
         <li><b>Auto-layout</b> (toolbar) places the nodes afresh, as an import would.</li>
         <li>The SVG and PNG buttons export the plot as shown, including any focused substrands.</li>
-        <li>Shift-click nodes to pick them: drag any picked node to move them all together, or merge two or more in one column with the <b>Merge</b> button that appears (Ctrl/⌘+Z undoes).</li>
+        <li>Drag any of several emphasized nodes to move them all together, or merge two or more in one column with the <b>Merge</b> button that appears (Ctrl/⌘+Z undoes).</li>
         <li>Dragging a node into a neighbour stops at a wall, or pushes it along (Canvas &amp; dragging).</li>
-        <li>Ctrl/⌘+Z and Ctrl/⌘+Shift+Z undo and redo; F fits the view; Esc clears the selection.</li>
+        <li>Ctrl/⌘+Z and Ctrl/⌘+Shift+Z undo and redo; F fits the view; Esc also clears the emphasis.</li>
       </ul>
       <p><b>Export → R bundle</b> writes the CSVs, a <code>loc.csv</code> with your edits and a <code>sankey.R</code>
         script that redraws the plot with the R functions.</p>

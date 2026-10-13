@@ -1375,6 +1375,58 @@ test('autosave keeps only non-default style, so later default changes reach rest
   expect(style.labelPosition).toBe('above');
 });
 
+test('a click emphasizes one strand or node, Shift-click adds or removes one, empty space clears', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const through = (label) => page.evaluate((l) => {
+    const app = window.SankeyApp;
+    const n = app.layout.nodes.find((x) => app.state.loc[x.id].label === l);
+    return app.state.paths.filter((p) => p.nodes[n.set - 1] === n.node - 1).length;
+  }, label);
+  const click = async (label, shift = false) => {
+    const n = await nodeAt(page, label);
+    if (shift) await page.keyboard.down('Shift');
+    await page.mouse.click(n.x, n.y);
+    if (shift) await page.keyboard.up('Shift');
+  };
+  const traces = page.locator('#plot .trace');
+  const [surgery, radiation, chemo] = [await through('Surgery'), await through('Radiation'), await through('Chemotherapy')];
+  // A plain click emphasizes just that node; Shift-click adds the next one to it.
+  await click('Surgery');
+  await page.mouse.move(5, 5);
+  await expect(traces).toHaveCount(surgery);
+  await click('Radiation', true);
+  await page.mouse.move(5, 5);
+  await expect(traces).toHaveCount(surgery + radiation);
+  await expect(page.locator('#inspector-main h2').first()).toHaveText('Emphasized substrands');
+  // Hovering a third node previews it on top of the emphasis, which stays.
+  const c = await nodeAt(page, 'Chemotherapy');
+  await page.mouse.move(c.x, c.y);
+  await expect(traces).toHaveCount(surgery + radiation + chemo);
+  await page.mouse.move(5, 5);
+  await expect(traces).toHaveCount(surgery + radiation);
+  // Shift-clicking an emphasized node removes just it.
+  await click('Surgery', true);
+  await page.mouse.move(5, 5);
+  await expect(traces).toHaveCount(radiation);
+  // A plain click moves the emphasis to the node clicked, and clicking it again clears it.
+  await click('Chemotherapy');
+  await page.mouse.move(5, 5);
+  await expect(traces).toHaveCount(chemo);
+  await expect(page.locator('#inspector-main .edit-head')).toBeVisible();
+  await click('Chemotherapy');
+  await page.mouse.move(5, 5);
+  await expect(traces).toHaveCount(0);
+  // Clicking empty space clears emphasis and picks alike.
+  await click('Surgery', true);
+  await click('Radiation', true);
+  await expect(page.locator('#merge-nodes')).toBeVisible();
+  const box = await page.locator('#plot').boundingBox();
+  await page.mouse.click(box.x + 4, box.y + 4);
+  await expect(traces).toHaveCount(0);
+  await expect(page.locator('#merge-nodes')).toBeHidden();
+  await expect(page.locator('#notice')).toBeHidden();
+});
+
 test('Shift-click adds and removes substrands from a pool traced and tabulated together', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const shiftClick = async (label) => {
@@ -1388,7 +1440,7 @@ test('Shift-click adds and removes substrands from a pool traced and tabulated t
   await shiftClick('Radiation');
   await page.mouse.move(5, 5);
   await expect(page.locator('#plot .trace')).toHaveCount(8);
-  await expect(page.locator('#inspector-main h2').first()).toHaveText('Pool');
+  await expect(page.locator("#inspector-main h2").first()).toHaveText("Emphasized substrands");
   await expect(page.locator('#inspector-main')).toContainText('8 pathways · 308 patients');
   await shiftClick('Surgery');
   await page.mouse.move(5, 5);
@@ -1462,7 +1514,7 @@ test('nodes of matrix data can be picked and merged too, and merging can be canc
     await page.keyboard.up('Shift');
   }
   await page.mouse.move(5, 5);
-  await expect(page.locator('#inspector-main h2').first()).toHaveText('Picked nodes');
+  await expect(page.locator("#inspector-main h2").first()).toHaveText("Emphasized");
   await page.locator('#merge-nodes').click();
   await page.locator('#merge-cancel').click();
   expect(await page.evaluate(() => window.SankeyApp.state.matrices[0].length)).toBe(4);
@@ -1470,6 +1522,30 @@ test('nodes of matrix data can be picked and merged too, and merging can be canc
   await page.locator('#merge-dialog button[value="ok"]').click();
   expect(await page.evaluate(() => window.SankeyApp.state.matrices[0].length)).toBe(3);
   await expect(page.locator('#plot .node-label', { hasText: `${ids[0]} + ${ids[1]}` })).toHaveCount(1);
+});
+
+test('strands of matrix data are emphasized by click and Shift-click alike', async ({ page }) => {
+  const last = await page.evaluate(() => window.SankeyApp.layout.flows.length - 1);
+  const click = async (k, shift = false) => {
+    const p = await ribbonCenter(page, k);
+    if (shift) await page.keyboard.down('Shift');
+    await page.mouse.click(p.x, p.y);
+    if (shift) await page.keyboard.up('Shift');
+    await page.mouse.move(5, 5);
+  };
+  const lit = () => page.locator('#plot .ribbon.hl').evaluateAll((els) => els.map((el) => Number(el.dataset.flow)).sort((a, b) => a - b));
+  await click(0);
+  expect(await lit()).toEqual([0]);
+  await click(last, true);
+  expect(await lit()).toEqual([0, last]);
+  await expect(page.locator('#inspector-main h2').first()).toHaveText('Emphasized');
+  await expect(page.locator('#inspector-main')).toContainText('Strands:');
+  await click(0, true);
+  expect(await lit()).toEqual([last]);
+  await click(0);
+  expect(await lit()).toEqual([0]);
+  await click(0);
+  await expect(page.locator('#plot')).not.toHaveClass(/dimmed/);
 });
 
 test('dragging one of several Shift-clicked nodes moves them all by the same amount', async ({ page }) => {
