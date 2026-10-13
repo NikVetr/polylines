@@ -1009,7 +1009,7 @@ test('thin plot outlines default on, hide during focus and persist in exports an
   await expect(outlines.first()).toBeVisible();
   await expect(outlines.locator('path').first()).toHaveAttribute('stroke', '#000000');
   await page.locator('#ctl-substrands').check();
-  const widths = await page.locator('#plot .plot-outline, #plot .substrand-lines').evaluateAll((els) => [...new Set(els.map(el => Number(el.getAttribute('stroke-width')) / (el.hasAttribute('mask') ? 2 : 1)))]);
+  const widths = await page.locator('#plot .plot-outline, #plot .substrand-lines').evaluateAll((els) => [...new Set(els.map(el => Number(el.getAttribute('stroke-width')) / ((el.getAttribute('mask') || '').includes('node-edge-mask') ? 2 : 1)))]);
   expect(widths).toEqual([0.6]);
   expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).toContain('class="layer-outline"');
   const n = await nodeAt(page, 'Remission');
@@ -1071,6 +1071,76 @@ test('a covered strand outline stays hidden beneath an opaque node polygon', asy
   expect(pixels.on).toEqual(pixels.off);
 });
 
+// Pixels of the uncropped export at plot points (y up), with the bottom canvas margin of 18.
+const exportPixels = (page, points, styleChanges = {}) => page.evaluate(async ([pts, changes]) => {
+  const app = window.SankeyApp;
+  Object.assign(app.state.style, { cropExports: false }, changes);
+  app.update();
+  const url = URL.createObjectURL(new Blob([app.exportSvgText()], { type: 'image/svg+xml' }));
+  const image = new Image();
+  await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url; });
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width; canvas.height = image.height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0);
+  URL.revokeObjectURL(url);
+  return pts.map(([x, y]) => [...ctx.getImageData(Math.floor(18 + x), Math.floor(image.height - 18 - y), 1, 1).data]);
+}, [points, styleChanges]);
+
+test('without a merge band, strands meet node faces with no light seam', async ({ page }) => {
+  await page.evaluate(() => {
+    window.SankeyApp.loadExample('cohort');
+    Object.assign(window.SankeyApp.state.params, { merge_length: 0 });
+    // A fixed canvas keeps faces at fractional pixels, where a seam would show.
+    Object.assign(window.SankeyApp.state.style, { canvasWidth: 1000, canvasHeight: 850 });
+    window.SankeyApp.update();
+  });
+  // Points straddling each interior node's in-face, through the middle of its first strand.
+  const points = await page.evaluate(() => {
+    const L = window.SankeyApp.layout;
+    return L.nodes.filter((n) => n.inFlows.length && n.outFlows.length && n.widthPx > 0).flatMap((n) => {
+      const f = L.flows[n.inFlows[0]];
+      const y = (window.SK.layout.pointAtX(f.upper, f.endX - 3)[1] + window.SK.layout.pointAtX(f.lower, f.endX - 3)[1]) / 2;
+      return [[f.endX, y], [f.endX + 3, y]];
+    });
+  });
+  const px = await exportPixels(page, points, { thinOutline: false });
+  for (let i = 0; i < px.length; i += 2) {
+    const face = px[i].slice(0, 3).reduce((a, b) => a + b), body = px[i + 1].slice(0, 3).reduce((a, b) => a + b);
+    expect(face - body).toBeLessThan(25);
+  }
+});
+
+test('where strands cross, only the strand on top keeps its outline', async ({ page }) => {
+  const probe = await page.evaluate(() => {
+    const app = window.SankeyApp;
+    Object.assign(app.state, { mode: 'layered', matrices: [[[0, 0.25], [0.25, 0]]], paths: null, sourceTable: null, valueScale: 1, dimnames: null,
+      loc: [{ set: 1, node: 1, x: 0, y: 0.8 }, { set: 1, node: 2, x: 0, y: 0.2 }, { set: 2, node: 1, x: 1, y: 0.8 }, { set: 2, node: 2, x: 1, y: 0.2 }],
+      view: { xlim: [-0.2, 1.2], ylim: [-0.1, 1.1] } });
+    Object.assign(app.state.params, { adjust_loc: false });
+    Object.assign(app.state.style, { opacity: 0.8, colorBy: 'single', singleColor: '#EF8E91', gradient: false, nodeBorder: 'none', labels: false,
+      canvasWidth: 900, canvasHeight: 700 });
+    app.update();
+    const [under, over] = app.layout.flows;
+    const at = (points, x) => window.SK.layout.pointAtX(points, x)[1];
+    // The point of the lower strand's edges deepest inside the strand drawn over it.
+    let best = { depth: -Infinity };
+    for (let x = under.startX + 2; x < under.endX - 2; x += 0.5) {
+      [under.upper, under.lower].forEach((edge) => {
+        const y = at(edge, x), a = at(over.upper, x), b = at(over.lower, x);
+        const depth = (y - a) * (y - b) < 0 ? Math.min(Math.abs(y - a), Math.abs(y - b)) : -1;
+        if (depth > best.depth) best = { point: [x, y], depth, inside: depth > 0 };
+      });
+    }
+    return best;
+  });
+  expect(probe.inside).toBe(true);
+  expect(probe.depth).toBeGreaterThan(3);
+  const [on] = await exportPixels(page, [probe.point], { thinOutline: true });
+  const [off] = await exportPixels(page, [probe.point], { thinOutline: false });
+  on.slice(0, 3).forEach((v, i) => expect(Math.abs(v - off[i])).toBeLessThan(6));
+});
+
 for (const interior of [false, true]) {
   test(`${interior ? 'interior' : 'source'} merge joins keep tapered gaps and borders on the filled curves`, async ({ page }) => {
     await page.mouse.move(5, 5);
@@ -1088,7 +1158,7 @@ for (const interior of [false, true]) {
         view: { xlim: [-0.3, interior ? 2.3 : 1.3], ylim: [-0.8, 1.8] } });
       Object.assign(app.state.params, { adjust_loc: false, merge_frac: 0.2 });
       Object.assign(app.state.style, { opacity: 0.8, colorBy: 'single', singleColor: '#EF8E91', gradient: false,
-        nodeBorder: 'none', labels: true, labelPosition: 'above', flatten: true, canvasWidth: 900, canvasHeight: 900 });
+        nodeBorder: 'none', labels: true, labelPosition: 'above', flatten: true, canvasWidth: 900, canvasHeight: 900, cropExports: false });
       app.update();
       const n = app.layout.nodes[interior ? 1 : 0];
       const fs = n.outFlows.map(k => app.layout.flows[k]).sort((a, b) => a.startOffset - b.startOffset);

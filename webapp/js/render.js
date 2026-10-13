@@ -290,19 +290,29 @@
         `<rect width="${frame.width}" height="${frame.height}" fill="white"/><path d="${compoundD(polygons)}" fill="black"/></mask>`);
       return `mask="url(#${id})"`;
     };
-    const outline = (edges, layer, mask = '') => {
+    const outline = (edges, layer, mask = '', inwardHidden = false) => {
       if (!style.thinOutline) return;
-      // The union mask hides the inward half, keeping the visible outline 0.6 px wide.
-      const width = mask ? 2 * THIN_LINE_WIDTH : THIN_LINE_WIDTH;
+      // A node's own union mask hides the inward half, keeping the visible outline 0.6 px wide.
+      const width = inwardHidden ? 2 * THIN_LINE_WIDTH : THIN_LINE_WIDTH;
       layer.push(`<g class="layer-outline"><path class="plot-outline" d="${edges.map((edge) => pathD(edge, map, false)).join('')}" ` +
         `fill="none" stroke="#000000" stroke-width="${width}" stroke-linejoin="round" ${mask}/></g>`);
     };
 
-    // Strands. With flattened (opaque) trunks the full ribbon sits underneath; otherwise ribbons
-    // are cut at the merge zone so translucent trunks do not double up.
+    // Strands. With flattened (opaque) trunks the full ribbon sits underneath, running
+    // SEAM_UNDERLAP px under the bodies of nodes with width, so a node face shows no light
+    // antialiasing seam where a strand meets the body (visible without a merge band). Otherwise
+    // ribbons are cut at the merge zone so translucent trunks do not double up.
+    const SEAM_UNDERLAP = 0.75;
+    const underNodes = (f) => {
+      const d0 = layout.nodes[f.from].widthPx > 0 ? -f.dir * SEAM_UNDERLAP : 0;
+      const d1 = layout.nodes[f.to].widthPx > 0 ? f.dir * SEAM_UNDERLAP : 0;
+      const u = f.upper, l = f.lower, ue = u[u.length - 1], le = l[l.length - 1];
+      return [[u[0][0] + d0, u[0][1]], ...u, [ue[0] + d1, ue[1]], [le[0] + d1, le[1]], ...l.slice().reverse(), [l[0][0] + d0, l[0][1]]];
+    };
+    const outlineEdges = [];
     layout.flows.forEach((f) => {
       const cuts = S.strandCuts(layout, f);
-      const polygon = S.ribbonPolygon(f, style.flatten ? null : cuts);
+      const polygon = style.flatten ? underNodes(f) : S.ribbonPolygon(f, cuts);
       let fill;
       if (style.gradient) {
         const id = `gs${f.index}`;
@@ -312,10 +322,8 @@
         fill = fillAttrs(colors.flow[f.index]);
       }
       ribbons.push(`<path class="ribbon" data-flow="${f.index}" d="${pathD(polygon, map, true)}" ${fill}/>`);
-      // Outlines go above every strand fill (strands are see-through), so where strands overlap each
-      // outline still runs all the way to its junctions.
       const edges = S.edgeSegments(f, style.flatten ? null : cuts);
-      outline(edges, strandOutlines);
+      outlineEdges[f.index] = edges;
       ribbonParts[f.index] = { polygon, fill };
       const hitLine = cuts ? S.sliceByX(f.centerline, cuts[0], cuts[1]) : f.centerline;
       hits.push(`<path class="hit" data-flow="${f.index}" d="${pathD(hitLine, map, false)}" ` +
@@ -332,6 +340,34 @@
           `fill="none" stroke="${linePaint.color}" stroke-opacity="0.6" stroke-width="${THIN_LINE_WIDTH}"/></g>`);
       }
     });
+
+    // Strand outlines go above every strand fill, but each hides under the strands drawn after
+    // (above) it, except within OUTLINE_EDGE px of their edges: where strands cross only the top one
+    // is outlined, while outlines along edges strands share (side by side at a node) still reach
+    // their junctions.
+    const OUTLINE_EDGE = 1;
+    if (style.thinOutline) {
+      const box = (polygon) => {
+        const xs = polygon.map((q) => map.x(q[0])), ys = polygon.map((q) => map.y(q[1]));
+        return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+      };
+      const boxes = layout.flows.map((f) => box(ribbonParts[f.index].polygon));
+      const meet = (a, b) => a[0] < b[1] && b[0] < a[1] && a[2] < b[3] && b[2] < a[3];
+      layout.flows.forEach((f, k) => {
+        const above = layout.flows.slice(k + 1).filter((g) => meet(boxes[k], boxes[g.index]));
+        let mask = '';
+        if (above.length) {
+          const id = `strand-outline-mask${f.index}`;
+          const d = compoundD(above.map((g) => ribbonParts[g.index].polygon));
+          const [x0, x1, y0, y1] = boxes[k].map((v, i) => v + (i % 2 ? 2 : -2));
+          const region = `x="${fmt(x0)}" y="${fmt(y0)}" width="${fmt(x1 - x0)}" height="${fmt(y1 - y0)}"`;
+          defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" ${region}><rect ${region} fill="white"/>` +
+            `<path d="${d}" fill="black"/><path d="${d}" fill="none" stroke="white" stroke-width="${2 * OUTLINE_EDGE}"/></mask>`);
+          mask = `mask="url(#${id})"`;
+        }
+        outline(outlineEdges[f.index], strandOutlines, mask);
+      });
+    }
 
     const nodeFill = (n, id, polygons, x0, x1, stops) => {
       const gid = `gn${n.id}_${id}`;
@@ -381,7 +417,7 @@
         }
         nodePolygons.set(n.id, shape.polygons);
         const mask = (style.thinOutline || borderOn) ? edgeMask(n, shape.polygons) : '';
-        outline(shape.borderEdges, trunks, mask);
+        outline(shape.borderEdges, trunks, mask, !!mask);
         if (borderOn) {
           shape.borderEdges.forEach((line) => {
             trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD(line, map, false)}" ${strokeAttrs(true)} ${mask}/>`);
@@ -449,7 +485,7 @@
           trunks.push(`<path class="node-outline" data-node="${n.id}" d="${pathD([[b.faceX, b.lowerY], [b.faceX, b.upperY]], map, false)}" ${strokeAttrs()}/>`);
         }
       }
-      outline(edges, trunks, mask);
+      outline(edges, trunks, mask, !!mask);
     });
 
     if (style.nodeSums) {
