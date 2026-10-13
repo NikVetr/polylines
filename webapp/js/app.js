@@ -1660,6 +1660,14 @@
     const k = plot.width / frame.width;
     const h = frame.height - frame.margin.top - frame.margin.bottom;
     const labels = new Map([...svg.querySelectorAll('.node-label')].map((el) => [Number(el.dataset.node), el.getBoundingClientRect()]));
+    // A node's drawn body: its trunk parts together (an end node's body and merge band).
+    const bars = new Map();
+    svg.querySelectorAll('.trunk').forEach((el) => {
+      const r = el.getBoundingClientRect();
+      const b = bars.get(Number(el.dataset.node));
+      bars.set(Number(el.dataset.node), b ? { left: Math.min(b.left, r.left), right: Math.max(b.right, r.right), top: Math.min(b.top, r.top),
+        bottom: Math.max(b.bottom, r.bottom) } : { left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+    });
     const white = C.parse('#FFFFFF');
     const sets = [];
     layout.nodes.forEach((n) => {
@@ -1669,8 +1677,9 @@
       const hh = Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) * k / 2;
       const label = labels.get(n.id) || { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
       const total = Math.max(n.inValue, n.outValue);
+      const bar = bars.get(n.id) || { left: cx - hw, right: cx + hw, top: cy - hh, bottom: cy + hh };
       (sets[n.set - 1] = sets[n.set - 1] || []).push({ id: n.id, name: dataName(n), fill: C.flatten(colors.node[n.id], white),
-        color: C.toHex(colors.node[n.id], false), total, count: fmtNodeCount(total), cx,
+        color: C.toHex(colors.node[n.id], false), total, count: fmtNodeCount(total), cx, bar,
         left: Math.min(cx - hw, label.left), right: Math.max(cx + hw, label.right), top: Math.min(cy - hh, label.top), bottom: Math.max(cy + hh, label.bottom) });
     });
     // A column's color: its nodes' colors (as drawn on white) weighted by their totals, darkened as

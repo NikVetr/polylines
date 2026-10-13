@@ -2517,25 +2517,40 @@ test('hovering a strip badge lights its column of nodes under a beam, and a valu
   await expect(page.locator('#plot .node-label.column-focus')).toHaveCount(4);
   expect(await page.locator('#plot .node-label.column-focus').first().evaluate((el) => getComputedStyle(el).fontWeight)).toBe('700');
   await expect(page.locator('#column-beam')).toBeVisible();
-  // Every lit node and label lies wholly inside the beam's outline.
-  const inBeam = () => page.evaluate(() => {
+  // The beam starts as wide as the column's zone and narrows to the lit nodes' drawn bodies, which
+  // lie wholly inside it, without overshooting them (labels of end nodes reach past their nodes).
+  const inBeam = (column) => page.evaluate((c) => {
     const beam = document.querySelector('#column-beam');
     const box = beam.getBoundingClientRect();
     const points = beam.style.clipPath.match(/polygon\((.*)\)/)[1].split(',').map((point) => point.trim().split(/\s+/)
       .map((v, i) => (v.endsWith('%') ? parseFloat(v) / 100 * (i ? box.height : box.width) : parseFloat(v)) + (i ? box.top : box.left)));
-    const inside = (x, y) => points.reduce((c, [xi, yi], i) => {
+    const inside = (x, y) => points.reduce((hit, [xi, yi], i) => {
       const [xj, yj] = points[(i + points.length - 1) % points.length];
-      return (yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi ? !c : c;
+      return (yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi ? !hit : hit;
     }, false);
-    return [...document.querySelectorAll('#plot .column-focus')].map((el) => el.getBoundingClientRect())
-      .every((r) => [[r.left, r.top], [r.right, r.top], [r.left, r.bottom], [r.right, r.bottom]].every(([x, y]) => inside(x, y)));
-  });
-  expect(await inBeam()).toBe(true);
+    const trunks = [...document.querySelectorAll('#plot .trunk.column-focus')].map((el) => el.getBoundingClientRect());
+    const zone = document.querySelector(`#column-strip .strip-zone[data-strip-zone="${c}"]`).getBoundingClientRect();
+    const top = points.filter(([, y]) => Math.abs(y - box.top) < 0.5).map(([x]) => x);
+    const foot = points.filter(([, y]) => Math.abs(y - box.bottom) < 0.5).map(([x]) => x);
+    // Corners half a pixel in: the beam's edges run along the nodes' own.
+    return { within: trunks.every((r) => [[r.left + 0.5, r.top + 0.5], [r.right - 0.5, r.top + 0.5], [r.left + 0.5, r.bottom - 0.5],
+      [r.right - 0.5, r.bottom - 0.5]].every(([x, y]) => inside(x, y))),
+      top: [Math.min(...top) - zone.left, Math.max(...top) - zone.right],
+      foot: [Math.min(...foot) - Math.min(...trunks.map((r) => r.left)), Math.max(...foot) - Math.max(...trunks.map((r) => r.right))] };
+  }, column);
+  const fits = (b) => {
+    expect(b.within).toBe(true);
+    b.top.concat(b.foot).forEach((d) => expect(Math.abs(d)).toBeLessThan(1));
+  };
+  fits(await inBeam('treatment'));
+  await badge(page, 'response').hover();
+  await expect(page.locator('#plot .node-label.column-focus')).toHaveCount(3);
+  fits(await inBeam('response'));
   await page.locator('[data-strip-values="treatment"] [data-strip-value="Surgery"]').hover();
   await expect(page.locator('#plot .trunk.column-focus')).toHaveCount(1);
   expect(await page.locator('#plot .trunk.column-focus').getAttribute('data-node'))
     .toBe(String(await page.evaluate(() => window.SankeyApp.state.loc.findIndex((r) => r.label === 'Surgery'))));
-  expect(await inBeam()).toBe(true);
+  fits(await inBeam('treatment'));
   await page.mouse.move(5, 500);
   await expect(page.locator('#plot .column-focus')).toHaveCount(0);
   await expect(page.locator('#column-beam')).toBeHidden();

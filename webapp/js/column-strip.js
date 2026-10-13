@@ -16,8 +16,8 @@
 
   // hooks: change(source) applies a new source; refuse(message) explains a refused change;
   // geometry() gives the shown columns in diagram order, { cx, color, nodes: [{ id, name, color,
-  // count, cx, left, right, top, bottom }] } in client px, a node's box including its label (null
-  // without a drawing);
+  // count, cx, left, right, top, bottom, bar }] } in client px: a node's box including its label,
+  // and bar, its drawn body's (null without a drawing);
   // focus(ids) marks those nodes in the plot (null clears). beam: the element drawn from a badge to
   // its nodes.
   function create(host, beam, hooks) {
@@ -211,8 +211,9 @@
       });
     }
 
-    // The nodes of a hovered badge (its column) or value (its node) glow under a beam from it, which
-    // widens to take in every node whole, labels included, from the top one down.
+    // The nodes of a hovered badge (its column) or value (its node) glow under a beam from the foot
+    // of the column's zone (or from a dragged badge or value), which narrows to the nodes' drawn
+    // bodies by the top of the first label and runs straight down past the last node.
     function light(target) {
       lit = target;
       const nodesOf = () => {
@@ -225,15 +226,16 @@
       let nodes = nodesOf();
       hooks.focus(nodes.length ? nodes.map((n) => n.id) : null);
       if (!nodes.length) { beam.hidden = true; return; }
-      nodes = nodesOf(); // bold labels are wider
-      const from = target.element.getBoundingClientRect();
+      nodes = nodesOf(); // bold labels are taller and wider
+      const box = host.getBoundingClientRect();
+      const zone = !target.dragged && zones.find((z) => z.column === target.column);
+      const from = zone ? { left: box.left + zone.left, right: box.left + zone.right } : target.element.getBoundingClientRect();
       const frame = beam.parentElement.getBoundingClientRect();
-      const pad = 6;
-      const left = Math.min(...nodes.map((n) => n.left)) - pad;
-      const right = Math.max(...nodes.map((n) => n.right)) + pad;
-      const top = host.getBoundingClientRect().bottom;
-      const reach = Math.max(top, Math.min(...nodes.map((n) => n.top)) - pad);
-      const bottom = Math.max(...nodes.map((n) => n.bottom)) + pad;
+      const left = Math.min(...nodes.map((n) => n.bar.left));
+      const right = Math.max(...nodes.map((n) => n.bar.right));
+      const top = box.bottom;
+      const reach = Math.max(top, Math.min(...nodes.map((n) => n.top)) - 4);
+      const bottom = Math.max(...nodes.map((n) => n.bar.bottom)) + 4;
       if (!(bottom > top)) { beam.hidden = true; return; }
       const x0 = Math.min(from.left, left);
       const x1 = Math.max(from.right, right);
@@ -315,13 +317,13 @@
         const chip = local(drag.element.getBoundingClientRect());
         Object.assign(valueMarker.style, { left: `${chip.left}px`, width: `${chip.right - chip.left}px`, top: `${edge - box.top - 1}px` });
         valueMarker.hidden = false;
-        light({ column: drag.column, value: drag.element.dataset.stripValue, element: drag.ghost });
+        light({ column: drag.column, value: drag.element.dataset.stripValue, element: drag.ghost, dragged: true });
         return;
       }
       drag.ghost.style.left = `${event.clientX - box.left - drag.dx}px`;
       drag.ghost.style.top = `${event.clientY - box.top - drag.dy}px`;
       showSlot(slotAt(event, drag.column), drag.column);
-      if (source.enabled.includes(drag.column)) light({ column: drag.column, element: drag.ghost });
+      if (source.enabled.includes(drag.column)) light({ column: drag.column, element: drag.ghost, dragged: true });
     }
 
     function endDrag(event) {
