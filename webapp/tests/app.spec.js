@@ -49,6 +49,26 @@ const keepOnly = async (page, column, value) => {
   await details.locator(`[data-only-value="${value}"]`).click();
 };
 
+// The column strip above the plot: a column's badge, and points to drag badges to, in the row of
+// shown columns ('in') or of those left out ('out').
+const badge = (page, column) => page.locator(`#column-strip .strip-badge[data-strip-column="${column}"]`);
+const stripRowY = async (page, row) => {
+  const box = await page.locator(`#column-strip .strip-${row}`).boundingBox();
+  return row === 'out' ? box.y + box.height / 2 : box.y + 14;
+};
+const leftOfBadge = async (page, column, row = 'in') => ({ x: (await badge(page, column).boundingBox()).x - 6, y: await stripRowY(page, row) });
+const betweenBadges = async (page, a, b, row) => {
+  const [p, q] = [await badge(page, a).boundingBox(), await badge(page, b).boundingBox()];
+  return { x: (p.x + p.width / 2 + q.x + q.width / 2) / 2, y: await stripRowY(page, row) };
+};
+const dragBadge = async (page, column, to) => {
+  const from = await badge(page, column).boundingBox();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 6 });
+  await page.mouse.up();
+};
+
 test('renders the default example without errors', async ({ page }) => {
   await expect(page.locator('#plot .ribbon')).toHaveCount(14);
   await expect(page.locator('#plot .node-label')).toHaveCount(9);
@@ -348,16 +368,19 @@ test('Data controls rebuild weighted flows from column order, visibility and row
   expect(s.paths.flatMap((p) => p.members.map((m) => m.id)).sort()).toEqual(['P1', 'P3', 'P5']);
   await expect(page.locator('#plot .layer-subset')).toHaveText('sex ∈ {Female}');
   await expect(page.locator('#plot .layer-subset [font-weight="600"]')).toHaveText('sex');
-  await page.locator('[data-enable-column="TR01"]').uncheck();
-  await page.locator('[data-table-column="TR02"] .column-grip').dragTo(page.locator('[data-table-column="TR00"]'), { targetPosition: { x: 30, y: 2 } });
+  await badge(page, 'TR01').click();
+  await dragBadge(page, 'TR02', await leftOfBadge(page, 'TR00'));
   s = await state(page);
   expect(s.setNames).toEqual(['TR02', 'TR00']);
   expect(s.matrices).toEqual([[[11, 0], [0, 6]]]);
   expect(s.paths).toHaveLength(2);
   expect(s.sourceTable.table.rows).toHaveLength(5);
-  await expect(page.locator('[data-enable-column="TR02"]')).toBeDisabled();
-  await expect(page.locator('[data-enable-column="TR00"]')).toBeDisabled();
-  await expect(page.locator('[data-enable-column="TR01"]')).toBeEnabled();
+  await expect(badge(page, 'TR02')).toHaveClass(/locked/);
+  await expect(badge(page, 'TR00')).toHaveClass(/locked/);
+  await expect(badge(page, 'TR01')).toHaveAttribute('aria-pressed', 'false');
+  await badge(page, 'TR00').click();
+  await expect(page.locator('#notice')).toHaveText('Keep at least two diagram columns.');
+  expect((await state(page)).setNames).toEqual(['TR02', 'TR00']);
   await expect(page.locator('#banner')).toBeHidden();
   const captionAbove = await page.evaluate(() => {
     const caption = document.querySelector('#plot .layer-subset').getBBox();
@@ -374,7 +397,7 @@ test('Data controls rebuild weighted flows from column order, visibility and row
   expect(project.sourceTable.filters).toEqual({ sex: ['Female'] });
   expect(project.matrices).toEqual([[[11, 0], [0, 6]]]);
   expect(await page.evaluate(() => window.SankeyApp.exportSvgText())).toContain('class="layer-subset"');
-  await page.locator('[data-enable-column="TR01"]').check();
+  await badge(page, 'TR01').click();
   expect((await state(page)).setNames).toEqual(['TR02', 'TR00', 'TR01']);
   await page.locator('[data-clear-filters]').click();
   expect((await state(page)).sourceTable.summary.total).toBe(23);
@@ -411,8 +434,8 @@ test('true long tables can reorder and skip stages before checking missing visit
   await page.locator('#import-apply').click();
   await keepOnly(page, 'sex', 'Female');
   expect((await state(page)).sourceTable.summary.total).toBe(1);
-  await page.locator('[data-enable-column="2"]').uncheck();
-  await page.locator('[data-table-column="3"] .column-grip').dragTo(page.locator('[data-table-column="1"]'), { targetPosition: { x: 30, y: 2 } });
+  await badge(page, '2').click();
+  await dragBadge(page, '3', await leftOfBadge(page, '1'));
   const s = await state(page);
   expect(s.setNames).toEqual(['visit 3', 'visit 1']);
   expect(s.sourceTable.summary.total).toBe(2);
@@ -425,7 +448,7 @@ test('true long tables can reorder and skip stages before checking missing visit
 
 test('table column choices and row filters survive history, autosave and project reloads', async ({ page }, testInfo) => {
   await importCohortTable(page);
-  await page.locator('[data-enable-column="TR01"]').uncheck();
+  await badge(page, 'TR01').click();
   const unfiltered = await state(page);
   await keepOnly(page, 'sex', 'Female');
   const filtered = await state(page);
@@ -437,7 +460,7 @@ test('table column choices and row filters survive history, autosave and project
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('polylines-sankey-v1'))?.sourceTable?.filters)).toEqual({ sex: ['Female'] });
   const project = (await page.evaluate(() => window.SankeyApp.bundleFiles())).find((f) => f.name === 'project.json').text;
   await page.reload();
-  await expect(page.locator('[data-enable-column="TR01"]')).not.toBeChecked();
+  await expect(badge(page, 'TR01')).toHaveAttribute('aria-pressed', 'false');
   await expect(page.locator('#plot .layer-subset')).toHaveText('sex ∈ {Female}');
   await page.evaluate(() => window.SankeyApp.loadExample('labeled'));
   const filename = testInfo.outputPath('filtered-project.json');
@@ -2299,39 +2322,162 @@ test('works when opened directly from disk', async ({ browser }) => {
 
 test('single-value filters hide their diagram column, restore it and allow a manual override', async ({ page }) => {
   await importCohortTable(page);
-  await page.locator('[data-enable-column="sex"]').check();
+  await badge(page, 'sex').click();
   await keepOnly(page, 'sex', 'Female');
-  await expect(page.locator('[data-enable-column="sex"]')).not.toBeChecked();
+  await expect(badge(page, 'sex')).toHaveAttribute('aria-pressed', 'false');
   expect((await state(page)).setNames).toEqual(['TR00', 'TR01', 'TR02']);
   expect((await state(page)).sourceTable.summary.total).toBe(17);
   await page.locator('[data-filter-column="sex"] [data-keep-all]').click();
-  await expect(page.locator('[data-enable-column="sex"]')).toBeChecked();
+  await expect(badge(page, 'sex')).toHaveAttribute('aria-pressed', 'true');
   expect((await state(page)).setNames).toEqual(['TR00', 'TR01', 'TR02', 'sex']);
   await keepOnly(page, 'sex', 'Female');
-  await page.locator('[data-enable-column="sex"]').check();
-  await page.locator('[data-enable-column="sex"]').uncheck();
+  await badge(page, 'sex').click();
+  await expect(badge(page, 'sex')).toHaveAttribute('aria-pressed', 'true');
+  await badge(page, 'sex').click();
   await page.locator('[data-clear-filters]').click();
-  await expect(page.locator('[data-enable-column="sex"]')).not.toBeChecked();
+  await expect(badge(page, 'sex')).toHaveAttribute('aria-pressed', 'false');
   await page.locator('#undo').click();
   expect((await state(page)).sourceTable.filters).toEqual({ sex: ['Female'] });
 });
 
-test('diagram columns support drag-and-drop and keyboard ordering, including disabled entries', async ({ page }) => {
+test('strip badges reorder columns by dragging and with Alt+arrows, including columns left out', async ({ page }) => {
   await importCohortTable(page);
-  await expect(page.locator('#table-controls [data-column-move]')).toHaveCount(0);
-  await page.locator('[data-table-column="TR02"] .column-grip').dragTo(page.locator('[data-table-column="TR00"]'), { targetPosition: { x: 30, y: 2 } });
+  await expect(page.locator('#table-controls [data-table-column]')).toHaveCount(0);
+  // Badges sit over their columns, so show the whole drawing.
+  await page.locator('#fit-panel').click();
+  await dragBadge(page, 'TR02', await leftOfBadge(page, 'TR00'));
   expect((await state(page)).setNames).toEqual(['TR02', 'TR00', 'TR01']);
-  await page.locator('[data-table-column="sex"] .column-grip').dragTo(page.locator('[data-table-column="TR00"]'), { targetPosition: { x: 30, y: 2 } });
+  // A left-out column dropped in its row moves in the order and stays out.
+  await dragBadge(page, 'sex', await betweenBadges(page, 'TR02', 'TR00', 'out'));
   expect((await state(page)).setNames).toEqual(['TR02', 'TR00', 'TR01']);
   expect((await state(page)).sourceTable.order).toEqual(['TR02', 'sex', 'TR00', 'TR01']);
-  await page.locator('[data-enable-column="sex"]').check();
+  await badge(page, 'sex').click();
   expect((await state(page)).setNames).toEqual(['TR02', 'sex', 'TR00', 'TR01']);
-  await page.locator('[data-table-column="sex"]').focus();
-  await page.keyboard.press('Alt+ArrowUp');
+  await badge(page, 'sex').focus();
+  await page.keyboard.press('Alt+ArrowLeft');
   expect((await state(page)).setNames).toEqual(['sex', 'TR02', 'TR00', 'TR01']);
-  await expect(page.locator('[data-table-column="sex"]')).toBeFocused();
+  await expect(badge(page, 'sex')).toBeFocused();
   await page.locator('#undo').click();
   expect((await state(page)).setNames).toEqual(['TR02', 'sex', 'TR00', 'TR01']);
+  // Dragged up, a shown column is left out; dragged down from there, it comes back where dropped.
+  await dragBadge(page, 'TR01', { x: (await badge(page, 'TR01').boundingBox()).x + 10, y: await stripRowY(page, 'out') });
+  expect((await state(page)).setNames).toEqual(['TR02', 'sex', 'TR00']);
+  await dragBadge(page, 'TR01', await leftOfBadge(page, 'TR02'));
+  expect((await state(page)).setNames).toEqual(['TR01', 'TR02', 'sex', 'TR00']);
+});
+
+test('the column strip puts a badge over each node column, with its values below in node order and color', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const columns = () => page.evaluate(() => {
+    const app = window.SankeyApp;
+    const plot = document.querySelector('#plot');
+    const box = plot.getBoundingClientRect();
+    const k = box.width / Number(plot.getAttribute('width'));
+    const source = app.state.sourceTable;
+    return source.order.filter((c) => source.enabled.includes(c)).map((c, s) => {
+      const nodes = app.layout.nodes.filter((n) => n.set === s + 1).sort((a, b) => b.Y - a.Y);
+      const cx = box.left + (18 + nodes.reduce((t, n) => t + n.X, 0) / nodes.length) * k;
+      const b = document.querySelector(`.strip-badge[data-strip-column="${c}"]`).getBoundingClientRect();
+      const chips = [...document.querySelector(`[data-strip-values="${c}"]`).children];
+      return { off: Math.abs(b.left + b.width / 2 - cx), chips: chips.map((el) => el.dataset.stripValue),
+        colored: chips.filter((el) => el.style.getPropertyValue('--node')).length, nodes: nodes.map((n) => app.state.loc[n.id].label) };
+    });
+  });
+  const check = async () => {
+    const cols = await columns();
+    expect(cols.map((c) => c.chips)).toEqual(cols.map((c) => c.nodes));
+    cols.forEach((c) => {
+      expect(c.off).toBeLessThan(1);
+      expect(c.colored).toBe(c.chips.length);
+    });
+  };
+  await check();
+  expect((await columns()).map((c) => c.nodes[0])).toEqual(['Stage I', 'Surgery', 'Remission']);
+  // The badges follow their columns when the plot zooms or pans.
+  await page.locator('#zoom-in').click();
+  await check();
+  await page.locator('#stage').evaluate((el) => { el.scrollLeft = 120; });
+  await expect.poll(async () => Math.max(...(await columns()).map((c) => c.off))).toBeLessThan(1);
+});
+
+test('hovering a strip badge lights its column of nodes under a beam, and a value its node', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  await badge(page, 'treatment').hover();
+  await expect(page.locator('#plot .trunk.column-focus')).toHaveCount(4);
+  await expect(page.locator('#plot .node-label.column-focus')).toHaveCount(4);
+  expect(await page.locator('#plot .node-label.column-focus').first().evaluate((el) => getComputedStyle(el).fontWeight)).toBe('700');
+  await expect(page.locator('#column-beam')).toBeVisible();
+  const beam = await page.locator('#column-beam').boundingBox();
+  const [surgery, palliative] = [await nodeAt(page, 'Surgery'), await nodeAt(page, 'Palliative')];
+  expect(beam.x).toBeLessThan(surgery.x);
+  expect(beam.x + beam.width).toBeGreaterThan(surgery.x);
+  expect(beam.y + beam.height).toBeGreaterThan(palliative.y);
+  await page.locator('[data-strip-values="treatment"] [data-strip-value="Surgery"]').hover();
+  await expect(page.locator('#plot .trunk.column-focus')).toHaveCount(1);
+  expect(await page.locator('#plot .trunk.column-focus').getAttribute('data-node'))
+    .toBe(String(await page.evaluate(() => window.SankeyApp.state.loc.findIndex((r) => r.label === 'Surgery'))));
+  await page.mouse.move(5, 500);
+  await expect(page.locator('#plot .column-focus')).toHaveCount(0);
+  await expect(page.locator('#column-beam')).toBeHidden();
+});
+
+test('clicking a strip value drops its rows and greys it out, and clicking it again keeps them', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const chip = page.locator('[data-strip-values="treatment"] [data-strip-value="Surgery"]');
+  expect((await state(page)).sourceTable.summary.total).toBe(560);
+  await chip.click();
+  const s = await state(page);
+  expect(s.sourceTable.filters).toEqual({ treatment: ['Chemotherapy', 'Palliative', 'Radiation'] });
+  expect(s.sourceTable.summary.total).toBe(560 - 232);
+  expect(s.setNames).toEqual(['diagnosis', 'treatment', 'response']);
+  await expect(chip).toHaveAttribute('aria-pressed', 'false');
+  await expect(chip).toHaveClass(/off/);
+  await expect(badge(page, 'treatment')).toContainText('3/4');
+  await expect(page.locator('#plot .layer-subset')).toHaveText('treatment ∈ {Chemotherapy, Palliative, Radiation}');
+  await expect(page.locator('#plot .node-label', { hasText: 'Surgery' })).toHaveCount(0);
+  await expect(page.locator('[data-filter-column="treatment"] summary')).toContainText('3 kept');
+  await chip.click();
+  expect((await state(page)).sourceTable.filters).toEqual({});
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#plot .layer-subset')).toHaveCount(0);
+});
+
+test('a long table\'s values are kept or dropped per stage', async ({ page }) => {
+  await page.locator('.topbar [data-open-import]').click();
+  await page.locator('#import-text').fill('id,visit,status,sex\nA,1,A,Female\nA,2,B,Female\nA,3,C,Female\nB,1,A,Male\nB,2,B,Male\nB,3,D,Male\nC,1,B,Female\nC,3,C,Female\n');
+  await page.locator('#import-apply').click();
+  expect((await state(page)).sourceTable.summary.total).toBe(2);
+  await page.locator('[data-strip-values="3"] [data-strip-value="D"]').click();
+  const s = await state(page);
+  expect(s.sourceTable.stageFilters).toEqual({ 3: ['C'] });
+  expect(s.sourceTable.filters).toEqual({});
+  expect(s.sourceTable.summary.total).toBe(1);
+  expect(s.paths.flatMap((p) => p.members.map((m) => m.id))).toEqual(['A']);
+  await expect(page.locator('#plot .layer-subset')).toHaveText('status at visit 3 ∈ {C}');
+  // The same category at another stage is a different value.
+  await expect(page.locator('[data-strip-values="1"] [data-strip-value="A"]')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('[data-clear-filters]').click();
+  expect((await state(page)).sourceTable.stageFilters).toEqual({});
+  expect((await state(page)).sourceTable.summary.total).toBe(2);
+});
+
+test('the strip\'s tab hides and shows it, the choice survives a reload, and other data has no strip', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const height = async () => (await page.locator('#stage').boundingBox()).height;
+  const open = await height();
+  const tab = page.locator('#column-strip .strip-tab');
+  await tab.click();
+  await expect(page.locator('#column-strip .strip-body')).toBeHidden();
+  await expect(tab).toHaveAttribute('aria-expanded', 'false');
+  expect(await height()).toBeGreaterThan(open + 60);
+  await expect.poll(async () => (await page.locator('#plot').boundingBox()).height).toBeGreaterThan(open + 60);
+  await page.waitForTimeout(700);
+  await page.reload();
+  await expect(page.locator('#column-strip .strip-body')).toBeHidden();
+  await tab.click();
+  await expect(badge(page, 'treatment')).toBeVisible();
+  await page.evaluate(() => window.SankeyApp.loadExample('labeled'));
+  await expect(page.locator('#column-strip')).toBeHidden();
 });
 
 const importManyPaths = (page) => page.evaluate(() => {

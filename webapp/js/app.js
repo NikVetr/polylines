@@ -48,6 +48,12 @@
 
   const svg = $('#plot');
   const stageEl = $('#stage');
+  const columnStrip = window.SK.columnStrip.create($('#column-strip'), $('#column-beam'), {
+    change: (source) => rebuildTable(source),
+    refuse: (message) => notify(message),
+    geometry: () => columnGeometry(),
+    focus: (ids) => focusColumnNodes(ids)
+  });
 
   let state = blankState();
   let layout = null;
@@ -213,6 +219,7 @@
   }
 
   function computeFrame(data = state) {
+    columnStrip.size(data.sourceTable);
     const box = stageEl.getBoundingClientRect();
     let width = data.style.canvasWidth || Math.max(320, Math.floor(box.width));
     let minHeight = 240;
@@ -343,6 +350,7 @@
     $('#fit-height').setAttribute('aria-pressed', String(mode === 'height'));
     $('#zoom-out').disabled = zoom <= 0.1;
     $('#zoom-in').disabled = zoom >= 10;
+    columnStrip.place();
   }
 
   // Zoom the display about a screen point (the content under it stays put).
@@ -609,6 +617,7 @@
       if (!(err instanceof L.SankeyError)) console.error(err);
     }
     scalePresentation();
+    columnStrip.render(state.sourceTable);
     if (hover && !hover.single && state.paths && state.paths.length > state.style.maxHoverSubstrands) {
       hover = null;
       showHoverInfo(null);
@@ -1605,6 +1614,7 @@
     } catch (err) {
       computeFrame();
       window.SK.tableControls.render($('#table-controls'), state.sourceTable, rebuildTable, true);
+      columnStrip.place();
       showError(err.message);
       if (!(err instanceof L.SankeyError)) console.error(err);
     }
@@ -1618,19 +1628,43 @@
     return layout.nodes.find((n) => n.key === selection.key) || null;
   }
 
+  // A node's row or column name in the flow matrices.
+  function dataName(n) {
+    const dn = state.dimnames;
+    if (state.mode === 'graph') return dn[0] && dn[0].rows && dn[0].rows[n.id];
+    if (n.set === 1) return dn[0] && dn[0].rows && dn[0].rows[n.node - 1];
+    return dn[n.set - 2] && dn[n.set - 2].cols && dn[n.set - 2].cols[n.node - 1];
+  }
+
   function nodeDisplayName(n) {
     // The label as entered (drawn labels may carry a total).
     if (n.hasLabel) return (state.loc[n.id] && state.loc[n.id].label) || n.label;
-    const dn = state.dimnames;
-    let name = null;
-    if (state.mode === 'graph') {
-      name = dn[0] && dn[0].rows && dn[0].rows[n.id];
-    } else if (n.set === 1) {
-      name = dn[0] && dn[0].rows && dn[0].rows[n.node - 1];
-    } else {
-      name = dn[n.set - 2] && dn[n.set - 2].cols && dn[n.set - 2].cols[n.node - 1];
-    }
+    const name = dataName(n);
     return usableName(name) ? name : `Set ${n.set} · node ${n.node}`;
+  }
+
+  // Where each node column is on screen (client px), in diagram order, for the column strip.
+  function columnGeometry() {
+    if (!layout || layout.mode !== 'layered') return null;
+    const plot = svg.getBoundingClientRect();
+    const k = plot.width / frame.width;
+    const h = frame.height - frame.margin.top - frame.margin.bottom;
+    const sets = [];
+    layout.nodes.forEach((n) => {
+      const cx = plot.left + (frame.margin.left + n.X) * k;
+      const cy = plot.top + (frame.margin.top + h - n.Y) * k;
+      const hw = Math.max(n.widthPx, 4) * k / 2;
+      const hh = Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) * k / 2;
+      (sets[n.set - 1] = sets[n.set - 1] || []).push({ id: n.id, name: dataName(n), color: C.toHex(colors.node[n.id], false),
+        cx, left: cx - hw, right: cx + hw, top: cy - hh, bottom: cy + hh });
+    });
+    return sets.map((nodes) => ({ nodes, cx: nodes.reduce((t, n) => t + n.cx, 0) / nodes.length }));
+  }
+
+  function focusColumnNodes(ids) {
+    svg.querySelectorAll('.column-focus').forEach((el) => el.classList.remove('column-focus'));
+    (ids || []).forEach((id) => svg.querySelectorAll(`.trunk[data-node="${id}"], .node-label[data-node="${id}"]`)
+      .forEach((el) => el.classList.add('column-focus')));
   }
 
   function targetOf(event) {
@@ -3285,6 +3319,7 @@
       if (e.dataTransfer.files.length) loadFileList(e.dataTransfer.files);
     });
     new ResizeObserver(() => requestRender()).observe(stageEl);
+    stageEl.addEventListener('scroll', () => columnStrip.place(), { passive: true });
   }
 
   function init() {

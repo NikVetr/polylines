@@ -103,16 +103,20 @@
       <div id="controls"></div>
     </aside>
 
-    <section id="stage" class="stage">
-      <div class="banners">
-        <div id="banner" class="banner error" role="alert" hidden></div>
-        <div id="warnings" class="banner warn" hidden></div>
-        <div id="notice" class="banner info" role="status" hidden></div>
-      </div>
-      <svg id="plot" xmlns="http://www.w3.org/2000/svg" text-rendering="geometricPrecision"></svg>
-      <div id="canvas-resize" class="canvas-resize" title="Drag to resize the canvas (the plot keeps its scale)"></div>
-      <div id="drop-overlay" class="drop-overlay" hidden>Drop CSV or project files to load them</div>
-    </section>
+    <div class="stage-column">
+      <div id="column-strip" class="column-strip" hidden></div>
+      <section id="stage" class="stage">
+        <div class="banners">
+          <div id="banner" class="banner error" role="alert" hidden></div>
+          <div id="warnings" class="banner warn" hidden></div>
+          <div id="notice" class="banner info" role="status" hidden></div>
+        </div>
+        <svg id="plot" xmlns="http://www.w3.org/2000/svg" text-rendering="geometricPrecision"></svg>
+        <div id="canvas-resize" class="canvas-resize" title="Drag to resize the canvas (the plot keeps its scale)"></div>
+        <div id="drop-overlay" class="drop-overlay" hidden>Drop CSV or project files to load them</div>
+      </section>
+      <div id="column-beam" class="column-beam" hidden></div>
+    </div>
 
     <aside id="inspector" class="inspector">
       <div id="hover-info" class="hover-info" hidden></div>
@@ -166,6 +170,9 @@
           one more while keeping the rest; clicking empty space clears the emphasis.</li>
         <li>Drag nodes to move them (Shift: vertical only, Alt: horizontal only).</li>
         <li>Drag a strand up or down to reorder it within the stack at its nearer end.</li>
+        <li>For an imported table, the strip above the plot holds a badge over each node column, with its values
+          below: drag a badge sideways to reorder the columns, click it (or drag it up) to leave its column out,
+          and click a value to drop or keep its rows. The tab under the strip hides or shows it.</li>
         <li>For data imported from a wide or long table, hovering a strand or node traces every pathway through it
           and breaks them down by node and strand in the inspector; hold Ctrl/⌘ to trace one pathway, or
           Alt/⌥ for one item when the table has item ids. Ordinary hover pauses above 200 pathways by default;
@@ -272,6 +279,7 @@
   <script src="js/render.js"></script>
   <script src="js/glyphs.js"></script>
   <script src="js/table-controls.js"></script>
+  <script src="js/column-strip.js"></script>
   <script src="js/zip.js"></script>
   <script src="js/examples.js"></script>
   <script src="js/importer.js"></script>
