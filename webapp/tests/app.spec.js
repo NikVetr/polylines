@@ -1144,6 +1144,58 @@ test('where strands cross, only the strand on top keeps its outline', async ({ p
   on.slice(0, 3).forEach((v, i) => expect(Math.abs(v - off[i])).toBeLessThan(6));
 });
 
+test('where traced substrands cross, only the trace on top keeps its edge', async ({ page }) => {
+  await page.evaluate(() => {
+    const T = window.SK.transform, app = window.SankeyApp;
+    // In alphabetical order A sits above B and Y above Z, so A -> Z and B -> Y cross.
+    const rows = Array.from({ length: 6 }, () => 'A,Z').concat(Array.from({ length: 6 }, () => 'B,Y'));
+    app.applyImport(T.build(T.parseTable('a,b\n' + rows.join('\n') + '\n'), { format: 'wide', columns: ['a', 'b'] }, { order: 'alphabetical' }), { labels: 'above' });
+    Object.assign(app.state.style, { canvasWidth: 900, canvasHeight: 700, cropExports: false });
+    app.update({ fit: true });
+  });
+  // Shift-click both strands into the pool; the first is traced (drawn) first, underneath.
+  const clicks = await page.evaluate(() => {
+    const box = document.querySelector('#plot').getBoundingClientRect();
+    return window.SankeyApp.layout.flows.map((f) => {
+      const [X, Y] = f.centerline[Math.floor(f.centerline.length * 0.2)];
+      return { x: box.left + 18 + X, y: box.top + box.height - 18 - Y };
+    });
+  });
+  for (const p of clicks) {
+    await page.keyboard.down('Shift');
+    await page.mouse.click(p.x, p.y);
+    await page.keyboard.up('Shift');
+  }
+  await page.mouse.move(5, 5);
+  await expect(page.locator('#plot .trace-edge')).toHaveCount(2);
+  const result = await page.evaluate(async () => {
+    const L = window.SankeyApp.layout, at = (points, x) => window.SK.layout.pointAtX(points, x)[1];
+    const [under, over] = L.flows;
+    let best = { depth: -Infinity };
+    for (let x = under.startX + 2; x < under.endX - 2; x += 0.5) {
+      [under.upper, under.lower].forEach((edge) => {
+        const y = at(edge, x), a = at(over.upper, x), b = at(over.lower, x);
+        const depth = (y - a) * (y - b) < 0 ? Math.min(Math.abs(y - a), Math.abs(y - b)) : -1;
+        if (depth > best.depth) best = { x, y, depth };
+      });
+    }
+    const raster = async (text) => {
+      const image = new Image();
+      const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
+      await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url; });
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width; canvas.height = image.height;
+      canvas.getContext('2d').drawImage(image, 0, 0);
+      URL.revokeObjectURL(url);
+      return [...canvas.getContext('2d').getImageData(Math.floor(18 + best.x), Math.floor(image.height - 18 - best.y), 1, 1).data];
+    };
+    const text = window.SankeyApp.exportSvgText();
+    return { depth: best.depth, edged: await raster(text), bare: await raster(text.replace(/<path class="trace-edge"[^>]*\/>/g, '')) };
+  });
+  expect(result.depth).toBeGreaterThan(3);
+  result.edged.slice(0, 3).forEach((v, i) => expect(Math.abs(v - result.bare[i])).toBeLessThan(3));
+});
+
 for (const interior of [false, true]) {
   test(`${interior ? 'interior' : 'source'} merge joins keep tapered gaps and borders on the filled curves`, async ({ page }) => {
     await page.mouse.move(5, 5);

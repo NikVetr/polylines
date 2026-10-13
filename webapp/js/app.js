@@ -1705,8 +1705,29 @@
     let body = '';
     const shades = [];
     const annotations = [];
-    units.forEach(([pi, mi], n) => {
+    const drawn = units.map(([pi, mi], n) => {
       const t = P.tracePolygon(layout, traces.subs, pi, { member: mi, slots, tiled, fadeLabels: state.style.labelPosition !== 'above' });
+      const widen = (target.single || mi >= 0) && t.thickness < MIN_SINGLE_PX ? MIN_SINGLE_PX - t.thickness : 0;
+      const xs = t.polygon.map((p) => sx(p[0])), ys = t.polygon.map((p) => sy(p[1]));
+      defs += `<path id="trace-shape${n}" d="${line(t.polygon)}Z"/>`;
+      return { pi, mi, t, widen, box: [Math.min(...xs) - widen, Math.max(...xs) + widen, Math.min(...ys) - widen, Math.max(...ys) + widen] };
+    });
+    // A trace's edge hides under the traces drawn after (above) it, except within TRACE_EDGE px of
+    // their own edges, so where substrands cross only the top one is outlined (as with strands).
+    const TRACE_EDGE = 1;
+    const meet = (a, b) => a[0] < b[1] && b[0] < a[1] && a[2] < b[3] && b[2] < a[3];
+    const edgeMask = (k) => {
+      const above = drawn.filter((d, j) => j > k && meet(drawn[k].box, d.box));
+      if (!above.length) return '';
+      const use = (j, paint) => `<use href="#trace-shape${drawn.indexOf(j)}" ${paint}/>`;
+      const [x0, x1, y0, y1] = drawn[k].box.map((v, i) => Math.round((v + (i % 2 ? 2 : -2)) * 100) / 100);
+      const region = `x="${x0}" y="${y0}" width="${Math.round((x1 - x0) * 100) / 100}" height="${Math.round((y1 - y0) * 100) / 100}"`;
+      defs += `<mask id="trace-edge-mask${k}" maskUnits="userSpaceOnUse" ${region}><rect ${region} fill="white"/>` +
+        above.map((j) => use(j, j.widen ? `fill="black" stroke="black" stroke-width="${j.widen.toFixed(2)}" stroke-linejoin="round"` : 'fill="black"')).join('') +
+        above.filter((j) => !j.widen).map((j) => use(j, `fill="none" stroke="white" stroke-width="${2 * TRACE_EDGE}"`)).join('') + '</mask>';
+      return ` mask="url(#trace-edge-mask${k})"`;
+    };
+    drawn.forEach(({ pi, mi, t, widen }, n) => {
       annotations.push({ path: pi, member: mi, weight: unitWeight([pi, mi]), geometry: t });
       const xs = t.polygon.map((p) => p[0]);
       const x0 = Math.min(...xs);
@@ -1719,16 +1740,15 @@
       const edge = stops.map(([x, c]) => stopTag(at(x), '#111827', Math.min(1, (0.45 * Math.min(1, 2 * c.a)) / alpha).toFixed(3))).join('');
       const grad = (id, tags) => `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${sx(x0)}" y1="0" x2="${sx(x1)}" y2="0">${tags}</linearGradient>`;
       defs += grad(`trace${n}`, fill) + grad(`trace-edge${n}`, edge);
-      if ((target.single || mi >= 0) && t.thickness < MIN_SINGLE_PX) {
-        const widen = (MIN_SINGLE_PX - t.thickness).toFixed(2);
+      if (widen) {
         body += `<g class="trace-group" opacity="${alpha}"><path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})" stroke="url(#trace${n})" ` +
-          `stroke-width="${widen}" stroke-linejoin="round"/></g>`;
-        shades.push(`<path d="${line(t.polygon)}Z" fill="#000" stroke="#000" stroke-width="${widen}" stroke-linejoin="round"/>`);
+          `stroke-width="${widen.toFixed(2)}" stroke-linejoin="round"/></g>`;
+        shades.push(`<path d="${line(t.polygon)}Z" fill="#000" stroke="#000" stroke-width="${widen.toFixed(2)}" stroke-linejoin="round"/>`);
         return;
       }
       shades.push(`<path d="${line(t.polygon)}Z" fill="#000"/>`);
       body += `<g class="trace-group" opacity="${alpha}"><path class="trace" data-path="${pi}" d="${line(t.polygon)}Z" fill="url(#trace${n})"/>` +
-        `<path class="trace-edge" d="${line(t.upper)}${line(t.lower)}" fill="none" stroke="url(#trace-edge${n})" stroke-width="0.6"/></g>`;
+        `<path class="trace-edge" d="${line(t.upper)}${line(t.lower)}" fill="none" stroke="url(#trace-edge${n})" stroke-width="0.6"${edgeMask(n)}/></g>`;
     });
     if (shades.length > 1) {
       defs += overlapFilter();
