@@ -11,6 +11,86 @@ cd webapp
 npm run serve        # python3 -m http.server 4173, then open http://127.0.0.1:4173
 ```
 
+## Programmatic submissions
+
+`window.SankeyApp.submit(request)` loads data, validates it, and draws synchronously without opening a dialog. It returns a detached project object, suitable for saving or submitting again. Invalid requests throw a `SankeyError` before replacing the working project; rejected data does not enter history or autosave. Requests must contain JSON data with finite numbers. Unknown request fields and unknown `style`/`params` names are rejected.
+
+For example, in the app's browser context:
+
+```js
+const project = SankeyApp.submit({
+  type: 'table',
+  text: 'id,diagnosis,outcome\nP1,A,Remission\nP2,B,Progression\n',
+  spec: { format: 'wide', columns: ['diagnosis', 'outcome'], id: 'id' },
+  labels: 'above',
+  style: { canvasWidth: 1000, canvasHeight: 650 }
+});
+const svg = SankeyApp.exportSvgText();
+const png = await SankeyApp.exportPngBlob(); // Blob, at 2× resolution
+const bundle = SankeyApp.exportBundle();    // Uint8Array: CSVs, R code and project JSON
+```
+
+Three request types are supported:
+
+| Type | Required input | Optional settings |
+| --- | --- | --- |
+| `table` | `text`: CSV/TSV with a header | `spec`: the mapping described below; `options`: `{order, minShare, topN}`; `labels`: `above` (default), `inside`, `beside`, or `none`; `name`; positive `thickness` multiplier; `style`, `params`, `stageParams` |
+| `matrices` | `matrices`: an array of numeric matrices, including for a single matrix | `mode`: `layered` (default) or `graph`; `loc`: node records (generated when omitted); `dimnames`, `stageNames`, `params`, `stageParams`, `style`, `valueScale`, `colorMatrices`, `midMatrices`, `nodeColors`, `mergeColors`, `paths`, `setNames`, `pathUnit`, `view` |
+| `project` | `project`: an exported version-1 project object | Settings are taken from the project, with the same migration/default handling as file loading. |
+
+Table `spec` uses the same converter as the import dialog:
+
+- Wide: `{format: 'wide', columns: ['A', 'B', 'C'], id: 'id', weight: 'n', missing: 'drop'}`. `id` and `weight` are optional; `missing` can be `keep`.
+- Long: `{format: 'long', id: 'id', stage: 'wave', category: 'answer', weight: 'n', missing: 'keep', stageOrder: 'auto'}`. `weight` is optional; `stages` can explicitly select/order stage values.
+- Links: `{format: 'links', source: 'from', target: 'to', value: 'n', stage: 'step'}`. `value` and `stage` are optional.
+- Crosstab: `{format: 'crosstab'}`.
+
+Omitting `spec` uses the dialog's inference; supplying it makes automated workflows explicit. `options.order` accepts `appearance`, `size` or `alphabetical`; `minShare` is a fraction (0.05 = 5%), and `topN` is a node count. `params` uses the layout names in `layout.js`'s `DEFAULT_PARAMS`, such as `curvature` and `route`. `stageParams` is an array of per-stage routing/order overrides. `style` uses the application names, such as `palette`, `fontSize`, `labelCounts`, `canvasWidth` and `canvasHeight`; explicit style values override label-style defaults. Fresh table/matrix submissions use application defaults, independent of the previous diagram. `SankeyApp.getProject()` returns a detached snapshot of the current project.
+
+For matrix input, values are geometric thicknesses unless `valueScale` is supplied. Graph mode requires one square adjacency matrix. For example:
+
+```js
+SankeyApp.submit({
+  type: 'matrices',
+  matrices: [[[0.1, 0.2], [0.2, 0.1]]],
+  dimnames: [{ rows: ['A', 'B'], cols: ['X', 'Y'] }]
+});
+SankeyApp.submit({ type: 'project', project });
+```
+
+### Headless command line and Python/R workflows
+
+The command-line exporter uses the same browser API in an isolated headless Chromium session. It opens the app from disk, so no server or GUI interaction is required. Install the existing browser-test dependency and its Chromium binary once:
+
+```sh
+cd webapp
+npm ci
+npx playwright install chromium
+npm run render -- examples/submission.json ../tmp/diagram.svg
+npm run render -- examples/submission.json ../tmp/diagram.png
+```
+
+The output extension chooses SVG, PNG, project JSON (`.json`), or R bundle (`.zip`). Use `-` as the input filename to read request JSON from stdin. Rendering/validation failures exit nonzero and leave an existing output file untouched. A fresh browser is used for each invocation; the viewport is 1440 × 900, and explicit canvas dimensions in the request make output sizing independent of automatic panel sizing.
+
+From Python, with the repository as the working directory:
+
+```python
+import json
+import subprocess
+
+request = {
+    "type": "table",
+    "text": "A,B\nx,y\nx,z\n",
+    "spec": {"format": "wide", "columns": ["A", "B"]},
+}
+subprocess.run(
+    ["node", "webapp/scripts/render.cjs", "-", "tmp/diagram.svg"],
+    input=json.dumps(request), text=True, check=True,
+)
+```
+
+R callers can write the same request with `jsonlite::write_json(..., auto_unbox = TRUE)` and invoke `node webapp/scripts/render.cjs request.json output.svg` using `system2()`. Node callers can import `renderSubmission(request, format)` from `scripts/render.cjs`; it returns a promise for an output `Buffer`. The webapp remains static: these are browser and local-process APIs, with no HTTP POST endpoint.
+
 ## Input files
 
 | Role | Format |
@@ -62,7 +142,7 @@ After building a wide or long table, an **arrange strip** above the plot holds i
 
 In wide tables, choosing a single value here (not in the strip) hides that column from the diagram automatically, provided at least two diagram columns remain. Expanding or resetting the filter restores automatically hidden columns in their existing order. Showing the column again by hand (its badge in the strip) overrides this automatic restoration. Filtering a column you had already hidden leaves it hidden. The filter caption remains visible even when its diagram column is hidden.
 
-Each change rebuilds flow matrices and pathways from the retained source, recalculates the value scale and node positions, resets manual node/strand edits, and fits labels, bars and endpoint counts. Styling and global layout settings are retained. Automatic canvases grow and scroll when many columns or categories need more room; explicit canvas sizes remain under your control. Invalid changes, including subsets without any usable flows, show an error and preserve the previous plot and settings.
+Each change rebuilds flow matrices and pathways from the retained source, recalculates the base value scale and node positions, resets manual node/strand edits, and fits labels, bars and endpoint counts. Styling, global layout settings and the chosen strand-thickness multiplier are retained. Per-stage routing settings follow unchanged ordered pairs of adjacent columns; newly adjacent or reversed pairs use the global defaults. Automatic canvases grow and scroll when many columns or categories need more room; explicit canvas sizes remain under your control. Invalid changes, including subsets without any usable flows, show an error and preserve the previous plot and settings.
 
 Active filters appear above the diagram as **column** ∈ {kept values}, wrapping when necessary. This caption is included in SVG, PNG and generated R drawings. Column choices, filters and the original source table are saved in project JSON and browser sessions, and participate in undo/redo. Older saved projects that predate retained source tables need their original table imported once to enable these controls. Loading replacement flow matrices removes the table controls.
 
@@ -103,8 +183,10 @@ The **SVG** and **PNG** (2×) buttons export the plot as shown in one click: wit
 - `js/shapes.js`: merge trunks, node bodies, interior bridges and border paths.
 - `js/render.js`: color resolution and SVG markup.
 - `js/app.js`: state, controls, file loading, interactions, inspector, history and exports.
+- `js/submission.js`: the JSON submission contract for table, matrix and project inputs; `scripts/render.cjs` runs it in isolated headless Chromium for SVG/PNG/JSON/ZIP output.
 - `js/transform.js` and `js/importer.js`: table import converters (wide, long, links, crosstab) and the import dialog.
 - `js/table-controls.js`: retained source-table queries, Data controls for diagram columns/stages and row values, and the subset caption shared by SVG/PNG and R output.
+- `js/column-strip.js`: arrange-strip positioning, column/value dragging, and hover beams, using the source operations in `table-controls.js`.
 - `js/paths.js`: substrand and item-slice stacking, pathway trace geometry and annotation anchors, hit-testing and substrand lines for item-level data.
 - `js/edit.js`: data edits on the app state (merging nodes of one column).
 - `js/glyphs.js`: the small setting cartoons (inline SVG, 30 × 18).

@@ -31,6 +31,8 @@
   }
 
   function open(text, name) {
+    clearTimeout(typingTimer);
+    typingTimer = null;
     tableName = name || '';
     $('#import-file-name').textContent = name || 'or paste a table below';
     $('#import-text').value = text || '';
@@ -192,7 +194,13 @@
     });
     $('#import-text').addEventListener('input', (e) => {
       clearTimeout(typingTimer);
+      table = null;
+      spec = null;
+      result = null;
+      renderMapping();
+      showSummary('Reading the edited table…', false);
       typingTimer = setTimeout(() => {
+        typingTimer = null;
         tableName = '';
         $('#import-file-name').textContent = 'or paste a table below';
         loadText(e.target.value);
@@ -207,8 +215,12 @@
     });
     $('#import-apply').addEventListener('click', () => {
       if (!result) return;
-      window.SankeyApp.applyImport(result, { labels: $('#import-labels').value, name: tableName || 'pasted table' });
-      dialog.close();
+      try {
+        window.SankeyApp.applyImport(result, { labels: $('#import-labels').value, name: tableName || 'pasted table' });
+        dialog.close();
+      } catch (err) {
+        showSummary(err.message, true);
+      }
     });
     document.querySelectorAll('[data-open-import]').forEach((b) => b.addEventListener('click', () => open('', '')));
   }

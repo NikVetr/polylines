@@ -14,6 +14,15 @@ const T = SK.transform;
 
 const table = (text) => T.parseTable(text);
 
+test('stage settings follow unchanged ordered column pairs across hiding and reordering', () => {
+  const TC = SK.tableControls;
+  const original = { order: ['A', 'B', 'C', 'D'], enabled: ['A', 'B', 'C', 'D'] };
+  const params = [{ route: 'boundary' }, { boundary_ease: 2 }, { source_order: 'target_index' }];
+  assert.deepStrictEqual(TC.remapStageParams(original, original, params), params);
+  assert.deepStrictEqual(TC.remapStageParams(original, TC.withColumn(original, 'B', false), params), [{}, params[2]]);
+  assert.deepStrictEqual(TC.remapStageParams(original, TC.withMove(original, 'A', 3), params), [params[1], params[2], {}]);
+});
+
 test('wide tables count transitions between consecutive stage columns', () => {
   const t = table('diagnosis,treatment,outcome\nA,surgery,good\nA,surgery,poor\nB,drug,good\nA,drug,good\n');
   const r = T.build(t, { format: 'wide', columns: ['diagnosis', 'treatment', 'outcome'] });

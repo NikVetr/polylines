@@ -1,0 +1,12 @@
+{
+  "type": "table",
+  "text": "patient_id,diagnosis,treatment,outcome\nP1,A,Surgery,Remission\nP2,A,Drug,Remission\nP3,B,Drug,Progression\n",
+  "spec": {
+    "format": "wide",
+    "columns": ["diagnosis", "treatment", "outcome"],
+    "id": "patient_id",
+    "missing": "drop"
+  },
+  "labels": "above",
+  "style": { "canvasWidth": 1000, "canvasHeight": 650 }
+}

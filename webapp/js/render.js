@@ -98,6 +98,18 @@
     return above;
   }
 
+  // The same label placement and full font bounds serve rendering, view fitting and annotations.
+  function labelGeometry(n, style) {
+    const text = n.hasLabel ? n.label : (style.showIndices ? String(n.node) : '');
+    if (!style.labels || !text) return null;
+    const font = fontFor(n, style);
+    const pos = labelPlacement(n, style, font.size);
+    const size = makeMeasure(style)(text, n.cex, n.font);
+    const x1 = pos.X + size.width * (pos.anchor === 'start' ? 1 : pos.anchor === 'middle' ? 0.5 : 0);
+    return { text, font, pos, bounds: { x0: x1 - size.width, x1,
+      y0: pos.Y - size.lineHeight / 2, y1: pos.Y + size.lineHeight / 2 } };
+  }
+
   // A label above its node can be wider than the node (e.g. a loc width), so its ends overhang the
   // faces where the node's strands curve in and out. An end node's label shifts (n.labelShift, px)
   // to its free side, starting at the face its strands use; an interior node's label lifts
@@ -517,10 +529,9 @@
         dots.push(`<circle class="node-dot" data-node="${n.id}" cx="${fmt(map.x(n.X))}" cy="${fmt(map.y(n.Y))}" r="4.5" ` +
           `fill="#FFFFFF" stroke="${nodePaint.color}" stroke-width="2"/>`);
       }
-      const text = n.hasLabel ? n.label : (style.showIndices ? String(n.node) : '');
-      if (!style.labels || !text) return;
-      const font = fontFor(n, style);
-      const pos = labelPlacement(n, style, font.size);
+      const label = labelGeometry(n, style);
+      if (!label) return;
+      const { text, font, pos } = label;
       const labelPaint = C.paint(labelColor(n, colors, style));
       labels.push(`<text class="node-label" data-node="${n.id}" x="${fmt(map.x(pos.X))}" y="${fmt(map.y(pos.Y))}" text-anchor="${pos.anchor}" ` +
         `dominant-baseline="central" font-family="${FONT_FAMILY}" font-size="${fmt(font.size)}" ` +
@@ -569,14 +580,17 @@
   let measureContext = null;
   function makeMeasure(style) {
     return (label, cex, font) => {
-      if (typeof document === 'undefined') return { width: 0.55 * style.fontSize * cex * String(label).length, height: 0.75 * style.fontSize * cex };
+      if (typeof document === 'undefined') return { width: 0.55 * style.fontSize * cex * String(label).length,
+        height: 0.75 * style.fontSize * cex, lineHeight: 1.2 * style.fontSize * cex };
       measureContext = measureContext || document.createElement('canvas').getContext('2d');
       const f = fontFor({ cex, font }, style);
       measureContext.font = `${f.slant} ${f.weight} ${f.size}px ${FONT_FAMILY}`;
-      return { width: measureContext.measureText(String(label)).width, height: 0.75 * f.size };
+      const metrics = measureContext.measureText(String(label));
+      return { width: metrics.width, height: 0.75 * f.size,
+        lineHeight: metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent || 1.2 * f.size };
     };
   }
 
-  SK.render = { render, resolveColors, makeMeasure, traceStops, labelPlacement, liftLabels, labelColor, FONT_FAMILY };
+  SK.render = { render, resolveColors, makeMeasure, traceStops, labelPlacement, labelGeometry, liftLabels, labelColor, FONT_FAMILY };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

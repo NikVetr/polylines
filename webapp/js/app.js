@@ -483,46 +483,17 @@
 
   // Labels drawn outside node bodies, in plot pixels, for view fitting.
   function labelBoxes(lay, data = state) {
-    const out = [];
-    const m = measure(data);
+    const out = nodeLabelBounds(lay, data).flatMap(b => [[b.x0, b.y0], [b.x1, b.y1]]);
     lay.nodes.forEach((n) => {
       const bar = fillBarBox(lay, n);
       out.push([bar.x0 - bar.labelGap - bar.labelWidth, bar.Y - FILL_BAR.height],
         [bar.x0 + bar.width + bar.labelGap + bar.labelWidth, bar.Y]);
-      const text = n.hasLabel ? n.label : (data.style.showIndices ? String(n.node) : '');
-      if (!data.style.labels || !text) return;
-      const size = m(text, n.cex, n.font);
-      const role = S.nodeRole(n);
-      if (data.style.labelPosition === 'above') {
-        const pos = R.labelPlacement(n, data.style, data.style.fontSize * n.cex);
-        out.push([pos.X - size.width / 2, pos.Y + size.height], [pos.X + size.width / 2, pos.Y + size.height]);
-      } else if (n.hasLabel && n.widthPx > 0) {
-        out.push([n.X - size.width / 2, n.Y], [n.X + size.width / 2, n.Y]);
-      } else if (role === 'source') {
-        out.push([n.X - 9 - size.width, n.Y]);
-      } else if (role === 'sink') {
-        out.push([n.X + 9 + size.width, n.Y]);
-      } else {
-        out.push([n.X, n.Y + Math.max(n.inPx, n.outPx) / 2 + 1.6 * size.height]);
-      }
     });
     return out;
   }
 
   function nodeLabelBounds(lay, data) {
-    const boxes = [];
-    if (!data.style.labels) return boxes;
-    const m = measure(data);
-    lay.nodes.forEach(n => {
-      const text = n.hasLabel ? n.label : (data.style.showIndices ? String(n.node) : '');
-      if (!text) return;
-      const height = data.style.fontSize * n.cex;
-      const pos = R.labelPlacement(n, data.style, height);
-      const width = m(text, n.cex, n.font).width;
-      const x1 = pos.X + width * (pos.anchor === 'start' ? 1 : pos.anchor === 'middle' ? 0.5 : 0);
-      boxes.push({ x0: x1 - width, x1, y0: pos.Y - height / 2, y1: pos.Y + height / 2 });
-    });
-    return boxes;
+    return lay.nodes.map(n => R.labelGeometry(n, data.style)).filter(Boolean).map(label => label.bounds);
   }
 
   const labelRightEdge = (boxes, y0 = -Infinity, y1 = Infinity) =>
@@ -1158,6 +1129,65 @@
 
   // ---------- file loading ----------
 
+  // Every external replacement is checked before it can replace the working data or be saved.
+  function validateCandidate(next, prepare) {
+    const previousFrame = frame;
+    try {
+      const fail = (message) => { throw new L.SankeyError(message); };
+      const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+      ['matrices', 'loc', 'dimnames', 'stageNames', 'stageParams', 'colorNames', 'midNames', 'setNames'].forEach(key => {
+        if (!Array.isArray(next[key])) fail(`${key} must be an array.`);
+      });
+      ['style', 'params', 'presentation', 'manualOrder', 'flowOverrides', 'midOverrides', 'nodeColors', 'mergeColors'].forEach(key => {
+        if (!record(next[key])) fail(`${key} must be an object.`);
+      });
+      if (!['layered', 'graph'].includes(next.mode)) fail('mode must be layered or graph.');
+      if (next.matrices.length) L.checkMatrices(next.matrices, next.mode);
+      ['valueScale', 'valueScaleRef'].forEach(key => {
+        if (!(Number.isFinite(next[key]) && next[key] > 0)) fail(`${key} must be a positive number.`);
+      });
+      Object.entries(DEFAULT_STYLE).forEach(([key, value]) => {
+        if (value !== null && typeof next.style[key] !== typeof value) fail(`style.${key} must be a ${typeof value}.`);
+        if (typeof value === 'number' && !(Number.isFinite(next.style[key]) && next.style[key] >= 0)) fail(`style.${key} must be a non-negative number.`);
+      });
+      CONTROL_SECTIONS.flatMap(section => section.items).filter(item => item.target === 'style' && Array.isArray(item.options)).forEach(item => {
+        if (!item.options.some(([value]) => value === next.style[item.key])) fail(`Invalid style.${item.key}: ${next.style[item.key]}.`);
+      });
+      if (!['file', 'source', 'target', 'stage', 'single'].includes(next.style.colorBy)) fail('Invalid style.colorBy.');
+      if (!(next.style.fontSize > 0)) fail('style.fontSize must be positive.');
+      if (next.style.opacity > 1) fail('style.opacity must be between 0 and 1.');
+      ['canvasWidth', 'canvasHeight'].forEach(key => {
+        if (next.style[key] !== null && !(Number.isFinite(next.style[key]) && next.style[key] > 2 * MARGIN)) fail(`style.${key} must be null or greater than ${2 * MARGIN}.`);
+      });
+      if (!['native', 'panel', 'height'].includes(next.presentation.mode) ||
+          !(Number.isFinite(next.presentation.zoom) && next.presentation.zoom >= 0.1 && next.presentation.zoom <= 10)) {
+        fail('presentation needs mode native, panel or height and zoom between 0.1 and 10.');
+      }
+      if (next.view !== null) ['xlim', 'ylim'].forEach(key => {
+        const limits = next.view[key];
+        if (!Array.isArray(limits) || limits.length !== 2 || !limits.every(Number.isFinite) || limits[0] >= limits[1]) fail(`view.${key} must contain two increasing finite numbers.`);
+      });
+      if (next.paths !== null && (!Array.isArray(next.paths) || next.paths.some(p => !record(p) || !Array.isArray(p.nodes) ||
+          !p.nodes.every(n => Number.isInteger(n) && n >= 0) || !(Number.isFinite(p.weight) && p.weight > 0)))) fail('paths must contain node-index arrays and positive weights.');
+      if (prepare) prepare();
+      if (next.matrices.length && !next.loc.length) fail('The project needs node locations.');
+      computeFrame(next);
+      if (next.matrices.length && next.loc.length) {
+        if (!next.view) next.view = fitView(next);
+        const lay = computeLayout(next, next.view);
+        const resolved = R.resolveColors(lay, colorData(next), next.style);
+        const subs = next.paths && P.consistent(lay, next.paths) && (next.style.tracePaths || next.style.substrands)
+          ? P.substrands(lay, next.paths) : null;
+        R.render(lay, resolved, next.style, frame,
+          { substrandLines: subs && next.style.substrands ? P.boundaryLines(lay, subs) : null });
+      }
+    } catch (err) {
+      frame = previousFrame;
+      columnStrip.render(state.sourceTable);
+      throw err instanceof L.SankeyError ? err : new L.SankeyError(`Invalid project data: ${err.message}`);
+    }
+  }
+
   function looksLikeLoc(text) {
     const first = CSV.parse(text)[0] || [];
     const names = first.map((c) => c.trim().toLowerCase());
@@ -1252,7 +1282,8 @@
     }
 
     // Work on a candidate: rejected files must leave the plot, edits and exports untouched.
-    const next = Object.assign({}, state, { style: Object.assign({}, state.style) });
+    const next = Object.assign({}, state, { style: Object.assign({}, state.style), loc: state.loc.map(row => Object.assign({}, row)),
+      sourceTable: state.sourceTable ? Object.assign({}, state.sourceTable) : null });
     const notices = [];
     if (stages.length) {
       next.matrices = stages.map((m) => m.values);
@@ -1321,12 +1352,8 @@
         notices.push('Generated node locations because no matching loc file was loaded.');
       }
     }
-    computeFrame(next);
-    next.view = next.matrices.length && next.loc.length ? fitView(next) : null;
-    if (next.view) {
-      const lay = L.computeLayout(model(next), viewFor(next.view), { measure: measure() });
-      R.resolveColors(lay, colorData(next), next.style);
-    }
+    next.view = null;
+    validateCandidate(next);
     state = next;
     if (stages.length || loc) {
       clearEmphasis();
@@ -1338,7 +1365,7 @@
 
   async function loadFileList(fileList, role) {
     try {
-      if (applyFiles(await readFiles(fileList), role)) update({ fit: true, commit: true });
+      if (applyFiles(await readFiles(fileList), role)) update({ commit: true });
     } catch (err) {
       computeFrame();
       showError(err.message);
@@ -1570,15 +1597,16 @@
   // Replace the data with flows built from a table (see transform.js), keeping the style.
   function applyImport(result, options) {
     const opts = options || {};
-    const style = Object.assign({}, state.style);
+    const style = Object.assign({}, opts.resetStyle ? DEFAULT_STYLE : state.style);
     if (style.colorBy === 'file') style.colorBy = 'source';
     if (opts.labels && !opts.rebuild) {
       style.labelPosition = opts.labels === 'above' ? 'above' : 'auto';
       style.labelColorBy = opts.labels === 'above' ? 'node' : 'single';
     }
+    Object.assign(style, opts.style || {});
     const next = blankState();
     next.style = style;
-    next.presentation = Object.assign({}, state.presentation);
+    next.presentation = Object.assign({}, opts.presentation || state.presentation);
     next.mode = result.mode;
     next.matrices = result.matrices;
     next.dimnames = result.dimnames;
@@ -1592,21 +1620,18 @@
     if (next.sourceTable) next.sourceTable = Object.assign({}, next.sourceTable, { minCanvasWidth: 0, spreadWidth: 0 });
     if (next.sourceTable && !next.sourceTable.summary) next.sourceTable.summary = Object.assign({ rowsFiltered: next.sourceTable.table.rows.length, unit: result.unit }, result.summary);
     Object.assign(next.params, opts.params || {});
-    const previousFrame = frame;
-    try {
+    next.stageParams = opts.stageParams || [];
+    if (opts.rebuild) next.stageParams = window.SK.tableControls.remapStageParams(state.sourceTable, next.sourceTable, state.stageParams);
+    validateCandidate(next, () => {
       next.valueScale = autoValueScale(next);
       next.valueScaleRef = next.valueScale;
+      if (opts.rebuild) next.valueScale *= state.valueScale / state.valueScaleRef;
+      else next.valueScale *= opts.thickness === undefined ? 1 : opts.thickness;
       autoLocate({ labels: opts.labels }, next);
       next.locName = opts.name ? `built from ${opts.name}` : 'built from table';
       if (opts.example) next.example = opts.example;
       next.view = fitView(next, { spread: true });
-      const candidate = computeLayout(next, next.view);
-      R.resolveColors(candidate, colorData(next), next.style);
-    } catch (err) {
-      frame = previousFrame;
-      columnStrip.render(state.sourceTable);
-      throw err;
-    }
+    });
     state = next;
     clearEmphasis();
     hover = null;
@@ -2862,22 +2887,33 @@
     return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
   }
 
-  function exportPng() {
+  function exportPngBlob() {
     const box = exportBox();
     const text = exportSvgText(box);
     const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
-    const img = new Image();
-    img.onload = () => {
-      const scale = 2;
-      const canvas = document.createElement('canvas');
-      canvas.width = box.width * scale;
-      canvas.height = box.height * scale;
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(url);
-      canvas.toBlob((blob) => download('sankey.png', blob), 'image/png');
-    };
-    img.onerror = () => showError('PNG export failed while rasterizing the SVG.');
-    img.src = url;
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const fail = () => {
+        URL.revokeObjectURL(url);
+        reject(new L.SankeyError('PNG export failed while rasterizing the SVG.'));
+      };
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = box.width * 2;
+          canvas.height = box.height * 2;
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(url);
+          canvas.toBlob(blob => blob ? resolve(blob) : fail(), 'image/png');
+        } catch (err) { fail(); }
+      };
+      img.onerror = fail;
+      img.src = url;
+    });
+  }
+
+  function exportPng() {
+    exportPngBlob().then(blob => download('sankey.png', blob), err => showError(err.message));
   }
 
   const csvNumber = (v) => (v === null || v === undefined || v === '' ? null : round(v, 8));
@@ -3123,10 +3159,11 @@
     return JSON.stringify(Object.assign({ app: 'polylines-sankey' }, state), null, 1);
   }
 
-  function importProject(obj) {
+  function importProject(obj, options = {}) {
     if (!obj || obj.app !== 'polylines-sankey' || obj.version !== 1) {
       throw new L.SankeyError('This JSON file is not a polylines Sankey project (version 1).');
     }
+    obj = JSON.parse(JSON.stringify(obj));
     const next = blankState();
     Object.keys(next).forEach((key) => { if (key in obj) next[key] = obj[key]; });
     next.params = Object.assign({}, L.DEFAULT_PARAMS, obj.params);
@@ -3141,10 +3178,29 @@
     if (!obj.traceCountsVersion && next.paths && next.style.tracePaths && next.style.traceCounts) next.view = null;
     // Older sessions and projects show their scale as thickness 1.
     if (!(obj.valueScaleRef > 0)) next.valueScaleRef = next.valueScale;
+    validateCandidate(next, options.autoLocate && !next.loc.length ? () => autoLocate(undefined, next) : null);
     state = next;
-    selection = null;
+    clearEmphasis();
+    hover = null;
+    lastPointer = null;
     routeScope = 'all';
   }
+
+  const getProject = () => JSON.parse(projectJson());
+  const submit = window.SK.submission.create({
+    getProject,
+    table: (result, request) => applyImport(result, {
+      labels: request.labels || 'above', name: request.name || 'submitted table',
+      resetStyle: true, style: request.style, params: request.params,
+      stageParams: request.stageParams, thickness: request.thickness, presentation: { mode: 'native', zoom: 1 }
+    }),
+    matrices: request => {
+      importProject(Object.assign({ app: 'polylines-sankey', version: 1, labelCountsVersion: 1, traceCountsVersion: 1,
+        trustedNames: true }, request), { autoLocate: true });
+      update({ commit: true });
+    },
+    project: project => { importProject(project); update({ commit: true }); }
+  }, { style: DEFAULT_STYLE, params: L.DEFAULT_PARAMS });
 
   function runExport(kind) {
     try {
@@ -3388,6 +3444,10 @@
   window.SankeyApp = {
     get state() { return state; },
     get layout() { return layout; },
+    submit,
+    getProject,
+    exportPngBlob,
+    exportBundle: () => window.SK.zip.makeZip(bundleFiles()),
     loadExample,
     update,
     applyImport,

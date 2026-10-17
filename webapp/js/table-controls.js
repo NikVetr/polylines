@@ -134,6 +134,14 @@
         line.map((t) => `<tspan${t.bold ? ' font-weight="600"' : ''}>${esc(t.text)}</tspan>`).join('') + '</text>').join('') + '</g>' };
   }
 
+  // Routing belongs to an ordered pair of adjacent columns, not its current numeric stage index.
+  function remapStageParams(previous, next, params) {
+    const columns = (source) => source.order.filter(c => source.enabled.includes(c));
+    const old = columns(previous), current = columns(next);
+    const pairs = new Map(old.slice(0, -1).map((c, i) => [JSON.stringify([c, old[i + 1]]), params[i] || {}]));
+    return current.slice(0, -1).map((c, i) => Object.assign({}, pairs.get(JSON.stringify([c, current[i + 1]]))));
+  }
+
   let renderedSource;
   function render(host, source, onChange, force = false) {
     if (!force && renderedSource === source) return;
@@ -196,6 +204,6 @@
     });
   }
 
-  SK.tableControls = { create, withFilters, withValue, withValueOrder, withColumn, withMove, valuesOf, columnLabel, displayValue, esc, build, header, render };
+  SK.tableControls = { create, withFilters, withValue, withValueOrder, withColumn, withMove, valuesOf, columnLabel, displayValue, esc, build, header, render, remapStageParams };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -238,6 +238,7 @@
     if (!Array.isArray(m) || !m.length || !Array.isArray(m[0]) || !m[0].length) fail(`${label} is empty.`);
     const cols = m[0].length;
     m.forEach((row, i) => {
+      if (!Array.isArray(row)) fail(`${label} row ${i + 1} must be an array.`);
       if (row.length !== cols) fail(`${label} row ${i + 1} has ${row.length} values; expected ${cols}.`);
       row.forEach((v, j) => {
         if (!(Number.isFinite(v) && v >= 0)) {
@@ -247,36 +248,40 @@
     });
   }
 
+  function checkMatrices(mats, mode) {
+    if (!Array.isArray(mats) || !mats.length) fail('No flow matrices are loaded.');
+    mats.forEach((m, s) => checkMatrix(m, `Stage ${s + 1} matrix`));
+    if (mode === 'graph') {
+      if (mats.length !== 1 || mats[0].length !== mats[0][0].length) fail('Graph mode needs exactly one square adjacency matrix.');
+      mats[0].forEach((row, i) => { if (row[i] > 0) fail('The graph adjacency matrix must have a zero diagonal.'); });
+    } else {
+      for (let s = 1; s < mats.length; s++) {
+        if (mats[s].length !== mats[s - 1][0].length) {
+          fail(`Stage ${s + 1} has ${mats[s].length} rows but stage ${s} has ${mats[s - 1][0].length} columns; adjacent stages must match.`);
+        }
+      }
+    }
+  }
+
   // Strand thickness is value * scale (x data units); value stays the raw quantity for display.
   function buildFlows(model, nodes, tf, scale) {
     const mats = model.matrices;
-    if (!Array.isArray(mats) || !mats.length) fail('No flow matrices are loaded.');
+    checkMatrices(mats, model.mode);
     const flows = [];
     const push = (stage, i, j, from, to, value) => flows.push({
       key: `${stage}:${i}:${j}`, stage, i, j, from, to, value, w: value * scale * tf.sx
     });
 
     if (model.mode === 'graph') {
-      if (mats.length !== 1) fail('Graph mode needs exactly one square adjacency matrix.');
       const m = mats[0];
-      checkMatrix(m, 'The adjacency matrix');
-      if (m.length !== m[0].length) fail('The graph adjacency matrix must be square.');
       if (m.length !== nodes.length) {
         fail(`The adjacency matrix is ${m.length}×${m.length}, but loc has ${nodes.length} rows; ` +
           'graph rows/columns refer to loc rows.');
       }
-      m.forEach((row, i) => { if (row[i] > 0) fail('The graph adjacency matrix must have a zero diagonal.'); });
       for (let j = 0; j < m.length; j++) {
         for (let i = 0; i < m.length; i++) if (m[i][j] > 0) push(0, i, j, i, j, m[i][j]);
       }
     } else {
-      mats.forEach((m, s) => checkMatrix(m, `Stage ${s + 1} matrix`));
-      for (let s = 1; s < mats.length; s++) {
-        if (mats[s].length !== mats[s - 1][0].length) {
-          fail(`Stage ${s + 1} has ${mats[s].length} rows but stage ${s} has ${mats[s - 1][0].length} ` +
-            'columns; adjacent stages must match.');
-        }
-      }
       const counts = [mats[0].length, ...mats.map((m) => m[0].length)];
       const byKey = new Map(nodes.map((n) => [n.key, n.id]));
       nodes.forEach((n) => {
@@ -821,6 +826,7 @@
     STAGE_KEYS,
     DEFAULT_PARAMS,
     computeLayout,
+    checkMatrices,
     makeTransform,
     adjustOneSet,
     isotonic,
