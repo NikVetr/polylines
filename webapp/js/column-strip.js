@@ -35,6 +35,7 @@
     let source = null;
     let sizedTable = null;
     let counts = new Map();
+    let listed = new Map(); // per column, the values in the order last shown
     let zones = [];
     let refocus = null;
     let lit = null;
@@ -89,6 +90,7 @@
       if (sizedTable !== next.table) {
         sizedTable = next.table;
         counts = new Map();
+        listed = new Map();
       }
       const count = (c) => {
         if (!counts.has(c)) counts.set(c, TC.valuesOf(next, c).values.length);
@@ -194,14 +196,25 @@
 
     // Values in the column's chosen order (which its nodes follow), else in the order of their nodes
     // from the top, then those without a node (dropped, absent from the remaining rows, or grouped
-    // into Other); kept values take their node's color.
+    // into Other). A value that loses or regains its node keeps the place it was last shown in, the
+    // values with nodes taking the other places in node order. Kept values take their node's color.
     function placeValues(list, geo) {
+      const column = list.dataset.stripValues;
       const nodes = geo ? geo.nodes : [];
       const chips = [...list.children].sort((a, b) => a.dataset.order - b.dataset.order);
       const node = new Map(chips.map((chip) => [chip, nodeOf(nodes, chip.dataset.stripValue)]));
-      const chosen = !!(source.valueOrders || {})[list.dataset.stripValues];
-      const ordered = chosen ? chips : chips.map((chip, i) => ({ chip, i, y: node.get(chip) ? node.get(chip).top : Infinity }))
-        .sort((a, b) => (a.y === b.y ? a.i - b.i : a.y - b.y)).map((o) => o.chip);
+      const chosen = !!(source.valueOrders || {})[column];
+      const byNode = chips.filter((chip) => node.get(chip)).sort((a, b) => node.get(a).top - node.get(b).top);
+      const chipOf = new Map(chips.map((chip) => [chip.dataset.stripValue, chip]));
+      const before = listed.get(column);
+      let ordered = chips;
+      if (!chosen && before) {
+        const queue = byNode.slice();
+        ordered = before.map((v) => (node.get(chipOf.get(v)) ? queue.shift() : chipOf.get(v)));
+      } else if (!chosen) {
+        ordered = byNode.concat(chips.filter((chip) => !node.get(chip)));
+      }
+      listed.set(column, ordered.map((chip) => chip.dataset.stripValue));
       if (ordered.some((chip, i) => chip !== list.children[i])) ordered.forEach((chip) => list.appendChild(chip));
       chips.forEach((chip) => {
         const on = chip.getAttribute('aria-pressed') === 'true';

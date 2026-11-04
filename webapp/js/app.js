@@ -250,7 +250,8 @@
       });
     }
     const subset = window.SK.tableControls.header(data.sourceTable, width - 2 * MARGIN);
-    const height = data.style.canvasHeight || Math.max(minHeight + subset.height, Math.floor(box.height),
+    // A fixed height is a minimum when labels need more (computeLayout's minCanvasHeight).
+    const height = Math.max(data.style.canvasHeight || Math.max(minHeight + subset.height, Math.floor(box.height)),
       (data.sourceTable && data.sourceTable.minCanvasHeight) || 0);
     frame = { width, height, subset, margin: { left: MARGIN, top: MARGIN + subset.height, right: MARGIN, bottom: MARGIN } };
     if (data === state) {
@@ -310,7 +311,8 @@
   // which Fit view resets (to be grown again as the layout needs); growth for spreadMoves in
   // spreadWidth, which belongs to the generated layout. Never during a drag: the drag must stop at
   // a drawable position instead of moving columns frame by frame. Likewise the canvas grows taller
-  // (minCanvasHeight, also reset by Fit view) when a node's label reaches into a node above it.
+  // (minCanvasHeight, also reset by Fit view) when a node's label reaches into a node above it,
+  // fixed height or not.
   function computeLayout(data, view, opts = {}) {
     const grows = !drag && data.sourceTable;
     let taller = 0;
@@ -339,7 +341,7 @@
         move(new Map([[err.flow.stage, px]]), 'minCanvasWidth');
         continue;
       }
-      const room = grows && !data.style.canvasHeight && taller < LABEL_ROOM_PASSES ? labelRoom(lay, data) : 0;
+      const room = grows && taller < LABEL_ROOM_PASSES ? labelRoom(lay, data) : 0;
       if (room > 0.5) {
         taller++;
         frame.height += Math.ceil(room);

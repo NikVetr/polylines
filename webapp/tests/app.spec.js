@@ -2666,6 +2666,28 @@ test('a column of many nodes gets a canvas tall enough that labels clear the nod
   });
   expect(await clashes()).toEqual([]);
   expect(Number(await page.locator('#plot').getAttribute('height'))).toBeGreaterThan(before);
+  // A fixed canvas height is a minimum: it grows too.
+  await page.evaluate(() => {
+    const app = window.SankeyApp;
+    app.state.style.canvasHeight = 1400;
+    app.update({ commit: true });
+  });
+  expect(await clashes()).toEqual([]);
+  expect(Number(await page.locator('#plot').getAttribute('height'))).toBeGreaterThan(1400);
+});
+
+test('a value left without rows by another column\'s filter keeps its place in the strip', async ({ page }) => {
+  await importCohortTable(page);
+  const listed = (c) => page.locator(`[data-strip-values="${c}"] .strip-value`).evaluateAll((els) => els.map((el) => el.dataset.stripValue));
+  const first = await listed('TR02');
+  expect(first).toEqual(['Z', 'W']);
+  // Only patients P3 and P4 have TR00 = B, and both have TR02 = W.
+  await page.locator('[data-strip-values="TR00"] [data-strip-value="A"]').click();
+  await expect(page.locator('[data-strip-values="TR02"] [data-strip-value="Z"]')).toHaveClass(/absent/);
+  expect(await listed('TR02')).toEqual(first);
+  await page.locator('[data-strip-values="TR00"] [data-strip-value="A"]').click();
+  await expect(page.locator('[data-strip-values="TR02"] [data-strip-value="Z"]')).not.toHaveClass(/absent/);
+  expect(await listed('TR02')).toEqual(first);
 });
 
 test('the strip is as tall as the longest value list of a shown column', async ({ page }) => {
