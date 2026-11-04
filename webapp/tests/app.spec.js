@@ -2562,13 +2562,17 @@ test('clicking a strip value drops its rows and greys it out, and clicking it ag
   expect((await state(page)).sourceTable.summary.total).toBe(560);
   await chip.click();
   const s = await state(page);
-  expect(s.sourceTable.filters).toEqual({ treatment: ['Chemotherapy', 'Palliative', 'Radiation'] });
+  expect(s.sourceTable.filters).toEqual({ treatment: ['Radiation', 'Chemotherapy', 'Palliative'] });
   expect(s.sourceTable.summary.total).toBe(560 - 232);
   expect(s.setNames).toEqual(['diagnosis', 'treatment', 'response']);
   await expect(chip).toHaveAttribute('aria-pressed', 'false');
   await expect(chip).toHaveClass(/off/);
+  // The dropped value keeps its place in the list, and the other nodes theirs.
+  const listed = () => page.locator('[data-strip-values="treatment"] .strip-value').evaluateAll((els) => els.map((el) => el.dataset.stripValue));
+  expect(await listed()).toEqual(['Surgery', 'Radiation', 'Chemotherapy', 'Palliative']);
+  expect(s.dimnames[0].cols).toEqual(['Radiation', 'Chemotherapy', 'Palliative']);
   await expect(badge(page, 'treatment')).toContainText('3/4');
-  await expect(page.locator('#plot .layer-subset')).toHaveText('treatment ∈ {Chemotherapy, Palliative, Radiation}');
+  await expect(page.locator('#plot .layer-subset')).toHaveText('treatment ∈ {Radiation, Chemotherapy, Palliative}');
   await expect(page.locator('#plot .node-label', { hasText: 'Surgery' })).toHaveCount(0);
   await expect(page.locator('[data-filter-column="treatment"] summary')).toContainText('3 kept');
   await chip.click();
@@ -2625,6 +2629,43 @@ test('strip values show in full where the columns leave room', async ({ page }) 
     return range.getBoundingClientRect().width > inner + 0.01;
   }).map((chip) => chip.textContent));
   expect(cut).toEqual([]);
+});
+
+test('a column of many nodes gets a canvas tall enough that labels clear the nodes above them', async ({ page }) => {
+  await page.evaluate(() => {
+    const T = window.SK.transform;
+    const assays = Array.from({ length: 21 }, (_, i) => `Assay with a long name ${i + 1}`);
+    const rows = assays.flatMap((a, i) => Array.from({ length: 18 }, (_, j) => [`p${i}-${j}`, ['A', 'B', 'C'][j % 3], a, ['X', 'Y', 'Z', 'W'][(i + j) % 4]]));
+    window.SankeyApp.applyImport(T.build({ columns: ['id', 'group', 'assay', 'out'], rows }, { format: 'wide', id: 'id', columns: ['group', 'assay', 'out'] }),
+      { labels: 'above' });
+  });
+  // Each label of the 21-node middle column against the other nodes' bodies there.
+  const clashes = () => page.evaluate(() => {
+    const app = window.SankeyApp;
+    const plot = document.querySelector('#plot');
+    const box = plot.getBoundingClientRect();
+    const k = box.width / Number(plot.getAttribute('width'));
+    const h = Number(plot.getAttribute('height')) - 36;
+    const body = (n) => {
+      const half = Math.max(n.inPx, n.outPx) / 2;
+      return { left: box.left + (18 + n.X - n.widthPx / 2) * k, right: box.left + (18 + n.X + n.widthPx / 2) * k,
+        top: box.top + (18 + h - n.Y - half) * k, bottom: box.top + (18 + h - n.Y + half) * k };
+    };
+    const meet = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    const nodes = app.layout.nodes.filter((n) => n.set === 2);
+    return nodes.flatMap((l) => nodes.filter((u) => u !== l && meet(document.querySelector(`#plot .node-label[data-node="${l.id}"]`).getBoundingClientRect(), body(u)))
+      .map((u) => `${app.state.loc[l.id].label} over ${app.state.loc[u.id].label}`));
+  });
+  expect(await clashes()).toEqual([]);
+  // Thicker strands shrink the gaps between the nodes; the canvas grows to keep the labels clear.
+  const before = Number(await page.locator('#plot').getAttribute('height'));
+  await page.evaluate(() => {
+    const app = window.SankeyApp;
+    app.state.valueScale = app.state.valueScaleRef * 2;
+    app.update({ commit: true });
+  });
+  expect(await clashes()).toEqual([]);
+  expect(Number(await page.locator('#plot').getAttribute('height'))).toBeGreaterThan(before);
 });
 
 test('the strip is as tall as the longest value list of a shown column', async ({ page }) => {

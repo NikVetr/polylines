@@ -192,13 +192,15 @@
       if (lit) light(lit);
     }
 
-    // Values in the order of their nodes from the top, then those without a node (dropped, absent
-    // from the remaining rows, or grouped into Other); kept values take their node's color.
+    // Values in the column's chosen order (which its nodes follow), else in the order of their nodes
+    // from the top, then those without a node (dropped, absent from the remaining rows, or grouped
+    // into Other); kept values take their node's color.
     function placeValues(list, geo) {
       const nodes = geo ? geo.nodes : [];
       const chips = [...list.children].sort((a, b) => a.dataset.order - b.dataset.order);
       const node = new Map(chips.map((chip) => [chip, nodeOf(nodes, chip.dataset.stripValue)]));
-      const ordered = chips.map((chip, i) => ({ chip, i, y: node.get(chip) ? node.get(chip).top : Infinity }))
+      const chosen = !!(source.valueOrders || {})[list.dataset.stripValues];
+      const ordered = chosen ? chips : chips.map((chip, i) => ({ chip, i, y: node.get(chip) ? node.get(chip).top : Infinity }))
         .sort((a, b) => (a.y === b.y ? a.i - b.i : a.y - b.y)).map((o) => o.chip);
       if (ordered.some((chip, i) => chip !== list.children[i])) ordered.forEach((chip) => list.appendChild(chip));
       chips.forEach((chip) => {
@@ -383,7 +385,13 @@
       if (suppressClick) { suppressClick = false; return; }
       const value = event.target.closest('.strip-value');
       const badge = event.target.closest('.strip-badge');
-      if (value) apply(() => TC.withValue(source, value.parentElement.dataset.stripValues, value.dataset.stripValue));
+      if (value) {
+        // The list's order as shown becomes the column's, so a dropped value keeps its place (and so
+        // do the nodes) instead of falling to the end with the other values without a node.
+        const column = value.parentElement.dataset.stripValues;
+        const shownOrder = [...value.parentElement.children].map((c) => c.dataset.stripValue);
+        apply(() => TC.withValue(TC.withValueOrder(source, column, shownOrder), column, value.dataset.stripValue));
+      }
       else if (badge) apply(() => TC.withColumn(source, badge.dataset.stripColumn, !source.enabled.includes(badge.dataset.stripColumn)));
     });
 

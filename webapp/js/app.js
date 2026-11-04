@@ -237,12 +237,21 @@
       const longestLabel = Math.max(...sets.flat().map((n) => measure(data)(n.label, 1, 1).width));
       if (!data.style.canvasWidth) width = Math.max(width, data.sourceTable.minCanvasWidth || 0, data.sourceTable.spreadWidth || 0,
         Math.ceil((sets.length - 1) * Math.max(160, longestLabel + 50) + 2 * MARGIN));
-      // Allow scrolling when many categories need more room than the viewport can give them.
-      minHeight = Math.max(minHeight, Math.ceil((Math.max(...sets.map((g) => g.length)) - 1) *
-        (data.style.fontSize * 1.5 + FILL_BAR.height + FILL_BAR.gap + 4) / (1 - STACK_FILL) + 2 * MARGIN));
+      // Allow scrolling when many categories need more room than the viewport can give them: each
+      // gap between stacked nodes needs room for a label and a fill bar, and a column's gaps share
+      // what its nodes leave of STACK_SPAN (stackColumn), least in the tallest column.
+      const need = data.style.fontSize * 1.5 + FILL_BAR.height + FILL_BAR.gap + 4;
+      const totals = sets.map((g) => g.reduce((s, n) => s + n.height, 0));
+      const tallest = Math.max(...totals);
+      sets.forEach((g, k) => {
+        if (g.length < 2) return;
+        const room = STACK_SPAN - STACK_FILL * totals[k] / tallest;
+        minHeight = Math.max(minHeight, Math.ceil((g.length - 1) * need / room + 2 * MARGIN));
+      });
     }
     const subset = window.SK.tableControls.header(data.sourceTable, width - 2 * MARGIN);
-    const height = data.style.canvasHeight || Math.max(minHeight + subset.height, Math.floor(box.height));
+    const height = data.style.canvasHeight || Math.max(minHeight + subset.height, Math.floor(box.height),
+      (data.sourceTable && data.sourceTable.minCanvasHeight) || 0);
     frame = { width, height, subset, margin: { left: MARGIN, top: MARGIN + subset.height, right: MARGIN, bottom: MARGIN } };
     if (data === state) {
       svg.setAttribute('width', width);
@@ -300,9 +309,11 @@
   // cannot be drawn widen the view, shrinking the drawing). Growth for drawable turns is kept in minCanvasWidth,
   // which Fit view resets (to be grown again as the layout needs); growth for spreadMoves in
   // spreadWidth, which belongs to the generated layout. Never during a drag: the drag must stop at
-  // a drawable position instead of moving columns frame by frame.
+  // a drawable position instead of moving columns frame by frame. Likewise the canvas grows taller
+  // (minCanvasHeight, also reset by Fit view) when a node's label reaches into a node above it.
   function computeLayout(data, view, opts = {}) {
     const grows = !drag && data.sourceTable;
+    let taller = 0;
     // Other data keeps its canvas: spreadMoves only rebalances the gaps within it.
     const fixed = !!data.style.canvasWidth || !data.sourceTable;
     const move = (moves, key) => {
@@ -317,7 +328,7 @@
       }
     };
     // A fixed canvas shrinks the drawing as columns move, so each move gains less: allow more passes.
-    const passes = data.matrices.length * (opts.spread ? 4 : 2) * (data.style.canvasWidth ? 3 : 1);
+    const passes = data.matrices.length * (opts.spread ? 4 : 2) * (data.style.canvasWidth ? 3 : 1) + LABEL_ROOM_PASSES;
     for (let pass = 0; pass <= passes; pass++) {
       let lay;
       try { lay = R.liftLabels(L.computeLayout(model(data), viewFor(view), { measure: measure(data) }), data.style); }
@@ -326,6 +337,13 @@
         const px = err.requiredRun - err.flow.dir * (err.flow.endX - err.flow.startX);
         if (!(px > 0)) throw err;
         move(new Map([[err.flow.stage, px]]), 'minCanvasWidth');
+        continue;
+      }
+      const room = grows && !data.style.canvasHeight && taller < LABEL_ROOM_PASSES ? labelRoom(lay, data) : 0;
+      if (room > 0.5) {
+        taller++;
+        frame.height += Math.ceil(room);
+        data.sourceTable.minCanvasHeight = frame.height;
         continue;
       }
       // Lay out the moved columns once more; the last pass draws as is.
@@ -492,6 +510,29 @@
     return out;
   }
 
+  // How much taller (px) the canvas must be for no node's label to reach into a node above it in
+  // its column. Labels above nodes sit in the gaps (lifted over strands crossing them); the gaps
+  // grow with the canvas height, the nodes and labels do not. A few passes settle the lifts.
+  const LABEL_CLEARANCE = 2;
+  const LABEL_ROOM_PASSES = 4;
+  function labelRoom(lay, data) {
+    if (lay.mode !== 'layered') return 0;
+    const H = frame.height - frame.margin.top - MARGIN;
+    const bottom = (n) => n.Y - Math.max(n.inPx, n.outPx, n.bodyHeightPx || 0) / 2;
+    let room = 0;
+    lay.nodes.forEach((l) => {
+      const label = R.labelGeometry(l, data.style);
+      if (!label) return;
+      const b = label.bounds;
+      lay.nodes.forEach((u) => {
+        if (u.set !== l.set || !(u.Y > l.Y) || b.x0 >= u.X + u.widthPx / 2 || b.x1 <= u.X - u.widthPx / 2) return;
+        const over = b.y1 + LABEL_CLEARANCE - bottom(u);
+        if (over > 0) room = Math.max(room, H * over / (u.Y - l.Y));
+      });
+    });
+    return room;
+  }
+
   function nodeLabelBounds(lay, data) {
     return lay.nodes.map(n => R.labelGeometry(n, data.style)).filter(Boolean).map(label => label.bounds);
   }
@@ -557,6 +598,7 @@
     // spread: a freshly generated layout, whose tight column gaps computeLayout widens.
     if (opts.fit && !opts.keepCanvas && state.sourceTable) {
       state.sourceTable.minCanvasWidth = 0;
+      state.sourceTable.minCanvasHeight = 0;
       if (opts.spread) state.sourceTable.spreadWidth = 0;
     }
     computeFrame();
@@ -1443,8 +1485,10 @@
     return sets;
   }
 
-  // Columns are spaced so the tallest column of stacks fills ~60% of the plot height.
+  // Columns are spaced so the tallest column of stacks fills ~60% of the plot height; each column
+  // stacks over STACK_SPAN of it, nodes and gaps together.
   const STACK_FILL = 0.6;
+  const STACK_SPAN = 0.8;
   const X_PAD = 1.15;
 
   // Value scale giving unit spacing between auto-layout columns (so loc x is 0, 1, 2, ...).
@@ -1464,7 +1508,7 @@
   function stackColumn(group, pxPerUnit, H, valueScale = state.valueScale) {
     const heights = group.map((n) => n.height * valueScale * pxPerUnit);
     const used = heights.reduce((a, b) => a + b, 0);
-    const gap = group.length > 1 ? Math.max((0.8 * H - used) / (group.length - 1), 4) : 0;
+    const gap = group.length > 1 ? Math.max((STACK_SPAN * H - used) / (group.length - 1), 4) : 0;
     let top = H / 2 + (used + gap * (group.length - 1)) / 2;
     return heights.map((h) => {
       const Y = top - h / 2;
@@ -1617,7 +1661,7 @@
     next.trustedNames = true;
     next.sourceTable = opts.sourceTable || (result.source ? window.SK.tableControls.create(result.source,
       { name: opts.name || 'pasted table', labels: opts.labels || 'inside' }) : null);
-    if (next.sourceTable) next.sourceTable = Object.assign({}, next.sourceTable, { minCanvasWidth: 0, spreadWidth: 0 });
+    if (next.sourceTable) next.sourceTable = Object.assign({}, next.sourceTable, { minCanvasWidth: 0, minCanvasHeight: 0, spreadWidth: 0 });
     if (next.sourceTable && !next.sourceTable.summary) next.sourceTable.summary = Object.assign({ rowsFiltered: next.sourceTable.table.rows.length, unit: result.unit }, result.summary);
     Object.assign(next.params, opts.params || {});
     next.stageParams = opts.stageParams || [];
@@ -2189,7 +2233,7 @@
     refreshMerge();
     if (autoLoc) {
       // Columns go back to auto-layout's spacing, to be spread for the merged data as on import.
-      if (state.sourceTable) Object.assign(state.sourceTable, { minCanvasWidth: 0, spreadWidth: 0 });
+      if (state.sourceTable) Object.assign(state.sourceTable, { minCanvasWidth: 0, minCanvasHeight: 0, spreadWidth: 0 });
       const fresh = Object.assign({}, state);
       autoLocate(undefined, fresh);
       state.loc.forEach((r) => { r.x = fresh.loc.find((f) => f.set === Number(r.set)).x; });
