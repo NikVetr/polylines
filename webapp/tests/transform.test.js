@@ -192,7 +192,8 @@ test('table controls keep or drop single values and columns, and move columns', 
   const source = C.create(T.build(cohort, cohortSpec).source);
   const noA = C.withValue(source, 'TR00', 'A');
   assert.deepStrictEqual(noA.filters, { TR00: ['B'] });
-  assert.deepStrictEqual(C.valuesOf(noA, 'TR00'), { values: ['A', 'B'], kept: new Set(['B']) });
+  const of = C.valuesOf(noA, 'TR00');
+  assert.deepStrictEqual([of.values, of.kept], [['A', 'B'], new Set(['B'])]);
   // Unlike a single-value row filter, a single kept value leaves its column in the diagram.
   assert.deepStrictEqual(noA.enabled, ['TR00', 'TR01', 'TR02']);
   assert.deepStrictEqual(C.withValue(noA, 'TR00', 'A').filters, {});
@@ -225,6 +226,35 @@ test('a diagram column\'s value order sets its nodes from the top, missing value
   const built = T.build(t, { format: 'wide', columns: ['a', 'b'], missing: 'keep' }, { setOrders: [['C', 'A'], [T.MISSING]] });
   assert.deepStrictEqual(built.sets, [['C', 'A', 'B', 'D'], [T.MISSING, 'X', 'Y']]);
   assert.throws(() => T.build(t, { format: 'wide', columns: ['a', 'b'] }, { setOrders: ['C'] }), /needs a list of names/);
+});
+
+test('merged values of a diagram column recode its rows into one node and filter together', () => {
+  const C = SK.tableControls;
+  const source = C.create(T.build(cohort, cohortSpec).source);
+  const merged = C.withMerge(source, 'TR02', ['Z', 'W'], 'Z or W');
+  assert.deepStrictEqual(C.valuesOf(merged, 'TR02').values, ['Z or W']);
+  assert.deepStrictEqual(C.build(merged).result.dimnames[1].cols, ['Z or W']);
+  assert.strictEqual(C.build(merged).result.summary.total, 23);
+  assert.strictEqual(merged.table.rows[0][4], 'Z', 'the source table is not changed');
+  // A merged value takes in another merge; its rows drop and return together.
+  const tr00 = C.withMerge(C.withMerge(source, 'TR00', ['A', 'B'], 'AB'), 'TR01', ['X', 'Y'], 'XY');
+  assert.deepStrictEqual(C.build(tr00).result.dimnames.map((d) => d.rows), [['AB'], ['XY']]);
+  const ordered = C.withValueOrder(source, 'TR01', ['Y', 'X']);
+  assert.deepStrictEqual(C.withMerge(ordered, 'TR01', ['X', 'Y'], 'XY').valueOrders.TR01, ['XY']);
+  assert.throws(() => C.withMerge(source, 'TR00', ['A'], 'A'), /two or more values/);
+  assert.throws(() => C.withMerge(source, 'TR01', ['X', 'Q'], 'XQ'), /two or more values/);
+  const three = C.create(T.build(table('a,b\nP,x\nQ,y\nR,x\n'), { format: 'wide', columns: ['a', 'b'] }).source);
+  assert.throws(() => C.withMerge(three, 'a', ['P', 'Q'], 'R'), /already has a value named "R"/);
+  assert.deepStrictEqual(C.valuesOf(C.withMerge(three, 'a', ['P', 'Q'], 'P'), 'a').values, ['P', 'R']);
+  // Long tables merge categories at one stage only.
+  const long = C.create(T.build(table('id,visit,status\nA,1,A\nA,2,B\nB,1,A\nB,2,C\nC,1,B\nC,2,B\n'),
+    { format: 'long', id: 'id', stage: 'visit', category: 'status' }).source);
+  const lm = C.withMerge(long, '2', ['B', 'C'], 'B or C');
+  const built = C.build(lm).result;
+  assert.deepStrictEqual(built.dimnames.map((d) => [d.rows, d.cols]), [[['A', 'B'], ['B or C']]]);
+  assert.throws(() => C.withValue(lm, '2', 'B or C'), /Keep at least one value of visit 2/);
+  const noA = C.withValue(lm, '1', 'A');
+  assert.deepStrictEqual(noA.stageFilters, { 1: ['B'] });
 });
 
 test('subset captions wrap long values, escape SVG markup and bold column names', () => {

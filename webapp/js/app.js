@@ -2228,7 +2228,19 @@
     if (!label) throw new L.SankeyError('The merged node needs a name.');
     const autoLoc = state.locName === 'auto-generated' || /^built from /.test(state.locName);
     const set = nodes[0].set;
+    // An imported table keeps the merge, so its rebuilds (and its arrange strip) have the merged node.
+    let source = state.sourceTable;
+    if (source) {
+      const TC = window.SK.tableControls;
+      const column = source.order.filter((c) => source.enabled.includes(c))[set - 1];
+      const merged = nodes.map(dataName);
+      if (merged.some((v) => !TC.valuesOf(source, column).values.includes(v))) {
+        throw new L.SankeyError('Grouped ("Other") or missing-value nodes of an imported table cannot be merged; group or drop them in the import instead.');
+      }
+      source = TC.withMerge(source, column, merged, label);
+    }
     state = window.SK.edit.mergeNodes(state, set, nodes.map((n) => n.node - 1), label);
+    if (source) state.sourceTable = Object.assign({}, state.sourceTable, { merges: source.merges, valueOrders: source.valueOrders });
     // Hide the Merge button first: it can wrap the toolbar, and the plot panel's height feeds
     // the layout below.
     clearEmphasis();

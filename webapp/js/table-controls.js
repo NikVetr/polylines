@@ -9,7 +9,8 @@
 
   // order: every diagram column (wide: source columns; long: stages), shown or not; enabled: those
   // in the diagram; filters: kept values per source column; stageFilters (long): kept categories
-  // per stage; valueOrders: a diagram column's values in the order of its nodes from the top.
+  // per stage; valueOrders: a diagram column's values in the order of its nodes from the top;
+  // merges: per diagram column, values merged into one node, [{ name, values }].
   function create(input, options) {
     const source = JSON.parse(JSON.stringify(input));
     const available = T.diagramColumns(source.table, source.spec);
@@ -20,28 +21,86 @@
 
   const columnLabel = (source, column) => (source.spec.format === 'long' ? T.stageLabel(source.spec, column) : column);
 
-  // A diagram column's values (wide: the column's; long: the categories at that stage), in their
-  // chosen order, and those kept.
+  // A diagram column's values in the source table (wide: the column's; long: the categories at that stage).
+  const rawValues = (source, column) => (source.spec.format === 'long'
+    ? T.stageValues(source.table, source.spec, column) : T.columnValues(source.table, column));
+
+  // A diagram column's values as its nodes have them (merged values as one, named for the merge),
+  // in their chosen order; those kept (a merged value while any of its members is); and the
+  // members of each merged value.
   function valuesOf(source, column) {
-    const long = source.spec.format === 'long';
-    const values = (source.valueOrders || {})[column] ||
-      (long ? T.stageValues(source.table, source.spec, column) : T.columnValues(source.table, column));
-    const kept = (long ? source.stageFilters || {} : source.filters)[column];
-    return { values, kept: new Set(kept || values) };
+    const raw = rawValues(source, column);
+    const merges = (source.merges || {})[column] || [];
+    const members = new Map(merges.map((m) => [m.name, m.values]));
+    const into = new Map(merges.flatMap((m) => m.values.map((v) => [v, m.name])));
+    const values = (source.valueOrders || {})[column] || [...new Set(raw.map((v) => into.get(v) || v))];
+    const filter = (source.spec.format === 'long' ? source.stageFilters || {} : source.filters)[column];
+    const keptRaw = new Set(filter || raw);
+    return { values, kept: new Set(values.filter((v) => (members.get(v) || [v]).some((m) => keptRaw.has(m)))), members };
   }
 
-  // The source with one value of a diagram column dropped, or kept again. Unlike a single-value row
-  // filter, keeping one value leaves its column in the diagram.
+  // The source with one value of a diagram column (all members of a merged one) dropped, or kept
+  // again. Unlike a single-value row filter, keeping one value leaves its column in the diagram.
   function withValue(source, column, value) {
-    const { values, kept } = valuesOf(source, column);
+    const { values, kept, members } = valuesOf(source, column);
     if (!values.includes(value)) fail(`"${value}" is not a value of ${columnLabel(source, column)}.`);
-    const next = values.filter((v) => (v === value ? !kept.has(v) : kept.has(v)));
-    if (!next.length) fail(`Keep at least one value of ${columnLabel(source, column)}.`);
+    const keep = values.filter((v) => (v === value ? !kept.has(v) : kept.has(v)));
+    if (!keep.length) fail(`Keep at least one value of ${columnLabel(source, column)}.`);
+    // The row filter keeps raw values, in the column's order.
+    const next = keep.flatMap((v) => members.get(v) || [v]);
     const key = source.spec.format === 'long' ? 'stageFilters' : 'filters';
     const filters = Object.assign({}, source[key] || {});
-    if (next.length === values.length) delete filters[column];
+    if (next.length === rawValues(source, column).length) delete filters[column];
     else filters[column] = next;
     return Object.assign({}, source, { [key]: filters });
+  }
+
+  // The source with values of a diagram column merged into one node named `name` (a merged value
+  // brings its members), placed where the first of them is in a chosen order.
+  function withMerge(source, column, merged, name) {
+    const label = columnLabel(source, column);
+    const { values, members } = valuesOf(source, column);
+    if (new Set(merged).size < 2 || merged.some((v) => !values.includes(v))) fail(`Merge two or more values of ${label}.`);
+    if (values.includes(name) && !merged.includes(name)) fail(`${label} already has a value named "${name}".`);
+    const merges = Object.assign({}, source.merges);
+    merges[column] = (merges[column] || []).filter((m) => !merged.includes(m.name))
+      .concat([{ name, values: merged.flatMap((v) => members.get(v) || [v]) }]);
+    const next = Object.assign({}, source, { merges });
+    const order = (source.valueOrders || {})[column];
+    if (order) {
+      const kept = order.filter((v) => !merged.includes(v));
+      kept.splice(order.findIndex((v) => merged.includes(v)), 0, name);
+      next.valueOrders = Object.assign({}, source.valueOrders, { [column]: kept });
+    }
+    return next;
+  }
+
+  // The filtered table with merged values renamed for their merge.
+  function recode(table, source) {
+    const merges = Object.entries(source.merges || {}).filter(([, list]) => list.length);
+    if (!merges.length) return table;
+    const to = new Map(merges.map(([c, list]) => [c, new Map(list.flatMap((m) => m.values.map((v) => [v, m.name])))]));
+    const index = (name) => {
+      const j = table.columns.indexOf(name);
+      if (j < 0) fail(`The table has no column "${name}".`);
+      return j;
+    };
+    let rows;
+    if (source.spec.format === 'long') {
+      const [iStage, iCat] = [index(source.spec.stage), index(source.spec.category)];
+      rows = table.rows.map((r) => {
+        const map = to.get(r[iStage]);
+        return map && map.has(r[iCat]) ? Object.assign(r.slice(), { [iCat]: map.get(r[iCat]) }) : r;
+      });
+    } else {
+      const columns = [...to.keys()].map((c) => [index(c), to.get(c)]);
+      rows = table.rows.map((r) => {
+        const out = r.slice();
+        columns.forEach(([j, map]) => { if (map.has(r[j])) out[j] = map.get(r[j]); });
+        return out;
+      });
+    }
+    return { columns: table.columns, rows };
   }
 
   // The source with a diagram column's values, and so its nodes from the top, in this order.
@@ -90,7 +149,7 @@
   }
 
   function build(source) {
-    const table = T.filterTable(source.table, source.filters, source.spec, source.stageFilters);
+    const table = recode(T.filterTable(source.table, source.filters, source.spec, source.stageFilters), source);
     const columns = source.order.filter((c) => source.enabled.includes(c));
     const spec = Object.assign({}, source.spec, source.spec.format === 'wide' ? { columns } : { stages: columns });
     // Missing values all go to one node, which takes the place of the first of them.
@@ -204,6 +263,6 @@
     });
   }
 
-  SK.tableControls = { create, withFilters, withValue, withValueOrder, withColumn, withMove, valuesOf, columnLabel, displayValue, esc, build, header, render, remapStageParams };
+  SK.tableControls = { create, withFilters, withValue, withValueOrder, withMerge, withColumn, withMove, valuesOf, columnLabel, displayValue, esc, build, header, render, remapStageParams };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

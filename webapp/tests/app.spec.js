@@ -1532,6 +1532,32 @@ test('Shift-clicked nodes in one column merge into a renamed node, laid out as i
   expect(await page.evaluate(() => window.SankeyApp.layout.nodes.filter((n) => n.set === 2).length)).toBe(4);
 });
 
+test('a merge in an imported table is kept by rebuilds and shows as one value in the strip', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  for (const label of ['Surgery', 'Radiation']) {
+    const n = await nodeAt(page, label);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(n.x, n.y);
+    await page.keyboard.up('Shift');
+  }
+  await page.locator('#merge-nodes').click();
+  await page.locator('#merge-name').fill('Local therapy');
+  await page.locator('#merge-name').press('Enter');
+  const listed = () => page.locator('[data-strip-values="treatment"] .strip-value').evaluateAll((els) => els.map((el) => el.dataset.stripValue));
+  const labels = () => page.evaluate(() => window.SankeyApp.layout.nodes.filter((n) => n.set === 2).map((n) => window.SankeyApp.state.loc[n.id].label));
+  expect(await listed()).toEqual(['Local therapy', 'Chemotherapy', 'Palliative']);
+  await expect(page.locator('[data-strip-values="treatment"] [data-strip-value="Local therapy"]')).not.toHaveClass(/absent/);
+  // A change elsewhere rebuilds the diagram from the table, merge included.
+  await page.locator('[data-strip-values="response"] [data-strip-value="Stable"]').click();
+  expect(await labels()).toEqual(['Local therapy', 'Chemotherapy', 'Palliative']);
+  expect((await state(page)).sourceTable.merges).toEqual({ treatment: [{ name: 'Local therapy', values: ['Surgery', 'Radiation'] }] });
+  // The merged value drops (and keeps) all its members' rows.
+  await page.locator('[data-strip-values="treatment"] [data-strip-value="Local therapy"]').click();
+  expect((await state(page)).sourceTable.filters.treatment).toEqual(['Chemotherapy', 'Palliative']);
+  expect(await labels()).toEqual(['Chemotherapy', 'Palliative']);
+  await expect(page.locator('[data-strip-values="treatment"] [data-strip-value="Local therapy"]')).toHaveClass(/off/);
+});
+
 test('nodes of matrix data can be picked and merged too, and merging can be cancelled', async ({ page }) => {
   const ids = await page.evaluate(() => window.SankeyApp.layout.nodes.filter((n) => n.set === 1).slice(0, 2).map((n) => window.SankeyApp.state.loc[n.id].label));
   for (const label of ids) {
