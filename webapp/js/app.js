@@ -52,7 +52,13 @@
     change: (source) => rebuildTable(source),
     refuse: (message) => notify(message),
     geometry: () => columnGeometry(),
-    focus: (ids) => focusColumnNodes(ids)
+    focus: (ids) => focusColumnNodes(ids),
+    reveal: (k) => {
+      const geo = columnGeometry();
+      if (!geo || !geo[k]) return;
+      const box = stageEl.getBoundingClientRect();
+      stageEl.scrollBy({ left: geo[k].cx - (box.left + box.width / 2), behavior: 'smooth' });
+    }
   });
 
   let state = blankState();

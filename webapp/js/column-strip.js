@@ -21,12 +21,13 @@
   // geometry() gives the shown columns in diagram order, { cx, color, nodes: [{ id, name, color,
   // count, cx, left, right, top, bottom, bar }] } in client px: a node's box including its label,
   // and bar, its drawn body's (null without a drawing);
-  // focus(ids) marks those nodes in the plot (null clears). beam: the element drawn from a badge to
-  // its nodes.
+  // focus(ids) marks those nodes in the plot (null clears); reveal(k) scrolls the plot to the k-th
+  // shown column. beam: the element drawn from a badge to its nodes.
   function create(host, beam, hooks) {
     host.innerHTML = '<div class="strip-body"><div class="strip-out"><span class="strip-out-label">Not shown:</span>' +
       '<span class="strip-hint">none (click or drag a column here to hide it)</span></div>' +
-      '<div class="strip-in"><div class="strip-zones"></div></div><div class="strip-marker" hidden></div></div>' +
+      '<div class="strip-in"><div class="strip-zones"></div><button type="button" class="strip-edge" data-edge="left" hidden></button>' +
+      '<button type="button" class="strip-edge" data-edge="right" hidden></button></div><div class="strip-marker" hidden></div></div>' +
       '<div class="strip-value-marker" hidden></div>' +
       '<button type="button" class="strip-tab" aria-expanded="true"><span class="strip-tab-text">Arrange</span><span class="strip-caret" aria-hidden="true">▴</span></button>';
     const outRow = host.querySelector('.strip-out');
@@ -165,6 +166,19 @@
       if (last.x <= width) bounds[n] = Math.min(width - 2, bounds[n]);
       zones = items.map((it, i) => ({ column: it.column, x: it.x, from: bounds[i], to: bounds[i + 1],
         left: bounds[i] + ZONE_GAP / 2, right: bounds[i + 1] - ZONE_GAP / 2 }));
+      // Columns scrolled wholly out of view are listed in an arrow at that end, which brings the
+      // nearest of them into view; a zone's content stays clear of the left arrow.
+      const away = { left: zones.filter((z) => z.right < 0).reverse(), right: zones.filter((z) => z.left > width) };
+      Object.entries(away).forEach(([side, list]) => {
+        const edge = inRow.querySelector(`.strip-edge[data-edge="${side}"]`);
+        edge.hidden = !list.length;
+        if (!list.length) return;
+        const names = list.map((z) => TC.columnLabel(source, z.column));
+        edge.dataset.reveal = cols.indexOf(list[0].column);
+        edge.innerHTML = `${side === 'left' ? '‹' : ''}<span class="strip-edge-count">${list.length}</span>${side === 'right' ? '›' : ''}`;
+        edge.title = `Scroll to ${names.join(', ')}`;
+      });
+      const floor = away.left.length ? 26 : 2;
       items.forEach((it, i) => {
         const { left, right } = zones[i];
         const inner = right - left - 2 * ZONE_PAD;
@@ -174,7 +188,7 @@
         placeValues(it.list, it.geo);
         const listWidth = layoutList(it.list, inner - INDENT);
         const content = Math.max(it.badge.offsetWidth, INDENT + listWidth);
-        const x0 = Math.max(left + ZONE_PAD, Math.min(Math.max(left, 2) + ZONE_PAD, right - ZONE_PAD - content));
+        const x0 = Math.max(left + ZONE_PAD, Math.min(Math.max(left, floor) + ZONE_PAD, right - ZONE_PAD - content));
         it.badge.style.left = `${x0}px`;
         it.list.style.left = `${x0 + INDENT}px`;
         it.list.style.width = `${listWidth}px`;
@@ -436,6 +450,8 @@
 
     host.addEventListener('click', (event) => {
       if (event.target.closest('.strip-tab')) { setCollapsed(!collapsed); return; }
+      const edge = event.target.closest('.strip-edge');
+      if (edge) { hooks.reveal(Number(edge.dataset.reveal)); return; }
       if (suppressClick) { suppressClick = false; return; }
       const value = event.target.closest('.strip-value');
       const badge = event.target.closest('.strip-badge');

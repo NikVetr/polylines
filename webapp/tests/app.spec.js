@@ -2511,10 +2511,21 @@ test('a column scrolled off the strip takes its values and zone with it', async 
   const zone = await page.locator('#column-strip .strip-zone[data-strip-zone="treatment"]').boundingBox();
   await page.locator('#stage').evaluate((el, by) => { el.scrollLeft += by; }, zone.x - strip.x + 60);
   await expect.poll(async () => (await page.locator('#column-strip .strip-zone[data-strip-zone="treatment"]').boundingBox()).x).toBeLessThan(strip.x - 40);
+  // ...clear of the arrow that lists the columns scrolled out of view on that side.
+  const arrow = page.locator('#column-strip .strip-edge[data-edge="left"]');
+  await expect(arrow).toBeVisible();
+  await expect(arrow).toHaveText('‹1');
+  await expect(arrow).toHaveAttribute('title', 'Scroll to diagnosis');
+  await expect(page.locator('#column-strip .strip-edge[data-edge="right"]')).toBeHidden();
+  const edge = await arrow.boundingBox();
   const [b, l] = [await badge(page, 'treatment').boundingBox(), await page.locator('[data-strip-values="treatment"]').boundingBox()];
-  expect(b.x).toBeGreaterThanOrEqual(strip.x);
-  expect(b.x).toBeLessThan(strip.x + 12);
+  expect(b.x).toBeGreaterThanOrEqual(edge.x + edge.width);
+  expect(b.x).toBeLessThan(edge.x + edge.width + 12);
   expect(l.x - b.x).toBeCloseTo(10, 0);
+  // Clicking the arrow scrolls the plot back to that column.
+  await arrow.click();
+  await expect.poll(async () => (await badge(page, 'diagnosis').boundingBox()).x).toBeGreaterThan(strip.x);
+  await expect(arrow).toBeHidden();
 });
 
 test('lit nodes glow as one shape each, with no seam between an end node\'s parts', async ({ page }) => {
