@@ -12,6 +12,9 @@
   const INDENT = 10;
   const ZONE_GAP = 6;
   const ZONE_PAD = 6;
+  const MAX_VALUE_WIDTH = 200;
+  const MIN_SUBCOLUMN = 84;
+  const SUBCOLUMN_GAP = 8;
   const STORE = 'polylines-strip';
 
   // hooks: change(source) applies a new source; refuse(message) explains a refused change;
@@ -126,7 +129,7 @@
         inRow.insertAdjacentHTML('beforeend', `<div class="strip-values" data-strip-values="${esc(c)}">` + values.map((v, i) =>
           `<button type="button" class="strip-value${kept.has(v) ? '' : ' off'}" data-strip-value="${esc(v)}" data-order="${i}" aria-pressed="${kept.has(v)}" ` +
           `title="${esc(displayValue(v))}: click to ${kept.has(v) ? 'drop' : 'keep'} its rows, drag to move its node">` +
-          `<span class="strip-chip">${esc(displayValue(v))}</span><span class="strip-count"></span></button>`).join('') + '</div>');
+          `<span class="strip-index"></span><span class="strip-chip">${esc(displayValue(v))}</span><span class="strip-count"></span></button>`).join('') + '</div>');
       });
       outRow.classList.toggle('empty', !outRow.querySelector('.strip-badge'));
       place();
@@ -169,11 +172,7 @@
         it.badge.classList.toggle('colored', !!it.geo);
         if (it.geo) it.badge.style.setProperty('--col', it.geo.color);
         placeValues(it.list, it.geo);
-        // The widest value in full (unrounded: a rounded-down width cuts it short), with the list's
-        // indent and any scroll bar.
-        it.list.style.width = 'max-content';
-        const want = Math.ceil(it.list.getBoundingClientRect().width) + 1 + (it.list.scrollHeight > it.list.clientHeight + 1 ? 10 : 0);
-        const listWidth = Math.max(44, Math.min(want, inner - INDENT));
+        const listWidth = layoutList(it.list, inner - INDENT);
         const content = Math.max(it.badge.offsetWidth, INDENT + listWidth);
         const x0 = Math.max(left + ZONE_PAD, Math.min(Math.max(left, 2) + ZONE_PAD, right - ZONE_PAD - content));
         it.badge.style.left = `${x0}px`;
@@ -192,6 +191,38 @@
         else el.style.removeProperty('--col');
       });
       if (lit) light(lit);
+    }
+
+    // A list's width within `room`. Up to the strip's rows of values stack in one column as wide as
+    // the widest value (up to MAX_VALUE_WIDTH); longer lists flow down numbered sub-columns, as
+    // many as the rows need, then at a compact size, then narrower (down to MIN_SUBCOLUMN), and
+    // only then in fewer sub-columns that scroll.
+    function layoutList(list, room) {
+      const rows = Number(host.style.getPropertyValue('--value-rows'));
+      const n = list.children.length;
+      const indent = parseFloat(getComputedStyle(list).paddingLeft);
+      list.classList.remove('multi', 'compact');
+      list.classList.toggle('indexed', n > rows);
+      // The widest value in full (unrounded: a rounded-down width cuts it short).
+      const widest = () => {
+        list.style.width = 'max-content';
+        return Math.min(MAX_VALUE_WIDTH, Math.ceil(list.getBoundingClientRect().width) + 1 - indent);
+      };
+      if (n <= rows) return Math.max(44, Math.min(widest() + indent, room));
+      let subs = Math.ceil(n / rows);
+      const fits = (w) => indent + subs * w + (subs - 1) * SUBCOLUMN_GAP <= room;
+      let width = widest();
+      if (!fits(width)) {
+        list.classList.add('compact');
+        width = widest();
+      }
+      if (!fits(width)) width = Math.max(MIN_SUBCOLUMN, (room - indent - (subs - 1) * SUBCOLUMN_GAP) / subs);
+      if (!fits(width)) subs = Math.max(1, Math.floor((room - indent + SUBCOLUMN_GAP) / (MIN_SUBCOLUMN + SUBCOLUMN_GAP)));
+      const tall = Math.ceil(n / subs);
+      list.classList.add('multi');
+      list.style.setProperty('--rows', tall);
+      list.style.setProperty('--sub', `${width}px`);
+      return indent + subs * width + (subs - 1) * SUBCOLUMN_GAP + (tall > rows ? 10 : 0);
     }
 
     // Values in the column's chosen order (which its nodes follow), else in the order of their nodes
@@ -215,6 +246,7 @@
         ordered = byNode.concat(chips.filter((chip) => !node.get(chip)));
       }
       listed.set(column, ordered.map((chip) => chip.dataset.stripValue));
+      ordered.forEach((chip, i) => { chip.querySelector('.strip-index').textContent = i + 1; });
       if (ordered.some((chip, i) => chip !== list.children[i])) ordered.forEach((chip) => list.appendChild(chip));
       chips.forEach((chip) => {
         const on = chip.getAttribute('aria-pressed') === 'true';
@@ -305,7 +337,8 @@
       ghost.classList.add('strip-ghost');
       ghost.removeAttribute('data-strip-column');
       ghost.removeAttribute('data-strip-value');
-      ghost.style.width = `${element.getBoundingClientRect().width}px`;
+      // A dragged value shows in full; a badge keeps its width.
+      if (!element.classList.contains('strip-value')) ghost.style.width = `${element.getBoundingClientRect().width}px`;
       host.appendChild(ghost);
       element.classList.add('dragging');
       host.classList.add('dragging');
@@ -320,18 +353,26 @@
       }
       const box = host.getBoundingClientRect();
       if (drag.kind === 'value') {
-        // Values move only up and down their own list.
+        // Values move only within their own list: before or after the nearest other value.
         const list = drag.element.parentElement.getBoundingClientRect();
         const y = Math.max(list.top - drag.dy - 6, Math.min(list.bottom - drag.dy + 6, event.clientY - drag.dy));
-        drag.ghost.style.left = `${drag.element.getBoundingClientRect().left - box.left}px`;
+        const x = Math.max(list.left - 6, Math.min(list.right - drag.ghost.offsetWidth + 6, event.clientX - drag.dx));
+        drag.ghost.style.left = `${x - box.left}px`;
         drag.ghost.style.top = `${y - box.top}px`;
         const chips = [...drag.element.parentElement.children].filter((c) => c !== drag.element);
-        drag.slot = chips.filter((c) => { const r = c.getBoundingClientRect(); return r.top + r.height / 2 < event.clientY; }).length;
-        const edge = !chips.length ? list.top : drag.slot === 0 ? chips[0].getBoundingClientRect().top - 1
-          : chips[drag.slot - 1].getBoundingClientRect().bottom + 1;
-        const chip = local(drag.element.getBoundingClientRect());
-        Object.assign(valueMarker.style, { left: `${chip.left}px`, width: `${chip.right - chip.left}px`, top: `${edge - box.top - 1}px` });
-        valueMarker.hidden = false;
+        let nearest = Infinity;
+        chips.forEach((c, i) => {
+          const r = c.getBoundingClientRect();
+          const d = Math.hypot(event.clientX - (r.left + r.right) / 2, event.clientY - (r.top + r.bottom) / 2);
+          if (d >= nearest) return;
+          nearest = d;
+          const after = event.clientY > (r.top + r.bottom) / 2;
+          drag.slot = i + (after ? 1 : 0);
+          const at = local(r);
+          Object.assign(valueMarker.style, { left: `${at.left}px`, width: `${at.right - at.left}px`, top: `${(after ? at.bottom + 1 : at.top - 1) - 1}px` });
+        });
+        if (!chips.length) drag.slot = 0;
+        valueMarker.hidden = !chips.length;
         light({ column: drag.column, value: drag.element.dataset.stripValue, element: drag.ghost, dragged: true });
         return;
       }

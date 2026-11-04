@@ -287,6 +287,14 @@ body.resizing-panels { cursor: col-resize; user-select: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Long lists flow down numbered sub-columns, compacted when the zone is narrow. */
+.strip-index { display: none; flex: none; align-self: flex-start; min-width: 1.3em; margin-right: -3px; color: var(--muted); font-size: 8.5px; line-height: 9px; text-align: right; font-variant-numeric: tabular-nums; }
+.strip-values.indexed .strip-index { display: inline; }
+.strip-values.multi { display: grid; grid-auto-flow: column; grid-template-rows: repeat(var(--rows), 18px); grid-auto-columns: var(--sub); column-gap: 8px; row-gap: 2px; }
+.strip-values.compact .strip-value { gap: 3px; font-size: 10px; }
+.strip-values.compact .strip-chip { padding: 0 4px; }
+.strip-values.compact .strip-count { min-width: 1.6em; font-size: 9.5px; }
+.strip-ghost.strip-value { width: max-content; }
 .strip-count { flex: none; min-width: 2em; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; text-align: right; }
 .strip-count:empty { display: none; }
 .strip-value:hover .strip-chip, .strip-value:focus-visible .strip-chip { border-color: var(--accent); border-left-color: var(--node, var(--accent)); }

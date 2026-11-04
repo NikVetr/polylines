@@ -2690,6 +2690,55 @@ test('a value left without rows by another column\'s filter keeps its place in t
   expect(await listed('TR02')).toEqual(first);
 });
 
+test('long value lists flow down numbered sub-columns instead of scrolling, and long values are cut short', async ({ page }) => {
+  await page.evaluate(() => {
+    const T = window.SK.transform;
+    const many = Array.from({ length: 14 }, (_, i) => (i === 0 ? 'A value whose name is much too long to show in full in its badge' : `Site ${i + 1}`));
+    const rows = Array.from({ length: 140 }, (_, i) => [`p${i}`, 'xy'[i % 2], many[i % 14], 'uvw'[i % 3]]);
+    window.SankeyApp.applyImport(T.build({ columns: ['id', 'arm', 'site', 'end'], rows }, { format: 'wide', id: 'id', columns: ['arm', 'site', 'end'] }),
+      { labels: 'above' });
+  });
+  const list = page.locator('[data-strip-values="site"]');
+  await expect(list).toHaveClass(/multi/);
+  const chips = await list.locator('.strip-value').evaluateAll((els) => els.map((el) => {
+    const r = el.getBoundingClientRect();
+    return { index: el.querySelector('.strip-index').textContent, left: r.left, top: r.top, value: el.dataset.stripValue, title: el.title,
+      chip: el.querySelector('.strip-chip').getBoundingClientRect().width };
+  }));
+  // 14 values over at most six rows: three sub-columns of five, numbered down each in turn.
+  expect(chips.map((c) => c.index)).toEqual(Array.from({ length: 14 }, (_, i) => String(i + 1)));
+  expect(chips[5].left).toBeGreaterThan(chips[0].left + 20);
+  expect(chips[5].top).toBeCloseTo(chips[0].top, 0);
+  expect(chips[10].left).toBeGreaterThan(chips[5].left + 20);
+  expect(await list.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+  const zone = await page.locator('#column-strip .strip-zone[data-strip-zone="site"]').boundingBox();
+  const box = await list.boundingBox();
+  expect(box.x + box.width).toBeLessThanOrEqual(zone.x + zone.width);
+  // Short lists stay in one unnumbered column.
+  await expect(page.locator('[data-strip-values="end"]')).not.toHaveClass(/multi/);
+  await expect(page.locator('[data-strip-values="end"] .strip-index').first()).toBeHidden();
+  // A long value is cut short, in full in its tooltip and while dragged.
+  const long = chips.find((c) => c.value.startsWith('A value'));
+  expect(long.chip).toBeLessThan(200);
+  expect(long.title).toContain(long.value);
+  const from = await list.locator('.strip-value').filter({ hasText: 'A value' }).boundingBox();
+  await page.mouse.move(from.x + 20, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 24, from.y + from.height / 2 + 6, { steps: 4 });
+  const ghost = await page.locator('#column-strip .strip-ghost .strip-chip').evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+  expect(ghost).toBe(true);
+  await page.mouse.up();
+  // Dragged across sub-columns, a value lands before the one it is dropped on.
+  const target = await list.locator('.strip-value').nth(0).boundingBox();
+  const moved = await list.locator('.strip-value').nth(7).boundingBox();
+  const name = await list.locator('.strip-value').nth(7).getAttribute('data-strip-value');
+  await page.mouse.move(moved.x + 20, moved.y + moved.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x + 20, target.y + 3, { steps: 8 });
+  await page.mouse.up();
+  expect((await state(page)).sourceTable.valueOrders.site[0]).toBe(name);
+});
+
 test('the strip is as tall as the longest value list of a shown column', async ({ page }) => {
   await page.evaluate(() => {
     const T = window.SK.transform;
