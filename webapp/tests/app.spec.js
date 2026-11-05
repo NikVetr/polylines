@@ -2703,6 +2703,9 @@ test('a column of many nodes gets a canvas tall enough that labels clear the nod
   });
   expect(await clashes()).toEqual([]);
   expect(Number(await page.locator('#plot').getAttribute('height'))).toBeGreaterThan(before);
+  // A notice says why, and what makes it shorter.
+  await expect(page.locator('#notice')).toContainText(`The canvas grew to ${Number(await page.locator('#plot').getAttribute('height')).toLocaleString('en-US')} px tall`);
+  await expect(page.locator('#notice')).toContainText('thinner strands');
   // A fixed canvas height is a minimum: it grows too.
   await page.evaluate(() => {
     const app = window.SankeyApp;

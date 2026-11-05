@@ -74,6 +74,7 @@
   let pan = null; // { x0, y0, left, top, moved } while dragging empty space to scroll the panel
   let routeScope = 'all';
   let renderQueued = false;
+  let notedLabelRoom = 0; // the canvas height last noted as grown for labels
   let saveTimer = null;
   const history = { stack: [], index: -1 };
 
@@ -638,6 +639,13 @@
         svg.classList.remove('stale');
         showError(null);
         showWarnings(warnings);
+        // Say once why the canvas grew taller for labels, and how to make it shorter.
+        const grown = (state.sourceTable && state.sourceTable.minCanvasHeight) || 0;
+        if (grown && grown !== notedLabelRoom && !drag) {
+          notify(`The canvas grew to ${grown.toLocaleString()} px tall so node labels clear the nodes above them; ` +
+            'thinner strands, smaller labels or fewer nodes per column make it shorter.');
+        }
+        notedLabelRoom = grown;
       }
     } catch (err) {
       // Keep the last good drawing visible (dimmed, inert) so there is context for undoing.
