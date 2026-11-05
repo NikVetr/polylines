@@ -75,6 +75,19 @@
     return next;
   }
 
+  // The source with a merged value of a diagram column split back into its members, in its place
+  // in a chosen order.
+  function withoutMerge(source, column, name) {
+    const merge = ((source.merges || {})[column] || []).find((m) => m.name === name);
+    if (!merge) fail(`"${name}" is not a merged value of ${columnLabel(source, column)}.`);
+    const merges = Object.assign({}, source.merges, { [column]: source.merges[column].filter((m) => m !== merge) });
+    if (!merges[column].length) delete merges[column];
+    const next = Object.assign({}, source, { merges });
+    const order = (source.valueOrders || {})[column];
+    if (order) next.valueOrders = Object.assign({}, source.valueOrders, { [column]: order.flatMap((v) => (v === name ? merge.values : [v])) });
+    return next;
+  }
+
   // The filtered table with merged values renamed for their merge.
   function recode(table, source) {
     const merges = Object.entries(source.merges || {}).filter(([, list]) => list.length);
@@ -263,6 +276,6 @@
     });
   }
 
-  SK.tableControls = { create, withFilters, withValue, withValueOrder, withMerge, withColumn, withMove, valuesOf, columnLabel, displayValue, esc, build, header, render, remapStageParams };
+  SK.tableControls = { create, withFilters, withValue, withValueOrder, withMerge, withoutMerge, withColumn, withMove, valuesOf, columnLabel, displayValue, esc, build, header, render, remapStageParams };
   if (typeof module !== 'undefined' && module.exports) module.exports = SK;
 })(typeof window !== 'undefined' ? window : globalThis);

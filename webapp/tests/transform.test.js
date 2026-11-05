@@ -241,6 +241,12 @@ test('merged values of a diagram column recode its rows into one node and filter
   assert.deepStrictEqual(C.build(tr00).result.dimnames.map((d) => d.rows), [['AB'], ['XY']]);
   const ordered = C.withValueOrder(source, 'TR01', ['Y', 'X']);
   assert.deepStrictEqual(C.withMerge(ordered, 'TR01', ['X', 'Y'], 'XY').valueOrders.TR01, ['XY']);
+  // Splitting a merge puts its members back where it was.
+  const split = C.withoutMerge(C.withMerge(ordered, 'TR01', ['X', 'Y'], 'XY'), 'TR01', 'XY');
+  assert.deepStrictEqual(split.merges, {});
+  assert.deepStrictEqual(split.valueOrders.TR01, ['X', 'Y']);
+  assert.deepStrictEqual(C.build(split).result.dimnames[0].cols, ['X', 'Y']);
+  assert.throws(() => C.withoutMerge(source, 'TR01', 'X'), /not a merged value/);
   assert.throws(() => C.withMerge(source, 'TR00', ['A'], 'A'), /two or more values/);
   assert.throws(() => C.withMerge(source, 'TR01', ['X', 'Q'], 'XQ'), /two or more values/);
   const three = C.create(T.build(table('a,b\nP,x\nQ,y\nR,x\n'), { format: 'wide', columns: ['a', 'b'] }).source);

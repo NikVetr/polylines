@@ -1556,6 +1556,19 @@ test('a merge in an imported table is kept by rebuilds and shows as one value in
   expect((await state(page)).sourceTable.filters.treatment).toEqual(['Chemotherapy', 'Palliative']);
   expect(await labels()).toEqual(['Chemotherapy', 'Palliative']);
   await expect(page.locator('[data-strip-values="treatment"] [data-strip-value="Local therapy"]')).toHaveClass(/off/);
+  // Its scissors split it back into its members, in its place; so does Delete on the focused value.
+  await page.locator('[data-strip-values="treatment"] [data-strip-value="Local therapy"]').click();
+  expect(await labels()).toEqual(['Local therapy', 'Chemotherapy', 'Palliative']);
+  await page.locator('[data-strip-values="treatment"] [data-strip-value="Local therapy"] .strip-split').click();
+  expect(await listed()).toEqual(['Surgery', 'Radiation', 'Chemotherapy', 'Palliative']);
+  expect(await labels()).toEqual(['Surgery', 'Radiation', 'Chemotherapy', 'Palliative']);
+  expect((await state(page)).sourceTable.merges).toEqual({});
+  await page.locator('#undo').click();
+  expect(await listed()).toEqual(['Local therapy', 'Chemotherapy', 'Palliative']);
+  await page.locator('[data-strip-values="treatment"] [data-strip-value="Local therapy"]').focus();
+  await page.keyboard.press('Delete');
+  expect(await labels()).toEqual(['Surgery', 'Radiation', 'Chemotherapy', 'Palliative']);
+  await expect(page.locator('#column-strip .strip-split')).toHaveCount(0);
 });
 
 test('nodes of matrix data can be picked and merged too, and merging can be cancelled', async ({ page }) => {

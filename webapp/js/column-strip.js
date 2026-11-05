@@ -116,7 +116,7 @@
       const included = new Set(source.enabled);
       const locked = included.size <= 2;
       source.order.forEach((c) => {
-        const { values, kept } = TC.valuesOf(source, c);
+        const { values, kept, members } = TC.valuesOf(source, c);
         const label = TC.columnLabel(source, c);
         const on = included.has(c);
         const count = kept.size < values.length ? `<span class="strip-kept">${kept.size}/${values.length}</span>` : '';
@@ -129,8 +129,11 @@
         if (!on) return;
         inRow.insertAdjacentHTML('beforeend', `<div class="strip-values" data-strip-values="${esc(c)}">` + values.map((v, i) =>
           `<button type="button" class="strip-value${kept.has(v) ? '' : ' off'}" data-strip-value="${esc(v)}" data-order="${i}" aria-pressed="${kept.has(v)}" ` +
-          `title="${esc(displayValue(v))}: click to ${kept.has(v) ? 'drop' : 'keep'} its rows, drag to move its node">` +
-          `<span class="strip-index"></span><span class="strip-chip">${esc(displayValue(v))}</span><span class="strip-count"></span></button>`).join('') + '</div>');
+          `title="${esc(displayValue(v))}${members.has(v) ? ` (merged: ${esc(members.get(v).map(displayValue).join(', '))})` : ''}: ` +
+          `click to ${kept.has(v) ? 'drop' : 'keep'} its rows, drag to move its node">` +
+          `<span class="strip-index"></span><span class="strip-chip">${esc(displayValue(v))}</span>` +
+          (members.has(v) ? `<span class="strip-split" title="Split back into ${esc(members.get(v).map(displayValue).join(', '))} (or press Delete)">✂</span>` : '') +
+          '<span class="strip-count"></span></button>').join('') + '</div>');
       });
       outRow.classList.toggle('empty', !outRow.querySelector('.strip-badge'));
       place();
@@ -255,7 +258,8 @@
       const chipOf = new Map(chips.map((chip) => [chip.dataset.stripValue, chip]));
       const before = listed.get(column);
       let ordered = chips;
-      if (!chosen && before) {
+      // The order last shown is kept only while it lists the same values (merges and splits change them).
+      if (!chosen && before && before.length === chips.length && before.every((v) => chipOf.has(v))) {
         const queue = byNode.slice();
         ordered = before.map((v) => (node.get(chipOf.get(v)) ? queue.shift() : chipOf.get(v)));
       } else if (!chosen) {
@@ -454,6 +458,12 @@
       if (event.target.closest('.strip-tab')) { setCollapsed(!collapsed); return; }
       const edge = event.target.closest('.strip-edge');
       if (edge) { hooks.reveal(Number(edge.dataset.reveal)); return; }
+      const split = event.target.closest('.strip-split');
+      if (split) {
+        const chip = split.closest('.strip-value');
+        apply(() => TC.withoutMerge(source, chip.parentElement.dataset.stripValues, chip.dataset.stripValue));
+        return;
+      }
       if (suppressClick) { suppressClick = false; return; }
       const value = event.target.closest('.strip-value');
       const badge = event.target.closest('.strip-badge');
@@ -470,9 +480,14 @@
     // Alt+Left/Right moves a focused badge's column; Alt+Up/Down moves a focused value (and its
     // node) within its list.
     host.addEventListener('keydown', (event) => {
-      if (!event.altKey) return;
       const badge = event.target.closest('.strip-badge');
       const value = event.target.closest('.strip-value');
+      if (value && value.querySelector('.strip-split') && ['Delete', 'Backspace'].includes(event.key)) {
+        event.preventDefault();
+        apply(() => TC.withoutMerge(source, value.parentElement.dataset.stripValues, value.dataset.stripValue));
+        return;
+      }
+      if (!event.altKey) return;
       if (badge && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
         event.preventDefault();
         const column = badge.dataset.stripColumn;
