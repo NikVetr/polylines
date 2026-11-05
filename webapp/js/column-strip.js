@@ -41,7 +41,7 @@
     let counts = new Map();
     let listed = new Map(); // per column, the values in the order last shown
     let zones = [];
-    let refocus = null;
+    let refocus = null; // { column, value? }: the badge or value to focus once the strip is redrawn
     let lit = null;
     let drag = null;
     let suppressClick = false;
@@ -135,9 +135,11 @@
       outRow.classList.toggle('empty', !outRow.querySelector('.strip-badge'));
       place();
       if (refocus !== null) {
-        const badge = badgeOf(refocus);
+        const { column, value } = refocus;
         refocus = null;
-        if (badge) badge.focus();
+        const target = value === undefined ? badgeOf(column)
+          : [...(valuesList(column) || { children: [] }).children].find((chip) => chip.dataset.stripValue === value);
+        if (target) target.focus();
       }
     }
 
@@ -465,16 +467,32 @@
       else if (badge) apply(() => TC.withColumn(source, badge.dataset.stripColumn, !source.enabled.includes(badge.dataset.stripColumn)));
     });
 
+    // Alt+Left/Right moves a focused badge's column; Alt+Up/Down moves a focused value (and its
+    // node) within its list.
     host.addEventListener('keydown', (event) => {
+      if (!event.altKey) return;
       const badge = event.target.closest('.strip-badge');
-      if (!badge || !event.altKey || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-      event.preventDefault();
-      const column = badge.dataset.stripColumn;
-      const index = source.order.indexOf(column) + (event.key === 'ArrowLeft' ? -1 : 1);
-      if (index < 0 || index >= source.order.length) return;
-      refocus = column;
-      apply(() => TC.withMove(source, column, index));
-      refocus = null;
+      const value = event.target.closest('.strip-value');
+      if (badge && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        event.preventDefault();
+        const column = badge.dataset.stripColumn;
+        const index = source.order.indexOf(column) + (event.key === 'ArrowLeft' ? -1 : 1);
+        if (index < 0 || index >= source.order.length) return;
+        refocus = { column };
+        apply(() => TC.withMove(source, column, index));
+        refocus = null;
+      } else if (value && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
+        event.preventDefault();
+        const column = value.parentElement.dataset.stripValues;
+        const order = [...value.parentElement.children].map((chip) => chip.dataset.stripValue);
+        const i = order.indexOf(value.dataset.stripValue);
+        const j = i + (event.key === 'ArrowUp' ? -1 : 1);
+        if (j < 0 || j >= order.length) return;
+        [order[i], order[j]] = [order[j], order[i]];
+        refocus = { column, value: value.dataset.stripValue };
+        apply(() => TC.withValueOrder(source, column, order));
+        refocus = null;
+      }
     });
 
     return { render, place };

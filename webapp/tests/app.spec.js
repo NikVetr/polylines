@@ -2647,6 +2647,15 @@ test('dragging a strip value up or down moves its node within the column', async
   expect(await listed()).toEqual(fromTop);
   await page.locator('#undo').click();
   expect(await listed()).toEqual(['Surgery', 'Radiation', 'Chemotherapy', 'Palliative']);
+  // Alt+Up/Down moves a focused value the same way, keeping it focused.
+  await chip('Radiation').focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  expect(await listed()).toEqual(['Surgery', 'Chemotherapy', 'Radiation', 'Palliative']);
+  expect((await state(page)).dimnames[0].cols).toEqual(['Surgery', 'Chemotherapy', 'Radiation', 'Palliative']);
+  await expect(chip('Radiation')).toBeFocused();
+  await page.keyboard.press('Alt+ArrowUp');
+  await page.keyboard.press('Alt+ArrowUp');
+  expect(await listed()).toEqual(['Radiation', 'Surgery', 'Chemotherapy', 'Palliative']);
 });
 
 test('strip values show in full where the columns leave room', async ({ page }) => {
