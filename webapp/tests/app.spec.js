@@ -2677,7 +2677,7 @@ test('strip values show in full where the columns leave room', async ({ page }) 
   expect(cut).toEqual([]);
 });
 
-test('masks and faint copies reuse one shared shape per strand, so the SVG grows linearly', async ({ page }) => {
+test('strands, their masks and faint copies reuse one shared shape per strand, so the SVG grows linearly', async ({ page }) => {
   await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
   const shapes = await page.evaluate(() => {
     const svg = document.querySelector('#plot');
@@ -2689,10 +2689,16 @@ test('masks and faint copies reuse one shared shape per strand, so the SVG grows
         [...m.querySelectorAll('use')].every((u) => /^#strand-shape\d+$/.test(ref(u))) && m.querySelectorAll('use').length > 0),
       outlineMasksHaveNoPaths: [...svg.querySelectorAll('mask[id^="strand-outline-mask"] path')].length === 0,
       ghosts: [...svg.querySelectorAll('.ribbon-ghost')].every((g) => g.tagName === 'use' && ref(g) === `#strand-shape${g.dataset.flow}`),
-      anyGhost: svg.querySelectorAll('.ribbon-ghost').length > 0
+      anyGhost: svg.querySelectorAll('.ribbon-ghost').length > 0,
+      ribbons: [...svg.querySelectorAll('.ribbon')].every((r) => r.tagName === 'use' && ref(r) === `#strand-shape${r.dataset.flow}`)
     };
   });
-  expect(shapes).toEqual({ defs: true, masks: true, outlineMasksHaveNoPaths: true, ghosts: true, anyGhost: true });
+  expect(shapes).toEqual({ defs: true, masks: true, outlineMasksHaveNoPaths: true, ghosts: true, anyGhost: true, ribbons: true });
+  // Exports carry the shared shapes their strands refer to.
+  expect(await page.evaluate(() => {
+    const doc = new DOMParser().parseFromString(window.SankeyApp.exportSvgText(), 'image/svg+xml');
+    return [...doc.querySelectorAll('.ribbon')].every((r) => doc.getElementById(r.getAttribute('href').slice(1)));
+  })).toBe(true);
 });
 
 test('a column of many nodes gets a canvas tall enough that labels clear the nodes above them', async ({ page }) => {

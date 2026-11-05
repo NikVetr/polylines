@@ -343,11 +343,11 @@
       } else {
         fill = fillAttrs(colors.flow[f.index]);
       }
-      const d = pathD(polygon, map, true);
-      ribbons.push(`<path class="ribbon" data-flow="${f.index}" d="${d}" ${fill}/>`);
-      // One shared copy of the shape, for the masks and faint copies that reuse it (<use>): repeating
-      // its path data in each grows the SVG with the square of the strand count.
-      defs.push(`<path id="strand-shape${f.index}" d="${d}"/>`);
+      // The strand's shape is defined once and drawn by reference, here and by the masks and faint
+      // copies that reuse it: repeating its path data in each grows the SVG with the square of the
+      // strand count.
+      defs.push(`<path id="strand-shape${f.index}" d="${pathD(polygon, map, true)}"/>`);
+      ribbons.push(`<use class="ribbon" data-flow="${f.index}" href="#strand-shape${f.index}" ${fill}/>`);
       const edges = S.edgeSegments(f, style.flatten ? null : cuts);
       outlineEdges[f.index] = S.edgeSegments({ upper: outward(f.upper, 1, f.dir), lower: outward(f.lower, -1, f.dir) }, style.flatten ? null : cuts);
       ribbonParts[f.index] = { polygon, fill };

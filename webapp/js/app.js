@@ -2916,7 +2916,7 @@
     };
     const toCanvas = svg.getScreenCTM().inverse();
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    svg.querySelectorAll('path, rect, text, line, circle, ellipse, polygon, polyline').forEach((el) => {
+    svg.querySelectorAll('path, use, rect, text, line, circle, ellipse, polygon, polyline').forEach((el) => {
       if (el.closest('defs, mask, clipPath, .layer-hits') || el.classList.contains('background') || !visible(el)) return;
       const r = el.getBoundingClientRect();
       if (!(r.width > 0 || r.height > 0)) return;
