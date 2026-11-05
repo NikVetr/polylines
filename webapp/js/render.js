@@ -295,14 +295,14 @@
     // band, the square end of a (doubled) outline would otherwise poke into the strand.
     const edgeMask = (n, polygons) => {
       const id = `node-edge-mask${n.id}`;
-      const own = n.inFlows.concat(n.outFlows).map((k) => ribbonParts[k].polygon);
+      const own = n.inFlows.concat(n.outFlows).map((k) => `<use href="#strand-shape${k}" fill="black"/>`).join('');
       const points = polygons.flat().map(([x, y]) => [map.x(x), map.y(y)]);
       const pad = Math.max(THIN_LINE_WIDTH, style.borderWidth) + 1;
       const x = Math.min(...points.map(p => p[0])) - pad, y = Math.min(...points.map(p => p[1])) - pad;
       const width = Math.max(...points.map(p => p[0])) - x + pad, height = Math.max(...points.map(p => p[1])) - y + pad;
       // Bound each mask to its node, avoiding a canvas-sized bitmap for every outline.
       defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" x="${fmt(x)}" y="${fmt(y)}" width="${fmt(width)}" height="${fmt(height)}">` +
-        `<rect width="${frame.width}" height="${frame.height}" fill="white"/><path d="${compoundD(polygons.concat(own))}" fill="black"/></mask>`);
+        `<rect width="${frame.width}" height="${frame.height}" fill="white"/><path d="${compoundD(polygons)}" fill="black"/>${own}</mask>`);
       return `mask="url(#${id})"`;
     };
     const outline = (edges, layer, mask = '', inwardHidden = false) => {
@@ -343,7 +343,11 @@
       } else {
         fill = fillAttrs(colors.flow[f.index]);
       }
-      ribbons.push(`<path class="ribbon" data-flow="${f.index}" d="${pathD(polygon, map, true)}" ${fill}/>`);
+      const d = pathD(polygon, map, true);
+      ribbons.push(`<path class="ribbon" data-flow="${f.index}" d="${d}" ${fill}/>`);
+      // One shared copy of the shape, for the masks and faint copies that reuse it (<use>): repeating
+      // its path data in each grows the SVG with the square of the strand count.
+      defs.push(`<path id="strand-shape${f.index}" d="${d}"/>`);
       const edges = S.edgeSegments(f, style.flatten ? null : cuts);
       outlineEdges[f.index] = S.edgeSegments({ upper: outward(f.upper, 1, f.dir), lower: outward(f.lower, -1, f.dir) }, style.flatten ? null : cuts);
       ribbonParts[f.index] = { polygon, fill };
@@ -379,11 +383,10 @@
         let mask = '';
         if (above.length) {
           const id = `strand-outline-mask${f.index}`;
-          const d = compoundD(above.map((g) => ribbonParts[g.index].polygon));
           const [x0, x1, y0, y1] = boxes[k].map((v, i) => v + (i % 2 ? 2 : -2));
           const region = `x="${fmt(x0)}" y="${fmt(y0)}" width="${fmt(x1 - x0)}" height="${fmt(y1 - y0)}"`;
           defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" ${region}><rect ${region} fill="white"/>` +
-            `<path d="${d}" fill="black"/></mask>`);
+            `${above.map((g) => `<use href="#strand-shape${g.index}" fill="black"/>`).join('')}</mask>`);
           mask = `mask="url(#${id})"`;
         }
         outline(outlineEdges[f.index], strandOutlines, mask);
@@ -559,8 +562,8 @@
       defs.push(`<clipPath id="behind${id}"><path d="${compoundD(polygons)}"/></clipPath>`);
       behind.forEach((f) => {
         const part = ribbonParts[f.index];
-        ghosts.push(`<path class="ribbon-ghost" data-flow="${f.index}" clip-path="url(#behind${id})" opacity="${BEHIND_OPACITY}" ` +
-          `d="${pathD(part.polygon, map, true)}" ${part.fill}/>`);
+        ghosts.push(`<use class="ribbon-ghost" data-flow="${f.index}" href="#strand-shape${f.index}" clip-path="url(#behind${id})" ` +
+          `opacity="${BEHIND_OPACITY}" ${part.fill}/>`);
       });
     });
     return `<defs>${defs.join('')}</defs>${bg}` +

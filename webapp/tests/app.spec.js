@@ -2677,6 +2677,24 @@ test('strip values show in full where the columns leave room', async ({ page }) 
   expect(cut).toEqual([]);
 });
 
+test('masks and faint copies reuse one shared shape per strand, so the SVG grows linearly', async ({ page }) => {
+  await page.evaluate(() => window.SankeyApp.loadExample('pathways'));
+  const shapes = await page.evaluate(() => {
+    const svg = document.querySelector('#plot');
+    const flows = window.SankeyApp.layout.flows.length;
+    const ref = (el) => el.getAttribute('href');
+    return {
+      defs: svg.querySelectorAll('defs > path[id^="strand-shape"]').length === flows,
+      masks: [...svg.querySelectorAll('mask[id^="strand-outline-mask"], mask[id^="node-edge-mask"]')].every((m) =>
+        [...m.querySelectorAll('use')].every((u) => /^#strand-shape\d+$/.test(ref(u))) && m.querySelectorAll('use').length > 0),
+      outlineMasksHaveNoPaths: [...svg.querySelectorAll('mask[id^="strand-outline-mask"] path')].length === 0,
+      ghosts: [...svg.querySelectorAll('.ribbon-ghost')].every((g) => g.tagName === 'use' && ref(g) === `#strand-shape${g.dataset.flow}`),
+      anyGhost: svg.querySelectorAll('.ribbon-ghost').length > 0
+    };
+  });
+  expect(shapes).toEqual({ defs: true, masks: true, outlineMasksHaveNoPaths: true, ghosts: true, anyGhost: true });
+});
+
 test('a column of many nodes gets a canvas tall enough that labels clear the nodes above them', async ({ page }) => {
   await page.evaluate(() => {
     const T = window.SK.transform;
